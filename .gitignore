@@ -1,0 +1,30 @@
+# PlatformIO
+.pio/
+
+# IDE & Editor
+.vscode/
+
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build artifacts & binaries
+*.exe
+*.elf
+*.bin
+*.map
+*.o
+*.log
+
+# Server dependencies & environment
+server/node_modules/
+server/.env
+
+# Sensitive credentials
+include/Secrets.h
+
+# References & archives
+references/
+VoxCore/
+
