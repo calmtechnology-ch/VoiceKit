@@ -1,11 +1,6 @@
 #pragma once
-#include "IAudioOutput.h"
+#include "hal/IAudioOutput.h"
 
-/**
- * @brief Adaptateur de restitution audio pour M5Stack CoreS3 via M5Unified.
- * Respecte rigoureusement la configuration de l'application hôte :
- * ne réinitialise pas le matériel si déjà actif, s'intègre en composant invité.
- */
 class M5AudioOutput : public IAudioOutput {
 public:
     M5AudioOutput();
@@ -26,15 +21,8 @@ public:
     unsigned getVolume() const override { return _volume; }
     uint32_t getHardwareDrainMs() const override;
     void setBufferReleaseCallback(void* args, BufferReleaseCallback cb) override;
-    bool isOwner() const override { return _isOwner; }
-    void setOwner(bool owner) { _isOwner = owner; }
 
-#if !defined(ESP32) && !defined(ARDUINO)
-    static void setMockHostSpeakerRunning(bool running);
-    static bool isMockHostSpeakerRunning();
-#endif
-
-    // Métriques et traçabilité
+    // Fonctions d'inspection matérielle v0.2.1.3.5
     void resetTurnMetrics() override;
     bool wasStopCalledInTurn() const override { return _stopCallCountInTurn > 0; }
     bool wasEndCalledInTurn() const override { return _endCallCountInTurn > 0; }
@@ -52,10 +40,10 @@ public:
 private:
     unsigned _volume = 65;
     bool _initialized = false;
-    bool _isOwner = false;
     void* _releaseCbArgs = nullptr;
     BufferReleaseCallback _releaseCb = nullptr;
 
+    // Métriques et traçabilité des cycles de vie matériels v0.2.1.3.5
     uint32_t _stopCallCount = 0;
     uint32_t _stopCallCountInTurn = 0;
     uint32_t _lastStopTimeMs = 0;

@@ -3,8 +3,7 @@
 #include <cstddef>
 
 /**
- * @brief Motifs d'arrêt de la restitution audio pour traçabilité et diagnostic.
- * Issu de l'architecture stabilisée VoxCore v0.2.1.3.6 / v0.2.2.0.
+ * @brief Motifs d'arrêt de la restitution audio pour traçabilité et diagnostic v0.2.1.3.5.
  */
 enum class AudioStopReason : uint8_t {
     NONE = 0,
@@ -31,7 +30,8 @@ inline const char* audioStopReasonToString(AudioStopReason reason) {
 
 /**
  * @brief Interface d'abstraction matérielle pour la restitution audio (Haut-parleur / Codec).
- * Supporte le streaming PCM direct 24 kHz Gemini Live mono 16 bits.
+ * Supporte le streaming PCM direct (ex: 24 kHz Gemini Live mono 16 bits)
+ * et le flux MP3 décodé (ex: 44.1 kHz Google TTS).
  */
 class IAudioOutput {
 public:
@@ -54,21 +54,24 @@ public:
     virtual bool isRunning() const = 0;
 
     /**
-     * @brief Indique si ce composant est le propriétaire exclusif du haut-parleur matériel.
-     * Si false, le haut-parleur appartient à l'hôte et ne doit pas être détruit/arrêté globalement.
-     */
-    virtual bool isOwner() const { return false; }
-
-    /**
      * @brief Soumet un bloc d'échantillons PCM bruts pour restitution au haut-parleur.
      * 
-     * CONTRAT D'ACCEPTATION STRICT :
+     * CONTRAT D'ACCEPTATION STRICT v0.4.1.3 :
      * - Retourne true si le bloc a été accepté par le pilote matériel (mis en file DMA).
+     *   Un retour true atteste que le pilote prend en charge le bloc, sans prétendre
+     *   que le son a déjà été physiquement émis.
      * - Retourne false si le bloc a été refusé (ex: file matérielle saturée, transition).
      * 
      * RÈGLE CRITIQUE D'INTÉGRITÉ DU FLUX :
      * Un bloc refusé (retour false) ne doit JAMAIS être retiré du tampon logiciel appelant.
      * L'appelant doit le conserver intact et le soumettre à nouveau au cycle suivant.
+     * 
+     * @param samples Pointeur vers les échantillons int16_t (mono ou stéréo entrelacé).
+     * @param sampleCount Nombre d'échantillons.
+     * @param sampleRateHz Fréquence d'échantillonnage en Hz (ex: 24000 pour Gemini Live, 44100 pour TTS).
+     * @param stereo Indique si le flux est stéréo (true) ou mono (false).
+     * @param channel Numéro de canal virtuel ou matériel (défaut: 0).
+     * @return true si accepté, false si refusé.
      */
     virtual bool playRaw(const int16_t* samples, size_t sampleCount, 
                          uint32_t sampleRateHz = 24000, bool stereo = false, 
@@ -84,7 +87,7 @@ public:
     /**
      * @brief Arrête immédiatement la restitution en cours et vide la file matérielle.
      * @param channel Numéro de canal (défaut: 0).
-     * @param reason Motif explicite de l'arrêt (pour diagnostic et traçabilité).
+     * @param reason Motif explicite de l'arrêt (pour diagnostic et traçabilité v0.2.1.3.5).
      */
     virtual void stop(uint8_t channel = 0, AudioStopReason reason = AudioStopReason::NORMAL_FINISH) = 0;
 
@@ -94,7 +97,7 @@ public:
     virtual void resetTurnMetrics() {}
 
     /**
-     * @brief Fonctions d'inspection du cycle de vie matériel.
+     * @brief Fonctions d'inspection du cycle de vie matériel pour le bilan AUDIO END CHECK.
      */
     virtual bool wasStopCalledInTurn() const { return false; }
     virtual bool wasEndCalledInTurn() const { return false; }
@@ -105,6 +108,8 @@ public:
     virtual uint32_t getLastPlayRawAcceptedTimeMs() const { return 0; }
     virtual uint32_t getStopCallCountInTurn() const { return 0; }
     virtual uint32_t getEndCallCountInTurn() const { return 0; }
+    virtual size_t getSpeakerStopCount() const { return getStopCallCountInTurn(); }
+    virtual size_t getSpeakerEndCount() const { return getEndCallCountInTurn(); }
     virtual uint32_t getBeginCallCountInTurn() const { return 0; }
     virtual uint32_t getPlayRawCallCountInTurn() const { return 0; }
     virtual size_t getSamplesAcceptedInTurn() const { return 0; }
@@ -128,6 +133,7 @@ public:
      * @brief Retourne la durée maximale théorique (en ms) de vidange des tampons matériels DMA.
      * Représente le délai physique nécessaire pour que les échantillons acceptés par playRaw()
      * soient intégralement convertis et émis par le haut-parleur une fois la file logicielle vide.
+     * Par défaut 0 (pour simulation hôte / tests unitaires).
      */
     virtual uint32_t getHardwareDrainMs() const { return 0; }
 
@@ -138,6 +144,7 @@ public:
 
     /**
      * @brief Enregistre la fonction de rappel appelée lorsque le pilote matériel a fini de lire un buffer.
+     * Permet à l'appelant de réutiliser ou de recharger le buffer sans risque d'écrasement mémoire.
      */
     virtual void setBufferReleaseCallback(void* args, BufferReleaseCallback cb) {
         (void)args;

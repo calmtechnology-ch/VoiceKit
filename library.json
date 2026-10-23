@@ -1,7 +1,7 @@
 {
   "name": "VoxCore-VoiceKit",
-  "version": "0.1.0.3",
-  "description": "Bibliothèque C++/Arduino de synthèse vocale TTS asynchrone pour M5Stack CoreS3 via Gemini Live",
+  "version": "0.2.0",
+  "description": "Bibliothèque C++/Arduino de synthèse vocale TTS asynchrone pour M5Stack CoreS3 via Gemini Live (moteur VoxCore)",
   "keywords": [
     "tts",
     "voice",
@@ -22,11 +22,13 @@
   "platforms": "espressif32",
   "headers": "VoxCoreVoice.h",
   "dependencies": {
-    "m5stack/M5Unified": "^0.2.23"
+    "m5stack/M5CoreS3": "1.0.0",
+    "m5stack/M5Unified": "0.2.23"
   },
   "build": {
     "flags": [
       "-std=gnu++17",
+      "-DVOXCORE_AUDIO_MODE=2",
       "-Iinclude",
       "-Isrc"
     ]

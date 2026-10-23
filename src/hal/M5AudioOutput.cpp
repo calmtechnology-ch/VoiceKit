@@ -1,8 +1,8 @@
-#include "M5AudioOutput.h"
+#include "hal/M5AudioOutput.h"
 #include <algorithm>
 
 #if defined(ESP32) || defined(ARDUINO)
-#include <Arduino.h>
+#include <M5CoreS3.h>
 #include <M5Unified.h>
 
 M5AudioOutput::M5AudioOutput() = default;
@@ -26,11 +26,7 @@ void M5AudioOutput::resetTurnMetrics() {
 bool M5AudioOutput::begin() {
     _beginCallCountInTurn++;
     _lastBeginTimeMs = millis();
-
-    // Gestion explicite de la propriete du haut-parleur (v0.1.0.1 - Correction C)
     if (!M5.Speaker.isRunning()) {
-        // Cas 1 : VoiceKit initialise le haut-parleur physique (proprietaire)
-        _isOwner = true;
         auto spkCfg = M5.Speaker.config();
         spkCfg.sample_rate = 44100;
         spkCfg.dma_buf_len = 512;
@@ -44,12 +40,7 @@ bool M5AudioOutput::begin() {
         }
         return _initialized;
     }
-
-    // Cas 2 : L'application hote possede deja le haut-parleur
-    // VoiceKit reutilise l'instance existante sans ecraser la configuration materielle
-    _isOwner = false;
     _initialized = true;
-    setVolume(_volume);
     if (_releaseCb) {
         M5.Speaker.setBufferReleaseCallback(_releaseCbArgs, _releaseCb);
     }
@@ -61,21 +52,9 @@ void M5AudioOutput::end(AudioStopReason reason) {
     _endCallCountInTurn++;
     _lastEndTimeMs = millis();
     _lastEndReason = reason;
-
-    if (_isOwner) {
-        // Cas 1 : VoiceKit est proprietaire -> arret complet et liberation materielle
-        if (M5.Speaker.isRunning()) {
-            M5.Speaker.setBufferReleaseCallback(nullptr, nullptr);
-            M5.Speaker.end();
-            delay(5);
-        }
-    } else {
-        // Cas 2 : L'application hote est proprietaire -> NE PAS appeler M5.Speaker.end() !
-        // Arreter uniquement notre canal (canal 0) et detacher notre callback
-        if (M5.Speaker.isPlaying(0) > 0) {
-            M5.Speaker.stop(0);
-        }
-        M5.Speaker.setBufferReleaseCallback(nullptr, nullptr);
+    if (M5.Speaker.isRunning()) {
+        M5.Speaker.end();
+        delay(5);
     }
     _initialized = false;
 }
@@ -88,6 +67,8 @@ bool M5AudioOutput::playRaw(const int16_t* samples, size_t sampleCount,
                             uint32_t sampleRateHz, bool stereo, uint8_t channel) {
     if (!samples || sampleCount == 0) return false;
     _playRawCallCountInTurn++;
+    // RÈGLE v0.1.0.2 : Interdiction formelle de réarmer le haut-parleur en contournant
+    // l'arbitrage matériel centralisé. Si le haut-parleur n'est pas démarré, refuser l'appel !
     if (!M5.Speaker.isRunning()) {
         return false;
     }
@@ -129,6 +110,9 @@ uint32_t M5AudioOutput::getHardwareDrainMs() const {
     if (M5.Speaker.isRunning()) {
         auto spkCfg = M5.Speaker.config();
         if (spkCfg.sample_rate > 0) {
+            // Durée de la file DMA (dma_buf_count * dma_buf_len)
+            // + tampon d'assemblage interne sound_buf32 (dma_buf_len)
+            // + marge de cadencement FreeRTOS (30 ms)
             uint32_t dmaFrames = (spkCfg.dma_buf_count + 1) * spkCfg.dma_buf_len;
             return (dmaFrames * 1000UL) / spkCfg.sample_rate + 30;
         }
@@ -145,7 +129,6 @@ void M5AudioOutput::setBufferReleaseCallback(void* args, BufferReleaseCallback c
 }
 
 #else
-// Fallback pour exécution hors cible (simulation tests hôte C++)
 #include <chrono>
 static inline uint32_t s_mockMillis() {
     using namespace std::chrono;
@@ -153,18 +136,8 @@ static inline uint32_t s_mockMillis() {
 }
 
 static bool s_hostSpeakerRunning = true;
-
-void M5AudioOutput::setMockHostSpeakerRunning(bool running) {
-    s_hostSpeakerRunning = running;
-}
-bool M5AudioOutput::isMockHostSpeakerRunning() {
-    return s_hostSpeakerRunning;
-}
-
 M5AudioOutput::M5AudioOutput() = default;
-M5AudioOutput::~M5AudioOutput() {
-    end(AudioStopReason::RESET);
-}
+M5AudioOutput::~M5AudioOutput() = default;
 
 void M5AudioOutput::resetTurnMetrics() {
     _stopCallCountInTurn = 0;
@@ -182,15 +155,7 @@ void M5AudioOutput::resetTurnMetrics() {
 bool M5AudioOutput::begin() {
     _beginCallCountInTurn++;
     _lastBeginTimeMs = s_mockMillis();
-    if (!s_hostSpeakerRunning) {
-        // Cas 1 : VoiceKit initialise le haut-parleur (propriétaire)
-        _isOwner = true;
-        s_hostSpeakerRunning = true;
-    } else {
-        // Cas 2 : L'hôte possède déjà le haut-parleur
-        _isOwner = false;
-    }
-    _initialized = true;
+    s_hostSpeakerRunning = true;
     return true;
 }
 
@@ -199,10 +164,7 @@ void M5AudioOutput::end(AudioStopReason reason) {
     _endCallCountInTurn++;
     _lastEndTimeMs = s_mockMillis();
     _lastEndReason = reason;
-    if (_isOwner) {
-        s_hostSpeakerRunning = false;
-    }
-    _initialized = false;
+    s_hostSpeakerRunning = false;
 }
 
 bool M5AudioOutput::isRunning() const { return s_hostSpeakerRunning; }

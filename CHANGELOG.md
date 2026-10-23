@@ -7,6 +7,55 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.2.0] - 2026-10-23 (Reconstruction sur la Base Stable de VoxCore)
+
+### Changement Fondamental de Méthode
+- **Abandon de l'ancienne implémentation v0.1.0.x** : Arrêt définitif des tentatives de réparation progressive de la pile expérimentale (qui introduisait des erreurs TLS `-0x2700`, des réassembleurs WebSocket superflus, des épuisements de heap et des coupures audio).
+- **Extraction directe et sans réécriture de VoxCore** : Intégration fidèle des composants techniques stabilisés et testés avec succès sur M5Stack CoreS3 dans le dépôt de référence VoxCore (commits `edc2481` / `v0.2.2.0` et gel audio `e199733` / `v0.2.1.3.6`).
+
+### Moteur Interne VoxCore Intégré
+- **Protocole & WebSocket (`GeminiLiveClient.cpp`, `ILiveTransport.h`)** :
+  - Transport WebSocket natif `esp_websocket_client` sur pile de 14 Ko.
+  - Format BidiGenerateContent officiel avec `"generationConfig":{"responseModalities":["AUDIO"]}` et `"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}}`.
+  - Élimination complète de la couche `WebSocketReassembler` et suppression du diagnostic TLS concurrent qui épuisait le heap interne.
+  - Décodage Base64 RFC 4648 direct et gestion native des événements serveur (`setupComplete`, `turnComplete`, `interrupted`).
+- **Certificats TLS (`GoogleRoots.h`)** :
+  - Bundle officiel complet Google Trust Services de 21 certificats racines PEM (GTS Root R1 à R4, GlobalSign Root CA, etc.).
+  - Validation stricte des certificats sans altération des options cryptographiques.
+- **Sanctuaire Audio Éprouvé (`LiveAudioPlayer.cpp`, `LiveAudioPlayer.h`)** :
+  - Mode 2 `DEDICATED_AUDIO_TASK` FreeRTOS sur Core 1 (priorité 4).
+  - Tampon circulaire PSRAM de 120 000 échantillons 16 bits @ 24 kHz (~5 secondes de parole).
+  - Quadruple buffer DMA (4 x 960 échantillons = 160 ms de marge acoustique).
+  - Algorithme de vidage matériel exact `getHardwareDrainMs()` : le silence et `onSpeechFinished` ne sont confirmés qu'après la restitution physique complète de la dernière syllabe.
+- **Traceur & Surveillance (`AudioTraceLog.cpp`)** :
+  - Journaliseur circulaire d'événements POD temps réel avec horodatage microseconde, sans aucune allocation heap en cours de restitution.
+- **Horloge & Réseau (`WiFiManager.cpp`)** :
+  - Gestion Wi-Fi et synchronisation SNTP vérifiant `time(nullptr) >= 1700000000` avant le handshake TLS.
+- **HAL Haut-Parleur (`M5AudioOutput.cpp`)** :
+  - Pilotage direct de `M5.Speaker` en mode invité non-intrusif (`playRaw` 24 kHz stéréo/mono).
+- **Machine à États Découplée (`LiveSessionController.cpp`)** :
+  - Découplage complet de l'interface graphique : retrait strict de `UIManager` et LVGL du cœur de la bibliothèque.
+  - Retrait du streamer microphone pour une bibliothèque purement dédiée au TTS.
+
+### API Publique Simplifiée (`VoxCoreVoice.h`, `VoxCoreVoice.cpp`)
+- Façade unifiée et ergonomique masquant la complexité interne du moteur VoxCore :
+  - `bool begin(const VoiceKitConfig& config)`
+  - `bool say(const String& text)`
+  - `void update()`
+  - `void stop()`
+  - `bool isReady() const`, `bool isBusy() const`, `bool isSpeaking() const`, `String getLastError() const`
+  - Callbacks asynchrones : `onReady`, `onSpeechStarted`, `onSpeechFinished`, `onError`.
+
+### Exemples d'Application
+- **`MinimalTTS`** : Exemple de test matériel minimaliste, sans LVGL, démontrant la connexion Wi-Fi/NTP, l'établissement de la session Gemini Live, l'annonce vocale d'accueil et le déclenchement tactile sur le CoreS3 physique.
+- **`OrientationClockVoice`** : Intégration dans CoreS3 Orientation Clock (BMI270, RTC, LVGL 9) conservée intacte et validée à la compilation sans régression.
+
+### Documentation de Livraison
+- Ajout de `COMPARAISON_VOXCORE_VOICEKIT.md` (tableau d'équivalence composant par composant et justifications techniques).
+- Ajout de `RAPPORT_LIVRAISON_v0.2.0.md` (rapport formel de livraison selon les étapes prescrites).
+
+---
+
 ## [0.1.0.3] - 2026-10-23 (Correction TLS ciblée & Restauration du Comportement Validé VoxCore)
 
 ### Certificats TLS & Handshake mbedTLS (`GoogleRoots.h`, `GeminiLiveClient.cpp`)

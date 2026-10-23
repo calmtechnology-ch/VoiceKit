@@ -1,7 +1,5 @@
 #pragma once
 // Source: https://pki.goog/roots.pem (2026-10-14)
-#include <Arduino.h>
-
 static const char GOOGLE_ROOTS[] PROGMEM = R"PEM(
 # Operating CA: Google Trust Services LLC
 # Subject: C = US, O = Google Trust Services LLC, CN = GTS Root R1

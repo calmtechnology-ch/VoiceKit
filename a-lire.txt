@@ -3,3 +3,6 @@
 -pio run -d examples\MinimalTTS -t upload
 
 - voir examples\OrientationClockVoice\include\FrenchTimeFormatter.h
+
+pio run -d examples/MinimalTTS -t upload
+pio device monitor -d examples/MinimalTTS -b 115200

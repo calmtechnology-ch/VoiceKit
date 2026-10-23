@@ -5,24 +5,24 @@
 #include "hal/IAudioOutput.h"
 
 /**
- * @brief Mode de gestion du réseau Wi-Fi.
+ * @brief Mode de gestion du reseau Wi-Fi.
  */
 enum class WiFiMode : uint8_t {
-    MANAGED_WIFI = 0,   ///< VoiceKit gère sa connexion Wi-Fi (SSID, mot de passe, reconnexion)
-    EXTERNAL_WIFI = 1   ///< L'application conserve entièrement le contrôle de sa connexion Wi-Fi
+    MANAGED_WIFI = 0,   ///< VoiceKit gere la connexion Wi-Fi et la synchronisation NTP
+    EXTERNAL_WIFI = 1   ///< L'application hote gere entierement le Wi-Fi et NTP
 };
 
 /**
- * @brief Politique de traitement lorsque le moteur est déjà en train de parler.
+ * @brief Politique de traitement lorsque le moteur est deja en train de parler.
  */
 enum class QueuePolicy : uint8_t {
-    REJECT_IF_BUSY = 0,   ///< Rejette immédiatement la nouvelle demande si occupé (défaut)
-    QUEUE_FIFO = 1,       ///< Enfile la demande dans une file bornée (maxQueueSize)
-    INTERRUPT_CURRENT = 2 ///< Interrompt la parole en cours et commence immédiatement la nouvelle annonce
+    REJECT_IF_BUSY = 0,   ///< Rejette immediatement la nouvelle demande si occupe (defaut)
+    QUEUE_FIFO = 1,       ///< Enfile la demande dans une file bornee (maxQueueSize)
+    INTERRUPT_CURRENT = 2 ///< Interrompt la parole en cours et commence immediatement
 };
 
 /**
- * @brief États opérationnels de VoxCoreVoice.
+ * @brief Etats operationnels de VoxCoreVoice.
  */
 enum class VoiceState : uint8_t {
     UNINITIALIZED = 0,
@@ -31,6 +31,7 @@ enum class VoiceState : uint8_t {
     CONNECTING_SERVICE,
     READY,
     GENERATING,
+    WAITING_RESPONSE = GENERATING,
     SPEAKING,
     ERROR_STATE
 };
@@ -49,12 +50,6 @@ inline const char* voiceStateToString(VoiceState state) {
     }
 }
 
-// =============================================================================
-// Configuration centralisee du modele Gemini Live (v0.1.0.2)
-// Modele valide BidiGenerateContent : "models/gemini-3.8-live"
-// Surchargable par #define GEMINI_MODEL ou vConfig.model
-// Note : Le prefixe "models/" est automatiquement ajoute si omis.
-// =============================================================================
 #ifndef VOICEKIT_DEFAULT_MODEL
 #define VOICEKIT_DEFAULT_MODEL "models/gemini-3.8-live"
 #endif
@@ -64,24 +59,24 @@ inline const char* voiceStateToString(VoiceState state) {
 #endif
 
 /**
- * @brief Configuration d'initialisation de VoxCore VoiceKit v0.1.0.2.
+ * @brief Configuration d'initialisation de VoxCore VoiceKit v0.2.0.
  */
 struct VoiceKitConfig {
-    // Clé d'API Google Gemini
+    // Cle d'API Google Gemini
     String apiKey = "";
 
-    // Modèle et voix Gemini Live centralisés
+    // Modele et voix Gemini Live centralises
     String model = VOICEKIT_DEFAULT_MODEL;
     String voice = VOICEKIT_DEFAULT_VOICE;
 
-    // Instructions système strictes pour TTS mot à mot fidèle
+    // Instructions systeme strictes pour TTS mot a mot fidele
     String systemInstruction =
-        "Tu es un moteur de synthese vocale TTS pur en francais. "
+        "Tu es un moteur de synthese vocale TTS pur en francais pour un banc d'essai audio. "
         "Ton unique role est de prononcer oralement et tres exactement le texte demande mot pour mot. "
         "Ne formule aucun commentaire, aucune reponse conversationnelle, aucun mot d'introduction ni de conclusion. "
         "Prononce uniquement et tres exactement le texte fourni par l'utilisateur.";
 
-    // Préfixe de consigne pour forcer la reproduction mot pour mot
+    // Prefixe de consigne pour reproduction mot a mot
     String promptPrefix = "Prononce exactement et uniquement ce texte : ";
 
     // Mode Wi-Fi
@@ -92,19 +87,15 @@ struct VoiceKitConfig {
     // Volume initial du haut-parleur (0 - 100 %)
     uint8_t volume = 65;
 
-    // Politique de gestion des requêtes concurrentes
+    // Politique de gestion des requetes concurrentes
     QueuePolicy queuePolicy = QueuePolicy::REJECT_IF_BUSY;
     size_t maxQueueSize = 4;
 
-    // Démarrage vocal à la demande (économie d'énergie pour appareils sur batterie)
-    bool connectOnDemand = false;
-
-    // Déconnexion automatique après inactivité en ms (0 = session maintenue en continu)
-    uint32_t autoDisconnectIdleMs = 0;
-
-    // Indique si le matériel CoreS3 (M5.begin()) a déjà été initialisé par l'application hôte
-    bool hardwareAlreadyInitialized = true;
-
-    // Sortie audio personnalisée (si nullptr, une instance interne M5AudioOutput est utilisée)
+    // Sortie audio optionnelle (utilise M5AudioOutput par defaut)
     IAudioOutput* audioOutput = nullptr;
+
+    // Champs de compatibilite ascendante pour applications hotes autonomes
+    bool hardwareAlreadyInitialized = true;
+    bool connectOnDemand = false;
+    uint32_t autoDisconnectIdleMs = 0;
 };

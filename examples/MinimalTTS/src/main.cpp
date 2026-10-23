@@ -1,14 +1,15 @@
 /**
  * @file main.cpp
- * @brief Exemple MinimalTTS — Démonstration de base de VoxCore VoiceKit v0.1.0
- * Matériel : M5Stack CoreS3 (ESP32-S3)
+ * @brief Exemple MinimalTTS — Synthese vocale pure sur M5Stack CoreS3 avec VoiceKit v0.2.0
+ * 
+ * Base technique : Moteur VoxCore (Mode 2 DEDICATED_AUDIO_TASK, WebSocket TLS mbedTLS,
+ * bundle officiel Google PKI, restitution PCM 24 kHz haute fluidite sans coupure).
  */
 
 #include <Arduino.h>
 #include <M5Unified.h>
 #include <VoxCoreVoice.h>
 #include <WiFi.h>
-#include <time.h>
 
 #if __has_include("secrets.h")
     #include "secrets.h"
@@ -16,36 +17,61 @@
     #include "secrets.example.h"
 #endif
 
-static VoxCoreVoice voice;
-static bool announcedWelcome = false;
-static bool voiceInitialized = false;
-static bool ntpStarted = false;
-static bool pendingTest = false;
-static uint32_t pendingTestStartMs = 0;
-static constexpr uint32_t REQUEST_TIMEOUT_MS = 60000;
+#ifndef GEMINI_KEY
+    #ifdef GEMINI_API_KEY
+        #define GEMINI_KEY GEMINI_API_KEY
+    #else
+        #define GEMINI_KEY ""
+    #endif
+#endif
 
-static bool canAnnounce() {
-    return voiceInitialized && WiFi.status() == WL_CONNECTED &&
-           VoxCoreVoice::isSystemTimeValid() && voice.isReady() && !voice.isBusy();
-}
+#ifndef WIFI_PASSWORD
+    #ifdef WIFI_PASS
+        #define WIFI_PASSWORD WIFI_PASS
+    #else
+        #define WIFI_PASSWORD ""
+    #endif
+#endif
+
+static VoxCoreVoice voice;
+static bool s_welcomeAnnounced = false;
+static bool s_voiceStarted = false;
+static uint32_t s_phraseIndex = 0;
+
+// Textes de test conformes aux exigences de test du cahier des charges
+static const char* TEST_PHRASES[] = {
+    // 1. Phrase courte
+    "Bonjour, je suis VoiceKit.",
+    // 2. Annonce confirmee
+    "Ceci est un test de synthese vocale reussi sur M5Stack CoreS3.",
+    // 3. Phrase moyenne (~10 secondes)
+    "La synthese vocale haute fidelite fonctionne maintenant parfaitement sans aucune coupure grace au moteur audio stabilise de VoxCore.",
+    // 4. Phrase longue (~20-25 secondes)
+    "VoiceKit version zero point deux point zero est une bibliotheque autonome legere construite directement sur les composants stabilises de VoxCore. Les protocoles reseau et la restitution sonore vingt-quatre kilohertz sont desormais valides mot a mot jusqu au dernier echantillon sonore."
+};
+static constexpr size_t TEST_PHRASES_COUNT = sizeof(TEST_PHRASES) / sizeof(TEST_PHRASES[0]);
 
 void setup() {
     Serial.begin(115200);
     delay(200);
 
-    Serial.println("\n==================================================");
-    Serial.println("  VoxCore VoiceKit v0.1.0.2 — Exemple MinimalTTS");
-    Serial.println("==================================================");
+    Serial.println("\n========================================================");
+    Serial.println("  VoxCore VoiceKit v0.2.0 — Exemple MinimalTTS          ");
+    Serial.println("  Reconstruction sur la base stable de VoxCore          ");
+    Serial.println("========================================================");
 
-    // 1. Initialisation matérielle de l'application hôte
+    // 1. Initialisation materielle CoreS3 (Ecran LCD, Alimentation, Haut-parleur)
     auto cfg = M5.config();
     cfg.internal_spk = true;
     M5.begin(cfg);
+
     M5.Display.setTextSize(2);
     M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5.Display.drawString("VoxCore VoiceKit", 10, 20);
+    M5.Display.drawString("VoiceKit v0.2.0", 10, 15);
     M5.Display.setTextSize(1);
-    M5.Display.drawString("Appuyez sur l'ecran pour parler", 10, 50);
+    M5.Display.drawString("Moteur VoxCore (Mode 2 DMA)", 10, 45);
+    M5.Display.drawString("Appuyez sur l'ecran pour parler", 10, 65);
+    M5.Display.drawString("Statut: DEMARRAGE...", 10, 95);
 
     // 2. Configuration de VoiceKit
     VoiceKitConfig vConfig;
@@ -53,96 +79,91 @@ void setup() {
 #ifdef GEMINI_MODEL
     vConfig.model = GEMINI_MODEL;
 #endif
-    vConfig.wifiMode = WiFiMode::MANAGED_WIFI; // VoiceKit gère la connexion Wi-Fi
+    vConfig.wifiMode = WiFiMode::MANAGED_WIFI; // VoiceKit gere Wi-Fi & synchronisation NTP
     vConfig.wifiSSID = WIFI_SSID;
     vConfig.wifiPassword = WIFI_PASSWORD;
     vConfig.volume = 70;
     vConfig.queuePolicy = QueuePolicy::REJECT_IF_BUSY;
 
-    // Callbacks
+    // 3. Enregistrement des callbacks essentiels
     voice.onReady([]() {
-        Serial.println("[MinimalTTS] Moteur vocal pret !");
-        M5.Display.drawString("Statut: PRET                 ", 10, 80);
-        M5.Display.fillRect(0, 110, M5.Display.width(), 20, TFT_BLACK);
+        Serial.println("[MinimalTTS] Callback onReady : Moteur vocal connecte et pret !");
+        M5.Display.fillRect(0, 95, M5.Display.width(), 40, TFT_BLACK);
+        M5.Display.drawString("Statut: PRET (Touchez l'ecran)", 10, 95);
     });
 
     voice.onSpeechStarted([]() {
-        Serial.println("[MinimalTTS] Parole en cours...");
-        M5.Display.drawString("Statut: PAROLE EN COURS...   ", 10, 80);
+        Serial.println("[MinimalTTS] Callback onSpeechStarted : Restitution vocale active");
+        M5.Display.fillRect(0, 95, M5.Display.width(), 40, TFT_BLACK);
+        M5.Display.drawString("Statut: PAROLE EN COURS...", 10, 95);
     });
 
     voice.onSpeechFinished([]() {
-        Serial.println("[MinimalTTS] Fin de parole effective !");
-        M5.Display.drawString("Statut: ATTENTE TOUCHE       ", 10, 80);
+        Serial.println("[MinimalTTS] Callback onSpeechFinished : Fin complete de parole confirmee");
+        M5.Display.fillRect(0, 95, M5.Display.width(), 40, TFT_BLACK);
+        M5.Display.drawString("Statut: PRET (Attente touche)", 10, 95);
     });
 
     voice.onError([](const String& err) {
-        Serial.printf("[MinimalTTS] ERREUR : %s\n", err.c_str());
-        M5.Display.drawString("Erreur: " + err, 10, 110);
+        Serial.printf("[MinimalTTS] Callback onError : %s\n", err.c_str());
+        M5.Display.fillRect(0, 95, M5.Display.width(), 40, TFT_BLACK);
+        M5.Display.drawString("Erreur: " + err, 10, 95);
     });
 
-    // 3. Démarrage du composant vocal
-    voiceInitialized = voice.begin(vConfig);
-    if (!voiceInitialized) {
-        Serial.println("[MinimalTTS] Echec demarrage VoiceKit");
+    // 4. Demarrage du moteur vocal
+    s_voiceStarted = voice.begin(vConfig);
+    if (!s_voiceStarted) {
+        Serial.println("[MinimalTTS] FATAL: Echec demarrage VoiceKit");
+        M5.Display.drawString("Statut: ECHEC INIT", 10, 95);
     }
 }
 
 void loop() {
     M5.update();
 
-    // L'heure UTC doit être valide avant que VoiceKit ouvre la session TLS.
-    if (voiceInitialized && !ntpStarted && WiFi.status() == WL_CONNECTED) {
-        configTime(0, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
-        ntpStarted = true;
-        M5.Display.drawString("Statut: SYNCHRONISATION...   ", 10, 80);
-    }
+    if (s_voiceStarted) {
+        // Traitement periodique du composant vocal
+        voice.update();
 
-    // Traitement périodique obligatoire
-    if (voiceInitialized) voice.update();
+        // 1. Annonce automatique d'accueil des que le moteur est pret
+        if (!s_welcomeAnnounced && voice.isReady()) {
+            s_welcomeAnnounced = true;
+            Serial.println("[MinimalTTS] Premier lancement : prononciation de l'annonce d'accueil");
+            voice.say("Bonjour, je suis VoiceKit.");
+        }
 
-    // Détection d'un appui tactile sur l'écran pour prononcer un test
-    auto detail = M5.Touch.getDetail();
-    if (detail.wasClicked() || detail.wasPressed()) {
-        if (voiceInitialized && !voice.isBusy() && !pendingTest) {
-            pendingTest = true;
-            pendingTestStartMs = millis();
-            Serial.println("[MinimalTTS] Touche detectee -> Annonce en attente du reseau et du service vocal");
-            M5.Display.drawString("Statut: ANNONCE EN ATTENTE   ", 10, 80);
-        } else {
-            Serial.println("[MinimalTTS] Touche ignoree : moteur vocal deja occupe");
+        // 2. Declenchement tactile d'une nouvelle phrase de test
+        auto detail = M5.Touch.getDetail();
+        if (detail.wasClicked() || detail.wasPressed()) {
+            if (voice.isReady()) {
+                const char* phrase = TEST_PHRASES[s_phraseIndex % TEST_PHRASES_COUNT];
+                s_phraseIndex++;
+                Serial.printf("[MinimalTTS] Appui tactile -> Test #%u : \"%s\"\n",
+                              (unsigned)s_phraseIndex, phrase);
+                voice.say(phrase);
+            } else if (voice.isSpeaking()) {
+                Serial.println("[MinimalTTS] Appui tactile pendant parole -> Interruption STOP");
+                voice.stop();
+            } else {
+                Serial.printf("[MinimalTTS] Touche ignoree : moteur non disponible (Etat=%s)\n",
+                              voiceStateToString(voice.getState()));
+            }
         }
     }
 
-    if (pendingTest && millis() - pendingTestStartMs >= REQUEST_TIMEOUT_MS) {
-        pendingTest = false;
-        Serial.println("[MinimalTTS] Delai depasse : reseau ou service vocal indisponible");
-        M5.Display.drawString("Erreur: connexion trop longue", 10, 110);
-    }
-
-    // Une seule annonce est envoyée, après vérification de tous les prérequis.
-    if (canAnnounce()) {
-        if (pendingTest) {
-            pendingTest = false;
-            announcedWelcome = true;
-            voice.say("Ceci est un test de synthese vocale reussi.");
-        } else if (!announcedWelcome) {
-            announcedWelcome = voice.say("Bonjour, VoxCore VoiceKit est pret sur CoreS3.");
-        }
-    }
-
-    static uint32_t lastDiag = 0;
-
-    if (millis() - lastDiag >= 2000) {
-      lastDiag = millis();
-
-      Serial.printf(
-          "[DIAG] WiFi=%d | IP=%s | NTP=%s | "
-          "VoiceInit=%d | State=%s | Ready=%d | Busy=%d | Pending=%d\n",
-          WiFi.status(), WiFi.localIP().toString().c_str(),
-          VoxCoreVoice::isSystemTimeValid() ? "OK" : "NON", voiceInitialized,
-          voiceStateToString(voice.getState()), voice.isReady(), voice.isBusy(),
-          pendingTest);
+    // Diagnostics periodiques dans la console serie
+    static uint32_t s_lastDiagMs = 0;
+    const uint32_t now = millis();
+    if (now - s_lastDiagMs >= 3000) {
+        s_lastDiagMs = now;
+        Serial.printf("[DIAG] WiFi=%s (%s) | NTP=%s | VoiceState=%s | Ready=%d | Busy=%d | Spk=%d\n",
+                      (WiFi.status() == WL_CONNECTED) ? "CONNECTE" : "DECONNECTE",
+                      WiFi.localIP().toString().c_str(),
+                      VoxCoreVoice::isSystemTimeValid() ? "OK" : "ATTENTE",
+                      voiceStateToString(voice.getState()),
+                      voice.isReady(),
+                      voice.isBusy(),
+                      voice.isSpeaking());
     }
 
     delay(5);
