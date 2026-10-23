@@ -159,6 +159,25 @@ void VoxCoreVoice::update() {
         }
     }
 
+    // 1c. Récupération temporisée après erreur TLS / réseau (v0.1.0.3)
+    if (_state == VoiceState::ERROR_STATE) {
+        if (_reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            if (_lastErrorTimeMs == 0) {
+                _lastErrorTimeMs = now;
+            }
+            if (now - _lastErrorTimeMs >= RECONNECT_DELAY_MS) {
+                if (WiFi.status() == WL_CONNECTED && isSystemTimeValid()) {
+                    _reconnectAttempts++;
+                    _lastErrorTimeMs = 0;
+                    Serial.printf("[VoiceKit] Recuperation apres erreur TLS/reseau : retour a l'etat IDLE pour nouvel essai (%u/%u)...\n",
+                                  _reconnectAttempts, MAX_RECONNECT_ATTEMPTS);
+                    _client.disconnect();
+                    setState(VoiceState::IDLE);
+                }
+            }
+        }
+    }
+
     // 2. Traitement non-bloquant des flux sous-jacents
     _client.tick();
     _player.tick();
@@ -229,6 +248,15 @@ bool VoxCoreVoice::say(const String& text) {
 
     _lastActivityTimeMs = millis();
     _lastError = "";
+
+    // Si en état d'erreur mais que le Wi-Fi et l'heure sont valides, réinitialiser pour retenter
+    if (_state == VoiceState::ERROR_STATE && WiFi.status() == WL_CONNECTED && isSystemTimeValid()) {
+        Serial.println("[VoiceKit] say() appele en etat d'erreur : reinitialisation et nouvel essai...");
+        _reconnectAttempts = 0;
+        _lastErrorTimeMs = 0;
+        _client.disconnect();
+        setState(VoiceState::IDLE);
+    }
 
     // Cas 1 : Le moteur est actuellement occupe (generation, restitution ou file active)
     if (isBusy()) {
@@ -325,6 +353,8 @@ void VoxCoreVoice::stop() {
     _generatingStartTimeMs = 0;
     _pendingTextOnConnect = "";
     _isSpeakingActive = false;
+    _reconnectAttempts = 0;
+    _lastErrorTimeMs = 0;
 
     while (!_textQueue.empty()) {
         _textQueue.pop();
@@ -373,6 +403,8 @@ void VoxCoreVoice::handleClientConnected() {
 void VoxCoreVoice::handleClientSetupComplete() {
     Serial.println("[VoiceKit] Setup Gemini Live confirme");
     _connectingStartTimeMs = 0;
+    _reconnectAttempts = 0;
+    _lastErrorTimeMs = 0;
     setState(VoiceState::READY);
 
     if (_onReady) {
@@ -487,6 +519,7 @@ void VoxCoreVoice::handlePlaybackFinished() {
 
 void VoxCoreVoice::handleClientError(const String& err) {
     _lastError = err;
+    _lastErrorTimeMs = millis();
     _connectingStartTimeMs = 0;
     _generatingStartTimeMs = 0;
     _pendingTextOnConnect = "";

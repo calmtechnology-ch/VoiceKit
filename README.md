@@ -1,4 +1,4 @@
-# VoxCore VoiceKit v0.1.0.2
+# VoxCore VoiceKit v0.1.0.3
 
 Bibliothèque C++/Arduino indépendante de **synthèse vocale (Text-To-Speech / TTS)** haute fidélité pour **M5Stack CoreS3** (ESP32-S3) exploitant le moteur **Gemini Live** via WebSocket bidirectionnel TLS.
 
@@ -8,24 +8,26 @@ Bibliothèque C++/Arduino indépendante de **synthèse vocale (Text-To-Speech / 
 
 **VoxCore VoiceKit** a été conçu pour permettre d'ajouter la parole naturelle à n'importe quelle application CoreS3 existante (horloges, tableaux de bord, stations de capteurs, domotique) en quelques lignes de code, sans devoir comprendre ni importer toute l'architecture de VoxCore.
 
-### Principes directeurs de la v0.1.0.2 :
+### Principes directeurs de la v0.1.0.3 :
 1. **Composant invité strict** : VoiceKit ne prend jamais le contrôle de l'écran, ne crée aucune interface graphique intrusive, ne modifie pas la rotation de l'affichage, ne perturbe ni l'IMU, ni le RTC, ni les tâches applicatives de l'hôte.
 2. **Propriété explicite du haut-parleur** : VoiceKit respecte scrupuleusement l'initialisation audio réalisée par l'hôte. Si l'application hôte a déjà démarré `M5.Speaker`, VoiceKit l'utilise en invité sans écraser ses réglages DMA ni appeler `M5.Speaker.end()`.
 3. **Zéro couplage avec LVGL** : Aucune dépendance à LVGL. VoiceKit fonctionne aussi bien avec LVGL 8, LVGL 9, M5GFX brut ou en mode headless (sans affichage).
 4. **API publique simplifiée et asynchrone** : L'appel `voice.say("Bonjour")` est non-bloquant. La boucle principale `loop()` reste instantanément réactive à chaque milliseconde.
 5. **Sanctuaire audio éprouvé** : Préservation intégrale du pipeline audio stabilisé en **VoxCore v0.2.1.3.6 / v0.2.2.0** (Mode 2 `DEDICATED_AUDIO_TASK` FreeRTOS, tampon PSRAM 120 000 échantillons, quadruple buffer DMA, régulation douce sans perte, attente du vidage matériel DMA).
 6. **Garantie de non-coupure** : Le callback `onSpeechFinished` n'est déclenché qu'après émission physique réelle des derniers échantillons par le haut-parleur. Zéro mot tronqué en fin de phrase.
-7. **Diagnostic de clôture & réassemblage réseau** : Réassemblage strict des trames WebSocket fragmentées (jusqu'à 64 Ko), extraction des codes d'erreur JSON Gemini et des codes de clôture WebSocket Close (1007, 1008).
+7. **Validation TLS serveur stricte & Certificats racines complets** : Restauration intégrale de la chaîne officielle Google Trust Services (`https://pki.goog/roots.pem`, 21 racines incluant GTS Root R1 à R4 et GlobalSign) validée dans VoxCore, résolvant l'échec `MBEDTLS_ERR_X509_CERT_VERIFY_FAILED (-0x2700)` sur les certificats ECDSA sans affaiblir la sécurité.
+8. **Récupération et reconnexion bornée** : Machine à états résiliente avec temporisation de 5 secondes après erreur réseau/TLS et plafond de 3 tentatives automatiques.
 
 ---
 
-## 2. Nouveautés de la v0.1.0.2
-* **Correction Certificats TLS** : Réparation du certificat racine tronqué `GoogleRoots.h` et ajout de GTS Root R2 complet pour mbedTLS.
-* **Réassemblage des fragments WebSocket** : Intégration de `WebSocketReassembler` pour fusionner les fragments réseau avant le parseur JSON cJSON.
-* **Diagnostic approfondi de clôture** : Journalisation et extraction détaillée des codes de statut (1007, 1008) et des raisons envoyées par le serveur Gemini Live.
-* **Extraction des erreurs JSON** : Détection des rejets de configuration (`error`, `errorMessage`) de Gemini.
-* **Normalisation du modèle** : Préfixage automatique `"models/"` pour éviter les rejets de format.
-* **Distinction intentionnelle / réseau** : Déconnexion locale propre sans fausse alerte réseau.
+## 2. Nouveautés de la v0.1.0.3
+* **Correction TLS ciblée** : Restauration du bundle complet officiel `GoogleRoots.h` de VoxCore (21 racines, dont GTS Root R4 et GlobalSign indispensables pour authentifier le serveur Google actuel `generativelanguage.googleapis.com:443`).
+* **Résolution de l'erreur -0x2700** : Élimination de `MBEDTLS_ERR_X509_CERT_VERIFY_FAILED` sans compromettre la validation du certificat ni le nom d'hôte.
+* **Étude `esp_crt_bundle_attach`** : Démonstration technique de la non-disponibilité du bundle dans `esp_websocket_client` sur ESP-IDF v4.4 et confirmation de l'architecture par bundle PEM complet dans `cfg.cert_pem`.
+* **Diagnostics explicites série** : Affichage standardisé `[TLS] Connexion`, `[TLS] Certificats`, `[TLS] Vérification : OK`, `[Gemini] WebSocket : connecté` et `[Gemini] setupComplete : reçu`.
+* **Récupération après erreur** : Retour temporisé vers `IDLE` après échec pour un nouvel essai propre avec compteur borné (3 tentatives).
+* **Isolation du transport** : Restauration sécurisée du transport par défaut sur `setTransport(nullptr)`.
+* **159 tests automatisés** : Couverture complète unitaire et d'intégration validée à 100%.
 
 ---
 
@@ -33,11 +35,11 @@ Bibliothèque C++/Arduino indépendante de **synthèse vocale (Text-To-Speech / 
 
 ```text
 VoxCore-VoiceKit/
-├── library.json                   # Manifeste PlatformIO (v0.1.0.2)
-├── library.properties             # Manifeste Arduino IDE (v0.1.0.2)
+├── library.json                   # Manifeste PlatformIO (v0.1.0.3)
+├── library.properties             # Manifeste Arduino IDE (v0.1.0.3)
 ├── README.md                      # Documentation complète
 ├── CHANGELOG.md                   # Historique des versions
-├── RAPPORT_LIVRAISON_v0.1.0.2.md  # Rapport de conformité v0.1.0.2
+├── RAPPORT_LIVRAISON_v0.1.0.3.md  # Rapport de conformité v0.1.0.3
 ├── include/
 │   ├── VoxCoreVoice.h             # API publique simplifiée
 │   └── VoiceKitConfig.h           # Configuration centralisée et modèles par défaut

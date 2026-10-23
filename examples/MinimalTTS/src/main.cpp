@@ -131,5 +131,19 @@ void loop() {
         }
     }
 
+    static uint32_t lastDiag = 0;
+
+    if (millis() - lastDiag >= 2000) {
+      lastDiag = millis();
+
+      Serial.printf(
+          "[DIAG] WiFi=%d | IP=%s | NTP=%s | "
+          "VoiceInit=%d | State=%s | Ready=%d | Busy=%d | Pending=%d\n",
+          WiFi.status(), WiFi.localIP().toString().c_str(),
+          VoxCoreVoice::isSystemTimeValid() ? "OK" : "NON", voiceInitialized,
+          voiceStateToString(voice.getState()), voice.isReady(), voice.isBusy(),
+          pendingTest);
+    }
+
     delay(5);
 }

@@ -7,6 +7,34 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.1.0.3] - 2026-10-23 (Correction TLS ciblée & Restauration du Comportement Validé VoxCore)
+
+### Certificats TLS & Handshake mbedTLS (`GoogleRoots.h`, `GeminiLiveClient.cpp`)
+- **Restauration intégrale du bundle officiel Google Trust Services (`GoogleRoots.h`)** : Réintégration complète des 21 certificats racines officiels issus de `https://pki.goog/roots.pem` tels que validés dans VoxCore (38 Ko). En particulier, réintégration de **`GTS Root R4`** (ECC P-384) et **`GlobalSign Root CA`** (R1), indispensables pour authentifier l'autorité intermédiaire `WE2` actuellement servie par `generativelanguage.googleapis.com:443`.
+- **Résolution définitive de l'erreur `mbedtls_ssl_handshake returned -0x2700`** : Élimination de l'échec `MBEDTLS_ERR_X509_CERT_VERIFY_FAILED` causé par la troncature à deux racines (R1 & R2) effectuée précédemment, permettant un handshake TLS direct, authentifié et sans faille.
+- **Étude de compatibilité `esp_crt_bundle_attach`** : Confirmation technique que sur ESP-IDF v4.4 (utilisé par Arduino-ESP32 v2.0.17 dans `espressif32@6.9.0`), `esp_websocket_client` ne supporte pas `crt_bundle_attach` (champ apparu avec ESP-IDF v5.0). Le passage du bundle PEM complet via `cfg.cert_pem` constitue la solution canonique et la plus performante.
+- **Maintien strict de la sécurité TLS** : Préservation intégrale de la validation cryptographique du serveur et de son nom d'hôte (aucun contournement par `setInsecure` ni `skip_cert_common_name_check`).
+
+### Diagnostics Explicites au Moniteur Série (`GeminiLiveClient.cpp`)
+- **Séquence de diagnostic formalisée** :
+  - `[TLS] Connexion à generativelanguage.googleapis.com`
+  - `[TLS] Certificats : Google Trust Services (21 racines : GTS Root R1..R4, GlobalSign, DigiCert)`
+  - `[TLS] Vérification : OK` (ou diagnostic détaillé des drapeaux X.509 : autorité inconnue, certificat expiré, horloge NTP non synchronisée, nom d'hôte incorrect)
+  - `[Gemini] WebSocket : connecté`
+  - `[Gemini] setupComplete : reçu`
+
+### Résilience & Récupération après Erreur TLS / Réseau (`VoxCoreVoice.cpp`, `VoxCoreVoice.h`)
+- **Machine à états avec reprise temporisée bornée** : En cas d'erreur de négociation TLS ou de coupure réseau, passage temporisé de `ERROR_STATE` vers `IDLE` après 5000 ms pour autoriser un nouvel essai propre.
+- **Plafond de sécurité** : Nombre de tentatives automatiques borné à 3 (`MAX_RECONNECT_ATTEMPTS`).
+- **Réinitialisation automatique** : Réinitialisation immédiate du compteur dès la confirmation `setupComplete` ou lors d'un appel explicite à `say()` ou `stop()`.
+- **Correctif d'isolation transport** : Restauration propre du transport par défaut dans `setTransport(nullptr)` évitant tout pointeur pendant après injection de mock.
+
+### Tests & Validation
+- **Suite de tests automatisés** : Ajout de la Suite 15 (159 tests au total, 100% de réussite) validant l'intégrité du bundle TLS GoogleRoots et la temporisation de récupération d'erreur.
+- **Compilation PlatformIO** : Validation complète sans erreur pour `examples/MinimalTTS` et `examples/OrientationClockVoice`.
+
+---
+
 ## [0.1.0.2] - 2026-10-23 (Diagnostic et résolution de fermeture Gemini Live)
 
 ### Certificats TLS & Transport (`GoogleRoots.h`, `GeminiLiveClient.cpp`)

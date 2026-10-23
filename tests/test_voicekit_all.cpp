@@ -671,12 +671,63 @@ void test_intentional_vs_unexpected_disconnect() {
 }
 
 // =============================================================================
+// SUITE 15 : Certificats racines Google Trust Services & Récupération TLS (v0.1.0.3)
+// =============================================================================
+#include "gemini/GoogleRoots.h"
+
+void test_tls_roots_and_recovery() {
+    std::cout << "\n[TEST SUITE 15] GoogleRoots : Integrite du bundle TLS et recuperation apres erreur" << std::endl;
+
+    // 1. Vérification de l'intégrité du bundle de certificats GoogleRoots
+    std::string roots(GOOGLE_ROOTS);
+    TEST_ASSERT(roots.length() > 30000, "Bundle GoogleRoots complet (> 30 Ko)");
+    TEST_ASSERT(roots.find("GTS Root R1") != std::string::npos, "Presence de GTS Root R1 (RSA)");
+    TEST_ASSERT(roots.find("GTS Root R2") != std::string::npos, "Presence de GTS Root R2 (RSA)");
+    TEST_ASSERT(roots.find("GTS Root R3") != std::string::npos, "Presence de GTS Root R3 (ECC)");
+    TEST_ASSERT(roots.find("GTS Root R4") != std::string::npos, "Presence de GTS Root R4 (ECC Gemini Live)");
+    TEST_ASSERT(roots.find("GlobalSign") != std::string::npos, "Presence de GlobalSign Root CA");
+
+    // 2. Test du cycle de récupération après erreur TLS / réseau (v0.1.0.3)
+    VoxCoreVoice voice;
+    MockLiveTransport mockTransport;
+    WiFi.setConnected(true);
+
+    VoiceKitConfig cfg;
+    cfg.apiKey = "TEST_API_KEY";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfg.connectOnDemand = false;
+    voice.begin(cfg);
+    voice.getClient().setTransport(&mockTransport);
+
+    // Déclencher une erreur transport (ex: TLS handshake error)
+    mockTransport.simulateError("mbedtls_ssl_handshake returned -0x2700");
+    voice.update();
+
+    TEST_ASSERT(voice.getState() == VoiceState::ERROR_STATE, "Passage immediat a ERROR_STATE sur erreur TLS");
+    TEST_ASSERT(!voice.isReady(), "Moteur non pret en etat ERROR_STATE");
+
+    // Avancer le temps de 2 secondes (< RECONNECT_DELAY_MS = 5000 ms) : doit rester en ERROR_STATE
+    advanceMockMillis(2000);
+    voice.update();
+    TEST_ASSERT(voice.getState() == VoiceState::ERROR_STATE, "Maintien en ERROR_STATE avant l'echeance des 5 secondes");
+
+    // Avancer le temps de 4 secondes supplementaires (total 6000 ms >= 5000 ms) : doit recuperer vers IDLE / nouvel essai
+    advanceMockMillis(4000);
+    voice.update();
+    TEST_ASSERT(voice.getState() == VoiceState::IDLE || voice.getState() == VoiceState::CONNECTING_SERVICE, 
+                "Recuperation reussie vers IDLE / nouvel essai apres 5 secondes");
+
+    // Nettoyage transport avant destruction
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
     std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoxCore VoiceKit   " << std::endl;
-    std::cout << "  Version : v0.1.0.2 | Cible logique C++17                 " << std::endl;
+    std::cout << "  Version : v0.1.0.3 | Cible logique C++17                 " << std::endl;
     std::cout << "===========================================================" << std::endl;
 
     test_french_time_formatting();
@@ -693,6 +744,7 @@ int main() {
     test_gemini_server_close_frame();
     test_model_normalization();
     test_intentional_vs_unexpected_disconnect();
+    test_tls_roots_and_recovery();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

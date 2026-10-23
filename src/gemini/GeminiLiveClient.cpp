@@ -9,6 +9,11 @@
 #if defined(ESP32) || defined(ARDUINO)
 #include <esp_websocket_client.h>
 #include <esp_heap_caps.h>
+#include <esp_tls.h>
+#include <mbedtls/x509_crt.h>
+#include <mbedtls/error.h>
+#include <WiFi.h>
+#include <time.h>
 #endif
 
 // Constantes de connexion Gemini Live WebSocket API
@@ -16,6 +21,84 @@ static constexpr const char* GEMINI_LIVE_HOST = "generativelanguage.googleapis.c
 static constexpr const char* GEMINI_LIVE_PATH = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 static constexpr int GEMINI_LIVE_PORT = 443;
 static constexpr uint32_t GEMINI_LIVE_CONNECT_TIMEOUT_MS = 10000;
+
+#if defined(ESP32) || defined(ARDUINO)
+/**
+ * @brief Diagnostic approfondi de la poignée de main TLS mbedTLS et des drapeaux X.509.
+ * Analyse les causes de rejet : CA inconnu/non approuvé, certificat expiré,
+ * horloge non synchronisée, nom d'hôte (CN/SAN) incorrect.
+ */
+static void diagnoseTlsVerification(const char* host, const char* certPem) {
+    if (!host || !certPem) return;
+
+    time_t now = time(nullptr);
+    if (now < 1700000000) {
+        Serial.println("[TLS] Vérification : ERREUR (Horloge NTP non synchronisée, heure système < 2024)");
+        return;
+    }
+
+    IPAddress ip;
+    if (!WiFi.hostByName(host, ip)) {
+        Serial.printf("[TLS] Vérification : ERREUR (Résolution DNS échouée pour %s)\n", host);
+        return;
+    }
+
+    esp_tls_cfg_t cfg = {};
+    cfg.cacert_buf = reinterpret_cast<const unsigned char*>(certPem);
+    cfg.cacert_bytes = strlen(certPem) + 1;
+    cfg.timeout_ms = 4000;
+
+    esp_tls_t* tls = esp_tls_init();
+    if (!tls) {
+        Serial.println("[TLS] Vérification : ERREUR (Échec allocation contexte esp_tls)");
+        return;
+    }
+
+    int ret = esp_tls_conn_new_sync(host, strlen(host), 443, &cfg, tls);
+    if (ret == 1) {
+        Serial.println("[TLS] Vérification : OK (Test TLS direct réussi)");
+        esp_tls_conn_destroy(tls);
+        return;
+    }
+
+    int mbedtlsCode = 0;
+    int flags = 0;
+    esp_tls_get_and_clear_last_error(tls->error_handle, &mbedtlsCode, &flags);
+
+    String detail = "";
+    if (flags != 0) {
+        if (flags & MBEDTLS_X509_BADCERT_NOT_TRUSTED) {
+            detail += "Autorité de certification inconnue ou non approuvée (CA introuvable) ; ";
+        }
+        if (flags & MBEDTLS_X509_BADCERT_EXPIRED) {
+            detail += "Certificat serveur expiré ; ";
+        }
+        if (flags & MBEDTLS_X509_BADCERT_FUTURE) {
+            detail += "Certificat serveur pas encore valide (vérifier l'heure système NTP) ; ";
+        }
+        if (flags & MBEDTLS_X509_BADCERT_CN_MISMATCH) {
+            detail += "Nom d'hôte incorrect (CN/SAN mismatch) ; ";
+        }
+        if (flags & MBEDTLS_X509_BADCERT_REVOKED) {
+            detail += "Certificat révoqué ; ";
+        }
+        if (detail.isEmpty()) {
+            char buf[128] = {0};
+            mbedtls_x509_crt_verify_info(buf, sizeof(buf), "", flags);
+            detail = buf;
+        }
+        Serial.printf("[TLS] Vérification : ERREUR (Drapeaux X.509 0x%04X : %s)\n", flags, detail.c_str());
+    } else if (mbedtlsCode != 0) {
+        char errBuf[100] = {0};
+        mbedtls_strerror(mbedtlsCode, errBuf, sizeof(errBuf));
+        Serial.printf("[TLS] Vérification : ERREUR (mbedTLS -0x%04X : %s)\n", -mbedtlsCode, errBuf);
+    } else {
+        Serial.println("[TLS] Vérification : ERREUR (Échec poignée de main TLS ou coupure réseau)");
+    }
+
+    esp_tls_conn_destroy(tls);
+}
+#endif
 
 #if defined(ESP32) || defined(ARDUINO)
 /**
@@ -45,6 +128,9 @@ public:
         _lastCloseCode = 0;
         _lastCloseReason.clear();
         _reassembler.reset();
+
+        Serial.printf("[TLS] Connexion à %s\n", GEMINI_LIVE_HOST);
+        Serial.println("[TLS] Certificats : Google Trust Services (21 racines : GTS Root R1..R4, GlobalSign, DigiCert)");
 
         esp_websocket_client_config_t cfg = {};
         cfg.uri = uri;
@@ -130,6 +216,8 @@ private:
 
         switch (event_id) {
             case WEBSOCKET_EVENT_CONNECTED:
+                Serial.println("[TLS] Vérification : OK");
+                Serial.println("[Gemini] WebSocket : connecté");
                 Serial.println("[VoiceKit:WS] Evenement CONNECTED : Session WebSocket etablie avec succes");
                 self->_connected = true;
                 self->_lastCloseCode = 0;
@@ -205,6 +293,7 @@ private:
 
             case WEBSOCKET_EVENT_ERROR:
                 Serial.println("[VoiceKit:WS] Evenement ERROR : Erreur bas niveau transport WebSocket / TLS");
+                diagnoseTlsVerification(GEMINI_LIVE_HOST, GOOGLE_ROOTS);
                 if (self->_onError) {
                     if (!self->_lastCloseReason.empty()) {
                         self->_onError(self->_lastCloseReason.c_str());
@@ -292,6 +381,10 @@ GeminiLiveClient::~GeminiLiveClient() {
 void GeminiLiveClient::setTransport(ILiveTransport* transport) {
     if (transport) {
         _transport = transport;
+    } else {
+        _transport = _defaultTransport.get();
+    }
+    if (_transport) {
         _transport->setHandlers(
             [this]() {
                 _connected = true;
@@ -520,6 +613,7 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
         cJSON* setupComp = cJSON_GetObjectItem(root, "setupComplete");
         if (setupComp) {
             _setupComplete = true;
+            Serial.println("[Gemini] setupComplete : reçu");
             Serial.println("[VoiceKit:Client] Session Gemini Live configuree et prete (setupComplete)");
             if (_onSetupComplete) _onSetupComplete();
         }

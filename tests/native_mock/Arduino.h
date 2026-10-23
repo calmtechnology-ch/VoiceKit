@@ -65,20 +65,23 @@ inline String operator+(const String& a, const String& b) { return String((const
 inline String operator+(const String& a, const char* b) { return String((const std::string&)a + b); }
 inline String operator+(const char* a, const String& b) { return String(a + (const std::string&)b); }
 
-static uint32_t s_mockMillisOffset = 0;
-inline void setMockMillisOffset(uint32_t offset) { s_mockMillisOffset = offset; }
-inline void advanceMockMillis(uint32_t ms) { s_mockMillisOffset += ms; }
+inline uint32_t& getMockMillisOffset() {
+    static uint32_t s_offset = 0;
+    return s_offset;
+}
+inline void setMockMillisOffset(uint32_t offset) { getMockMillisOffset() = offset; }
+inline void advanceMockMillis(uint32_t ms) { getMockMillisOffset() += ms; }
 
 inline uint32_t millis() {
     static auto start = std::chrono::steady_clock::now();
     auto now = std::chrono::steady_clock::now();
-    return (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count() + s_mockMillisOffset;
+    return (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count() + getMockMillisOffset();
 }
 
 inline uint32_t micros() {
     static auto start = std::chrono::steady_clock::now();
     auto now = std::chrono::steady_clock::now();
-    return (uint32_t)std::chrono::duration_cast<std::chrono::microseconds>(now - start).count() + s_mockMillisOffset * 1000;
+    return (uint32_t)std::chrono::duration_cast<std::chrono::microseconds>(now - start).count() + getMockMillisOffset() * 1000;
 }
 
 inline void delay(uint32_t ms) {

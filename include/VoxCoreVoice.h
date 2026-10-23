@@ -137,6 +137,12 @@ private:
     uint32_t _generatingStartTimeMs = 0;
     bool _isSpeakingActive = false;
 
+    // Récupération après erreur TLS / réseau (v0.1.0.3)
+    uint8_t _reconnectAttempts = 0;
+    uint32_t _lastErrorTimeMs = 0;
+    static constexpr uint8_t MAX_RECONNECT_ATTEMPTS = 3;
+    static constexpr uint32_t RECONNECT_DELAY_MS = 5000;
+
     // Callbacks utilisateurs
     VoidCallback _onReady;
     VoidCallback _onSpeechStarted;
