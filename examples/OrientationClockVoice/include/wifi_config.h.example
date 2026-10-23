@@ -4,6 +4,9 @@
 #define WIFI_PASSWORD "VOTRE_MOT_DE_PASSE"
 #define GEMINI_KEY    "VOTRE_CLE_API_GEMINI"
 
+// Modele Gemini Live optionnel (par defaut : models/gemini-3.8-live)
+// #define GEMINI_MODEL  "models/gemini-3.8-live"
+
 #define NTP_SERVER_1  "pool.ntp.org"
 #define NTP_SERVER_2  "time.google.com"
 #define NTP_SERVER_3  "time.nist.gov"

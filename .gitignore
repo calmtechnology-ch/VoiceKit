@@ -21,8 +21,13 @@ __pycache__/
 server/node_modules/
 server/.env
 
-# Sensitive credentials
+# Sensitive credentials & environment files
 include/Secrets.h
+**/secrets.h
+**/wifi_config.h
+*.secret.h
+.env
+*.env
 
 # References & archives
 references/

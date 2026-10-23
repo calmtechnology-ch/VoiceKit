@@ -74,6 +74,24 @@ bool ClockManager::getTimeString(char* out_str, size_t max_len) {
     }
 }
 
+bool ClockManager::getLocalTime(int& out_hour, int& out_minute) {
+    time_t now = time(nullptr);
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
+
+    if (timeinfo.tm_year >= 124) {
+        valid_time = true;
+        out_hour = timeinfo.tm_hour;
+        out_minute = timeinfo.tm_min;
+        return true;
+    } else {
+        valid_time = false;
+        out_hour = 0;
+        out_minute = 0;
+        return false;
+    }
+}
+
 bool ClockManager::update(char* out_str, size_t max_len) {
     if (!out_str || max_len < 6) {
         return false;

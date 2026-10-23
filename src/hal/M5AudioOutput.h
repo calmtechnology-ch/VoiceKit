@@ -26,6 +26,13 @@ public:
     unsigned getVolume() const override { return _volume; }
     uint32_t getHardwareDrainMs() const override;
     void setBufferReleaseCallback(void* args, BufferReleaseCallback cb) override;
+    bool isOwner() const override { return _isOwner; }
+    void setOwner(bool owner) { _isOwner = owner; }
+
+#if !defined(ESP32) && !defined(ARDUINO)
+    static void setMockHostSpeakerRunning(bool running);
+    static bool isMockHostSpeakerRunning();
+#endif
 
     // Métriques et traçabilité
     void resetTurnMetrics() override;
@@ -45,6 +52,7 @@ public:
 private:
     unsigned _volume = 65;
     bool _initialized = false;
+    bool _isOwner = false;
     void* _releaseCbArgs = nullptr;
     BufferReleaseCallback _releaseCb = nullptr;
 

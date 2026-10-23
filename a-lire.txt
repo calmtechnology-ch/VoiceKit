@@ -1,1 +1,5 @@
 -pio run -d examples/OrientationClockVoice -t upload
+
+-pio run -d examples\MinimalTTS -t upload
+
+- voir examples\OrientationClockVoice\include\FrenchTimeFormatter.h

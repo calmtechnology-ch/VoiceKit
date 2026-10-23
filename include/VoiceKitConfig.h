@@ -49,16 +49,30 @@ inline const char* voiceStateToString(VoiceState state) {
     }
 }
 
+// =============================================================================
+// Configuration centralisee du modele Gemini Live (v0.1.0.1)
+// Modele stabilise dans VoxCore v0.2.2.0 : "models/gemini-3.8-live"
+// Compatible BidiGenerateContent sur generativelanguage.googleapis.com
+// Surchargable par #define GEMINI_MODEL ou vConfig.model
+// =============================================================================
+#ifndef VOICEKIT_DEFAULT_MODEL
+#define VOICEKIT_DEFAULT_MODEL "models/gemini-3.8-live"
+#endif
+
+#ifndef VOICEKIT_DEFAULT_VOICE
+#define VOICEKIT_DEFAULT_VOICE "Aoede" // Voix supportees : Aoede, Charon, Fenrir, Kore, Puck
+#endif
+
 /**
- * @brief Configuration d'initialisation de VoxCore VoiceKit v0.1.0.
+ * @brief Configuration d'initialisation de VoxCore VoiceKit v0.1.0.1.
  */
 struct VoiceKitConfig {
     // Clé d'API Google Gemini
     String apiKey = "";
 
-    // Modèle et voix Gemini Live
-    String model = "models/gemini-2.0-flash-exp";
-    String voice = "Aoede"; // Voix supportées : Aoede, Charon, Fenrir, Kore, Puck
+    // Modèle et voix Gemini Live centralisés
+    String model = VOICEKIT_DEFAULT_MODEL;
+    String voice = VOICEKIT_DEFAULT_VOICE;
 
     // Instructions système strictes pour TTS mot à mot fidèle
     String systemInstruction =

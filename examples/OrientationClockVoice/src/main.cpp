@@ -64,16 +64,14 @@ static void announceCurrentTime() {
         return;
     }
 
-    time_t now = time(nullptr);
-    struct tm timeinfo;
-    localtime_r(&now, &timeinfo);
-
+    int current_hour = 0;
+    int current_min = 0;
     String speechText;
-    if (timeinfo.tm_year < 124) {
-        Serial.println("[ClockVoice] Heure non synchronisee (< 2024).");
+    if (!clock_mgr.hasValidTime() || !clock_mgr.getLocalTime(current_hour, current_min)) {
+        Serial.println("[ClockVoice] Heure non disponible dans ClockManager.");
         speechText = "L'heure n'est pas encore synchronisée.";
     } else {
-        speechText = formatTimeInFrench(timeinfo.tm_hour, timeinfo.tm_min);
+        speechText = formatTimeInFrench(current_hour, current_min);
     }
 
     Serial.printf("[ClockVoice] Annonce vocale demandee: \"%s\"\n", speechText.c_str());
@@ -111,13 +109,14 @@ void setup() {
     Serial.begin(115200);
     delay(200);
     Serial.println("\n=======================================================");
-    Serial.println("  CoreS3 Orientation Clock + VoxCore VoiceKit v0.1.0");
+    Serial.println("  CoreS3 Orientation Clock + VoxCore VoiceKit v0.1.0.1");
     Serial.println("=======================================================\n");
 
     // 1. Initialisation matérielle CoreS3 par l'application hôte
     auto cfg = M5.config();
     cfg.internal_imu = true;
     cfg.internal_rtc = true;
+    cfg.internal_spk = true;
     M5.begin(cfg);
 
     // 2. Initialisation de l'orientation BMI270
@@ -156,7 +155,11 @@ void setup() {
     // 6. Initialisation de VoxCore VoiceKit en composant invité (EXTERNAL_WIFI)
     VoiceKitConfig vConfig;
     vConfig.apiKey = GEMINI_KEY;
-    vConfig.model = "models/gemini-2.0-flash-exp";
+#ifdef GEMINI_MODEL
+    vConfig.model = GEMINI_MODEL;
+#else
+    vConfig.model = VOICEKIT_DEFAULT_MODEL;
+#endif
     vConfig.wifiMode = WiFiMode::EXTERNAL_WIFI; // VoiceKit s'adapte au Wi-Fi de l'horloge
     vConfig.hardwareAlreadyInitialized = true;  // M5.begin() déjà effectué
     vConfig.connectOnDemand = true;             // Connexion à la demande pour batterie
@@ -260,18 +263,25 @@ void loop() {
                 pending_speech_text = "";
                 wifi_sync.setKeepAliveLock(false);
             }
-        } else if (millis() - voice_req_start_ms > WIFI_VOICE_TIMEOUT_MS) {
-            Serial.println("[ClockVoice] Timeout de reconnexion Wi-Fi pour annonce vocale.");
+        } else if (millis() - voice_req_start_ms > WIFI_VOICE_TIMEOUT_MS || wifi_sync.getState() == SyncState::FAILED) {
+            Serial.println("[ClockVoice] Echec ou timeout de reconnexion Wi-Fi pour annonce vocale.");
             if (ui_ready) {
                 clock_ui.setVoiceIndicator(VoiceState::ERROR_STATE);
             }
             voice_req_state = VoiceRequestState::IDLE;
             pending_speech_text = "";
+            wifi_keepalive_until_ms = 0;
             wifi_sync.setKeepAliveLock(false);
         }
     }
 
-    // 5c. Libération différée du verrou Wi-Fi après 15 s d'inactivité
+    // 5c. Securite verrou Wi-Fi : si l'annonce s'est achevee ou a ete interrompue
+    if (voice_req_state == VoiceRequestState::ANNOUNCING && !voice.isBusy() && wifi_keepalive_until_ms == 0) {
+        voice_req_state = VoiceRequestState::IDLE;
+        wifi_keepalive_until_ms = millis() + WIFI_KEEPALIVE_POST_SPEECH_MS;
+    }
+
+    // 5d. Liberation differee du verrou Wi-Fi apres 15 s d'inactivite
     if (wifi_keepalive_until_ms > 0 && millis() >= wifi_keepalive_until_ms) {
         wifi_keepalive_until_ms = 0;
         if (!voice.isBusy() && voice_req_state == VoiceRequestState::IDLE) {

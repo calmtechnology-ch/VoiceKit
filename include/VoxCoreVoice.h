@@ -133,6 +133,9 @@ private:
     String _pendingTextOnConnect = "";
     uint32_t _lastActivityTimeMs = 0;
     uint32_t _lastWiFiRetryMs = 0;
+    uint32_t _connectingStartTimeMs = 0;
+    uint32_t _generatingStartTimeMs = 0;
+    bool _isSpeakingActive = false;
 
     // Callbacks utilisateurs
     VoidCallback _onReady;

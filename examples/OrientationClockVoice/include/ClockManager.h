@@ -43,6 +43,15 @@ public:
     bool getTimeString(char* out_str, size_t max_len);
 
     /**
+     * @brief Retrieve current local hour and minute (0-23 and 0-59).
+     * Used by VoiceKit to announce the exact displayed time.
+     * @param out_hour Output hour variable.
+     * @param out_minute Output minute variable.
+     * @return true if valid local time is available, false otherwise.
+     */
+    bool getLocalTime(int& out_hour, int& out_minute);
+
+    /**
      * @brief Check whether system time has been set and is valid (year >= 2024).
      */
     bool hasValidTime() const { return valid_time; }

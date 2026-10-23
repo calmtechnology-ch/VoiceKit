@@ -7,9 +7,14 @@
 
 #if __has_include("wifi_config.h")
     #include "wifi_config.h"
+#elif __has_include("wifi_config.example.h")
+    #include "wifi_config.example.h"
+#elif __has_include("wifi_config.h.example")
+    #include "wifi_config.h.example"
 #else
-    #define WIFI_SSID     "[REDACTED_LEGACY_WIFI_SSID]"
-    #define WIFI_PASSWORD "[REDACTED_LEGACY_WIFI_PASS]"
+    #define WIFI_SSID     "VOTRE_SSID_WIFI"
+    #define WIFI_PASSWORD "VOTRE_MOT_DE_PASSE"
+    #define GEMINI_KEY    "VOTRE_CLE_API_GEMINI"
     #define NTP_SERVER_1  "pool.ntp.org"
     #define NTP_SERVER_2  "time.google.com"
     #define NTP_SERVER_3  "time.nist.gov"

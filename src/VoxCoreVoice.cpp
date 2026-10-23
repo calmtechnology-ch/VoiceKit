@@ -27,7 +27,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _config = config;
     _lastError = "";
 
-    Serial.println("\n[VoiceKit] Initialisation de VoxCore VoiceKit v0.1.0...");
+    Serial.println("\n[VoiceKit] Initialisation de VoxCore VoiceKit v0.1.0.1...");
 
     // 1. Initialisation de la couche audio matérielle (Composant invité)
     if (_config.audioOutput) {
@@ -136,27 +136,72 @@ void VoxCoreVoice::update() {
         }
     }
 
+    // 1b. Surveillance de coupure Wi-Fi en cours de requete active (Correction E)
+    if (WiFi.status() != WL_CONNECTED) {
+        if (_state == VoiceState::CONNECTING_SERVICE || _state == VoiceState::GENERATING || 
+            _state == VoiceState::SPEAKING || !_pendingTextOnConnect.isEmpty()) {
+            Serial.println("[VoiceKit] ERREUR : Connexion Wi-Fi perdue pendant la requete vocale");
+            _lastError = "Connexion Wi-Fi interrompue";
+            _client.disconnect();
+            _player.stop(AudioStopReason::HARDWARE_ERROR);
+            _pendingTextOnConnect = "";
+            while (!_textQueue.empty()) _textQueue.pop();
+            _connectingStartTimeMs = 0;
+            _generatingStartTimeMs = 0;
+            _isSpeakingActive = false;
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+        }
+    }
+
     // 2. Traitement non-bloquant des flux sous-jacents
     _client.tick();
     _player.tick();
+
+    // 2b. Surveillance des timeouts asynchrones (Correction E)
+    if (_state == VoiceState::CONNECTING_SERVICE) {
+        if (_connectingStartTimeMs > 0 && (now - _connectingStartTimeMs > 12000)) {
+            Serial.println("[VoiceKit] ERREUR : Timeout de connexion au service Gemini Live");
+            _lastError = "Timeout de connexion au service Gemini Live";
+            _client.disconnect();
+            _pendingTextOnConnect = "";
+            _connectingStartTimeMs = 0;
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+        }
+    } else if (_state == VoiceState::GENERATING) {
+        if (_generatingStartTimeMs > 0 && (now - _generatingStartTimeMs > 15000)) {
+            Serial.println("[VoiceKit] ERREUR : Timeout de generation vocale Gemini Live");
+            _lastError = "Timeout de generation vocale Gemini Live";
+            _player.stop(AudioStopReason::HARDWARE_ERROR);
+            _generatingStartTimeMs = 0;
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+        }
+    }
 
     // 3. Connexion initiale automatique si Wi-Fi disponible et non à la demande
     if (!_config.connectOnDemand && (_state == VoiceState::IDLE)) {
         if (WiFi.status() == WL_CONNECTED && isSystemTimeValid()) {
             if (!_client.isConnected()) {
                 Serial.println("[VoiceKit] Wi-Fi & Heure valides. Connexion prealable a Gemini Live...");
+                _connectingStartTimeMs = now;
                 _client.connect();
                 setState(VoiceState::CONNECTING_SERVICE);
             }
         }
     }
 
-    // 4. Dépilage asynchrone de la file d'attente
+    // 4. Depilage asynchrone de la file d'attente
     if (!_textQueue.empty() && !isBusy()) {
         if (_client.isConnected() && _client.isSetupComplete()) {
             String nextText = _textQueue.front();
             _textQueue.pop();
             dispatchSpeechRequest(nextText);
+        } else if (_state == VoiceState::IDLE || _state == VoiceState::READY) {
+            String nextText = _textQueue.front();
+            _textQueue.pop();
+            say(nextText);
         }
     }
 
@@ -178,8 +223,9 @@ bool VoxCoreVoice::say(const String& text) {
     }
 
     _lastActivityTimeMs = millis();
+    _lastError = "";
 
-    // Cas 1 : Le moteur est actuellement occupé (génération ou parole en cours)
+    // Cas 1 : Le moteur est actuellement occupe (generation, restitution ou file active)
     if (isBusy()) {
         switch (_config.queuePolicy) {
             case QueuePolicy::REJECT_IF_BUSY:
@@ -204,7 +250,7 @@ bool VoxCoreVoice::say(const String& text) {
         }
     }
 
-    // Cas 2 : Le moteur est libre, vérification préalable des prérequis réseau
+    // Cas 2 : Le moteur est libre, verification prealable des prerequis reseau
     if (WiFi.status() != WL_CONNECTED) {
         _lastError = "Wi-Fi non connecte";
         Serial.printf("[VoiceKit] say() impossible : %s\n", _lastError.c_str());
@@ -219,22 +265,39 @@ bool VoxCoreVoice::say(const String& text) {
         return false;
     }
 
-    // Cas 3 : Session déjà connectée et prête
+    // Cas 3 : Session deja connectee et prete
     if (_client.isConnected() && _client.isSetupComplete()) {
         return dispatchSpeechRequest(text);
     }
 
-    // Cas 4 : Session non connectée (ex: démarrage à la demande connectOnDemand)
+    // Cas 3b : Connexion deja en cours (attente de setup ou appel say() consecutif)
+    if (_state == VoiceState::CONNECTING_SERVICE || _client.isConnected()) {
+        Serial.println("[VoiceKit] Connexion deja en cours -> Mise en attente de la requete vocale");
+        _pendingTextOnConnect = text;
+        setState(VoiceState::CONNECTING_SERVICE);
+        return true;
+    }
+
+    // Cas 4 : Session non connectee (demarrage a la demande connectOnDemand)
     _pendingTextOnConnect = text;
+    _connectingStartTimeMs = millis();
     Serial.println("[VoiceKit] Connexion a la demande a Gemini Live...");
-    _client.connect();
     setState(VoiceState::CONNECTING_SERVICE);
+    if (!_client.connect()) {
+        _pendingTextOnConnect = "";
+        _connectingStartTimeMs = 0;
+        _lastError = (strlen(_client.getLastError()) == 0) ? "Echec connexion Gemini Live" : _client.getLastError();
+        setState(VoiceState::ERROR_STATE);
+        if (_onError) _onError(_lastError);
+        return false;
+    }
     return true;
 }
 
 bool VoxCoreVoice::dispatchSpeechRequest(const String& text) {
     _player.reset();
     _client.resetTurnRxMetrics();
+    _generatingStartTimeMs = millis();
 
     String prompt = _config.promptPrefix + text;
     bool sent = _client.sendTextMessage(prompt);
@@ -243,6 +306,7 @@ bool VoxCoreVoice::dispatchSpeechRequest(const String& text) {
         setState(VoiceState::GENERATING);
         return true;
     } else {
+        _generatingStartTimeMs = 0;
         _lastError = "Echec envoi requete a Gemini Live";
         setState(VoiceState::ERROR_STATE);
         if (_onError) _onError(_lastError);
@@ -251,16 +315,20 @@ bool VoxCoreVoice::dispatchSpeechRequest(const String& text) {
 }
 
 void VoxCoreVoice::stop() {
-    Serial.println("[VoiceKit] Arrêt demande (stop)");
-    if (_client.isConnected()) {
-        _client.sendInterruption();
-    }
-    _player.stop(AudioStopReason::USER_STOP);
+    Serial.println("[VoiceKit] Arret demande (stop)");
+    _connectingStartTimeMs = 0;
+    _generatingStartTimeMs = 0;
+    _pendingTextOnConnect = "";
+    _isSpeakingActive = false;
 
     while (!_textQueue.empty()) {
         _textQueue.pop();
     }
-    _pendingTextOnConnect = "";
+
+    if (_client.isConnected()) {
+        _client.sendInterruption();
+    }
+    _player.stop(AudioStopReason::USER_STOP);
 
     setState(_client.isSetupComplete() ? VoiceState::READY : VoiceState::IDLE);
 }
@@ -277,7 +345,11 @@ bool VoxCoreVoice::isReady() const {
 }
 
 bool VoxCoreVoice::isBusy() const {
-    return (_state == VoiceState::GENERATING || _state == VoiceState::SPEAKING || _player.isPlaying());
+    return (_state == VoiceState::GENERATING || 
+            _state == VoiceState::SPEAKING || 
+            _player.isPlaying() ||
+            !_pendingTextOnConnect.isEmpty() ||
+            !_textQueue.empty());
 }
 
 void VoxCoreVoice::setVolume(uint8_t percent) {
@@ -295,6 +367,7 @@ void VoxCoreVoice::handleClientConnected() {
 
 void VoxCoreVoice::handleClientSetupComplete() {
     Serial.println("[VoiceKit] Setup Gemini Live confirme");
+    _connectingStartTimeMs = 0;
     setState(VoiceState::READY);
 
     if (_onReady) {
@@ -311,12 +384,31 @@ void VoxCoreVoice::handleClientSetupComplete() {
 
 void VoxCoreVoice::handleClientDisconnected() {
     Serial.println("[VoiceKit] Session Gemini Live deconnectee");
-    if (!isSpeaking()) {
+    _connectingStartTimeMs = 0;
+
+    if (_state == VoiceState::GENERATING) {
+        Serial.println("[VoiceKit] Deconnexion pendant la generation vocale");
+        _generatingStartTimeMs = 0;
+        _player.stop(AudioStopReason::GEMINI_INTERRUPT);
+        _lastError = "Deconnexion inattendue de Gemini Live pendant la generation";
+        setState(VoiceState::ERROR_STATE);
+        if (_onError) _onError(_lastError);
+    } else if (_state == VoiceState::CONNECTING_SERVICE) {
+        Serial.println("[VoiceKit] Deconnexion pendant l'etablissement de session");
+        _pendingTextOnConnect = "";
+        _lastError = "Echec connexion Gemini Live (session fermee)";
+        setState(VoiceState::ERROR_STATE);
+        if (_onError) _onError(_lastError);
+    } else if (_state == VoiceState::SPEAKING || _isSpeakingActive) {
+        // En cours de parole : Gemini a clos le flux, notifier la fin de tour au lecteur
+        _player.notifyTurnComplete();
+    } else {
         setState(VoiceState::IDLE);
     }
 }
 
 void VoxCoreVoice::handleAudioData(const int16_t* pcm, size_t samples) {
+    _generatingStartTimeMs = 0;
     if (_state == VoiceState::GENERATING) {
         setState(VoiceState::SPEAKING);
     }
@@ -324,6 +416,8 @@ void VoxCoreVoice::handleAudioData(const int16_t* pcm, size_t samples) {
 }
 
 void VoxCoreVoice::handleFirstAudio() {
+    _generatingStartTimeMs = 0;
+    _isSpeakingActive = true;
     setState(VoiceState::SPEAKING);
     Serial.println("[VoiceKit] Debut de restitution vocale (onSpeechStarted)");
     if (_onSpeechStarted) {
@@ -333,12 +427,14 @@ void VoxCoreVoice::handleFirstAudio() {
 
 void VoxCoreVoice::handleTurnComplete() {
     Serial.println("[VoiceKit] Fin de generation Gemini reçue (turnComplete)");
+    _generatingStartTimeMs = 0;
     _player.notifyTurnComplete();
 }
 
 void VoxCoreVoice::handlePlaybackFinished() {
     Serial.println("[VoiceKit] Fin effective de restitution sonore (onSpeechFinished)");
     _lastActivityTimeMs = millis();
+    _isSpeakingActive = false;
 
     setState(_client.isSetupComplete() ? VoiceState::READY : VoiceState::IDLE);
 
@@ -346,16 +442,28 @@ void VoxCoreVoice::handlePlaybackFinished() {
         _onSpeechFinished();
     }
 
-    // Dépiler le message suivant s'il y en a un
+    // Depiler le message suivant s'il y en a un
     if (!_textQueue.empty()) {
         String nextText = _textQueue.front();
         _textQueue.pop();
-        dispatchSpeechRequest(nextText);
+        if (_client.isConnected() && _client.isSetupComplete()) {
+            dispatchSpeechRequest(nextText);
+        } else {
+            say(nextText);
+        }
     }
 }
 
 void VoxCoreVoice::handleClientError(const String& err) {
     _lastError = err;
+    _connectingStartTimeMs = 0;
+    _generatingStartTimeMs = 0;
+    _pendingTextOnConnect = "";
+    _isSpeakingActive = false;
+    _player.stop(AudioStopReason::HARDWARE_ERROR);
+    while (!_textQueue.empty()) {
+        _textQueue.pop();
+    }
     Serial.printf("[VoiceKit] Erreur Gemini Live: %s\n", err.c_str());
     setState(VoiceState::ERROR_STATE);
     if (_onError) {

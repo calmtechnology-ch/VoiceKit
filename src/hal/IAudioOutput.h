@@ -54,6 +54,12 @@ public:
     virtual bool isRunning() const = 0;
 
     /**
+     * @brief Indique si ce composant est le propriétaire exclusif du haut-parleur matériel.
+     * Si false, le haut-parleur appartient à l'hôte et ne doit pas être détruit/arrêté globalement.
+     */
+    virtual bool isOwner() const { return false; }
+
+    /**
      * @brief Soumet un bloc d'échantillons PCM bruts pour restitution au haut-parleur.
      * 
      * CONTRAT D'ACCEPTATION STRICT :

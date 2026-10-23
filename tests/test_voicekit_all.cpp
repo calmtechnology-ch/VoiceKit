@@ -268,12 +268,178 @@ void test_wifi_coordination() {
 }
 
 // =============================================================================
+// SUITE 6 : Gestion explicite de la propriete du haut-parleur (Correction C)
+// =============================================================================
+void test_speaker_ownership_management() {
+    std::cout << "\n[TEST SUITE 6] Propriete du haut-parleur (Correction C)" << std::endl;
+
+    // Cas 1 : VoiceKit initialise le haut-parleur (l'hote ne l'avait pas demarre)
+    M5AudioOutput::setMockHostSpeakerRunning(false);
+    {
+        M5AudioOutput out1;
+        bool b1 = out1.begin();
+        TEST_ASSERT(b1, "begin() reussit pour VoiceKit proprietaire");
+        TEST_ASSERT(out1.isOwner() == true, "VoiceKit est detecte proprietaire (Cas 1)");
+        TEST_ASSERT(out1.isRunning() == true, "Haut-parleur actif");
+        out1.end(AudioStopReason::NORMAL_FINISH);
+        TEST_ASSERT(M5AudioOutput::isMockHostSpeakerRunning() == false, "Haut-parleur eteint car VoiceKit etait proprietaire");
+    }
+
+    // Cas 2 : L'application hote possede deja le haut-parleur
+    M5AudioOutput::setMockHostSpeakerRunning(true);
+    {
+        M5AudioOutput out2;
+        bool b2 = out2.begin();
+        TEST_ASSERT(b2, "begin() reussit quand l'hote possede deja le HP");
+        TEST_ASSERT(out2.isOwner() == false, "VoiceKit n'est PAS proprietaire (Cas 2)");
+        TEST_ASSERT(out2.isRunning() == true, "Haut-parleur actif pour l'hote");
+        out2.end(AudioStopReason::RESET);
+        TEST_ASSERT(M5AudioOutput::isMockHostSpeakerRunning() == true, "Haut-parleur reste ACTIF apres end() (preserve pour l'hote)");
+    }
+    // Verification apres destruction de l'objet out2
+    TEST_ASSERT(M5AudioOutput::isMockHostSpeakerRunning() == true, "Haut-parleur toujours ACTIF apres destruction de M5AudioOutput (Cas 2)");
+
+    // Cas 3 : Arret via stop()
+    {
+        M5AudioOutput out3;
+        out3.begin();
+        out3.stop(0, AudioStopReason::USER_STOP);
+        TEST_ASSERT(out3.wasStopCalledInTurn(), "stop() enregistre pour le canal VoiceKit");
+        TEST_ASSERT(M5AudioOutput::isMockHostSpeakerRunning() == true, "stop() n'arrete pas le peripherique global de l'hote");
+    }
+}
+
+// =============================================================================
+// SUITE 7 : Coherence heure affichee et annoncee (Correction D)
+// =============================================================================
+void test_announced_and_displayed_time_coherence() {
+    std::cout << "\n[TEST SUITE 7] Coherence heure affichee et annoncee (Correction D)" << std::endl;
+
+    int test_hours[] = {0, 8, 12, 14, 20, 21, 23};
+    int test_mins[]  = {0, 5, 0,  35, 9,  21, 59};
+
+    for (size_t i = 0; i < 7; ++i) {
+        int h = test_hours[i];
+        int m = test_mins[i];
+
+        char displayed[8];
+        snprintf(displayed, sizeof(displayed), "%02d:%02d", h, m);
+        String announced = formatTimeInFrench(h, m);
+
+        if (h == 0 && m == 0) {
+            TEST_ASSERT(announced == "Il est minuit.", "00:00 -> minuit");
+        } else if (h == 12 && m == 0) {
+            TEST_ASSERT(announced == "Il est midi.", "12:00 -> midi");
+        } else if (h == 20 && m == 9) {
+            TEST_ASSERT(announced == "Il est vingt heures neuf.", "20:09 -> vingt heures neuf");
+        } else if (h == 21 && m == 21) {
+            TEST_ASSERT(announced == "Il est vingt et une heures vingt et un.", "21:21 -> vingt et une heures vingt et un");
+        }
+        TEST_ASSERT(announced.startsWith("Il est "), "Toute annonce commence par 'Il est '");
+        TEST_ASSERT(announced.endsWith("."), "Toute annonce se termine par un point");
+    }
+
+    String fallbackSpeech = "L'heure n'est pas encore synchronisée.";
+    TEST_ASSERT(!fallbackSpeech.isEmpty(), "Message de repli valide en cas d'heure RTC invalide");
+}
+
+// =============================================================================
+// SUITE 8 : Robustesse des requetes asynchrones et resilience (Correction E)
+// =============================================================================
+void test_async_requests_and_resilience() {
+    std::cout << "\n[TEST SUITE 8] Gestion robuste requetes asynchrones et resilience (Correction E)" << std::endl;
+
+    VoxCoreVoice voice;
+    VoiceKitConfig cfg;
+    cfg.apiKey = "TEST_API_KEY";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfg.connectOnDemand = true;
+    WiFi.setConnected(true);
+    voice.begin(cfg);
+
+    // 1. say() declenche la connexion a la demande
+    bool accepted1 = voice.say("Premiere annonce");
+    TEST_ASSERT(accepted1, "say() accepte en connectOnDemand");
+    TEST_ASSERT(voice.isBusy(), "Moteur considere occupe pendant la connexion/requete");
+
+    // 2. Interruption avec stop()
+    bool speechFinishedCalled = false;
+    voice.onSpeechFinished([&speechFinishedCalled]() {
+        speechFinishedCalled = true;
+    });
+    voice.stop();
+    TEST_ASSERT(!voice.isBusy(), "Moteur libre apres stop()");
+    TEST_ASSERT(!speechFinishedCalled, "Aucun callback onSpeechFinished fantome apres stop()");
+
+    // 3. Nouvelle annonce apres stop()
+    bool acceptedAfterStop = voice.say("Nouvelle annonce");
+    TEST_ASSERT(acceptedAfterStop, "say() accepte immediatement apres stop()");
+
+    // 4. Gestion de deconnexion ou erreur
+    bool errorTriggered = false;
+    voice.onError([&errorTriggered](const String& err) {
+        errorTriggered = true;
+    });
+    voice.stop();
+
+    // 5. Simuler coupure Wi-Fi pendant requete
+    voice.say("Test perte WiFi");
+    WiFi.setConnected(false);
+    voice.update();
+    TEST_ASSERT(errorTriggered, "onError declenche lors de la perte Wi-Fi");
+    TEST_ASSERT(!voice.isBusy(), "Moteur libere apres erreur Wi-Fi");
+    WiFi.setConnected(true);
+
+    // 6. Relance d'annonce apres erreur
+    bool acceptedAfterError = voice.say("Annonce de retablissement");
+    TEST_ASSERT(acceptedAfterError, "Nouvelle annonce possible apres une erreur");
+    voice.stop();
+}
+
+// =============================================================================
+// SUITE 9 : Cycle de vie du verrou Wi-Fi et maintien 15s (Correction F)
+// =============================================================================
+void test_wifi_lock_lifecycle_and_keepalive() {
+    std::cout << "\n[TEST SUITE 9] Cycle de vie du verrou Wi-Fi et maintien 15s (Correction F)" << std::endl;
+
+    WiFiTimeSync wifiSync;
+    wifiSync.init();
+
+    // Etape 1 : repos
+    TEST_ASSERT(!wifiSync.isKeepAliveLocked(), "Verrou initialement inactif");
+
+    // Etape 2 : Annonce vocale demandee -> Verrouillage immediat
+    wifiSync.setKeepAliveLock(true);
+    TEST_ASSERT(wifiSync.isKeepAliveLocked(), "Verrou actif pendant la requete vocale");
+
+    // Etape 3 : Maintien chaud 15 s
+    uint32_t keepalive_until = millis() + 15000;
+    TEST_ASSERT(keepalive_until > millis(), "Timer 15s arme");
+    TEST_ASSERT(wifiSync.isKeepAliveLocked(), "Verrou toujours maintenu durant les 15s de veille");
+
+    // Etape 4 : 2eme annonce consecutive pendant les 15s -> rearmement immediat
+    keepalive_until = 0;
+    wifiSync.setKeepAliveLock(true);
+    TEST_ASSERT(wifiSync.isKeepAliveLocked(), "2eme annonce consecutive : verrou maintenu sans interruption");
+
+    // Etape 5 : Expiration des 15s -> liberation propre
+    wifiSync.setKeepAliveLock(false);
+    TEST_ASSERT(!wifiSync.isKeepAliveLocked(), "Verrou libere apres les 15s d'inactivite");
+
+    // Etape 6 : Liberation d'urgence en cas d'erreur
+    wifiSync.setKeepAliveLock(true);
+    TEST_ASSERT(wifiSync.isKeepAliveLocked(), "Verrou reaquis");
+    wifiSync.setKeepAliveLock(false); // declenche par onError
+    TEST_ASSERT(!wifiSync.isKeepAliveLocked(), "Verrou libere en cas d'erreur (anti-blocage)");
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
     std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoxCore VoiceKit   " << std::endl;
-    std::cout << "  Version : v0.1.0 | Cible logique C++17                   " << std::endl;
+    std::cout << "  Version : v0.1.0.1 | Cible logique C++17                 " << std::endl;
     std::cout << "===========================================================" << std::endl;
 
     test_french_time_formatting();
@@ -281,6 +447,10 @@ int main() {
     test_audio_scenarios_duration();
     test_voicekit_api_and_queue_policies();
     test_wifi_coordination();
+    test_speaker_ownership_management();
+    test_announced_and_displayed_time_coherence();
+    test_async_requests_and_resilience();
+    test_wifi_lock_lifecycle_and_keepalive();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

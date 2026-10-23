@@ -7,6 +7,7 @@
 #include <vector>
 #include <atomic>
 #include "ILiveTransport.h"
+#include "VoiceKitConfig.h"
 
 /**
  * @brief Client WebSocket TLS pour le protocole bidirectionnel Google Gemini Live API.
@@ -82,8 +83,8 @@ private:
     void buildWebSocketUrl(char* buf, size_t bufSize) const;
 
     String _apiKey;
-    String _model = "models/gemini-2.0-flash-exp";
-    String _voice = "Aoede";
+    String _model = VOICEKIT_DEFAULT_MODEL;
+    String _voice = VOICEKIT_DEFAULT_VOICE;
     String _lastError;
     String _systemInstruction;
 
