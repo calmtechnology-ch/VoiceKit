@@ -34,7 +34,7 @@ void setup() {
     delay(200);
 
     Serial.println("\n==================================================");
-    Serial.println("  VoxCore VoiceKit v0.1.0.1 — Exemple MinimalTTS");
+    Serial.println("  VoxCore VoiceKit v0.1.0.2 — Exemple MinimalTTS");
     Serial.println("==================================================");
 
     // 1. Initialisation matérielle de l'application hôte

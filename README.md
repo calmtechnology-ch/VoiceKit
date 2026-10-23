@@ -1,4 +1,4 @@
-# VoxCore VoiceKit v0.1.0.1 (Corrective Release)
+# VoxCore VoiceKit v0.1.0.2
 
 Bibliothèque C++/Arduino indépendante de **synthèse vocale (Text-To-Speech / TTS)** haute fidélité pour **M5Stack CoreS3** (ESP32-S3) exploitant le moteur **Gemini Live** via WebSocket bidirectionnel TLS.
 
@@ -8,26 +8,24 @@ Bibliothèque C++/Arduino indépendante de **synthèse vocale (Text-To-Speech / 
 
 **VoxCore VoiceKit** a été conçu pour permettre d'ajouter la parole naturelle à n'importe quelle application CoreS3 existante (horloges, tableaux de bord, stations de capteurs, domotique) en quelques lignes de code, sans devoir comprendre ni importer toute l'architecture de VoxCore.
 
-### Principes directeurs de la v0.1.0.1 :
+### Principes directeurs de la v0.1.0.2 :
 1. **Composant invité strict** : VoiceKit ne prend jamais le contrôle de l'écran, ne crée aucune interface graphique intrusive, ne modifie pas la rotation de l'affichage, ne perturbe ni l'IMU, ni le RTC, ni les tâches applicatives de l'hôte.
 2. **Propriété explicite du haut-parleur** : VoiceKit respecte scrupuleusement l'initialisation audio réalisée par l'hôte. Si l'application hôte a déjà démarré `M5.Speaker`, VoiceKit l'utilise en invité sans écraser ses réglages DMA ni appeler `M5.Speaker.end()`.
 3. **Zéro couplage avec LVGL** : Aucune dépendance à LVGL. VoiceKit fonctionne aussi bien avec LVGL 8, LVGL 9, M5GFX brut ou en mode headless (sans affichage).
 4. **API publique simplifiée et asynchrone** : L'appel `voice.say("Bonjour")` est non-bloquant. La boucle principale `loop()` reste instantanément réactive à chaque milliseconde.
 5. **Sanctuaire audio éprouvé** : Préservation intégrale du pipeline audio stabilisé en **VoxCore v0.2.1.3.6 / v0.2.2.0** (Mode 2 `DEDICATED_AUDIO_TASK` FreeRTOS, tampon PSRAM 120 000 échantillons, quadruple buffer DMA, régulation douce sans perte, attente du vidage matériel DMA).
 6. **Garantie de non-coupure** : Le callback `onSpeechFinished` n'est déclenché qu'après émission physique réelle des derniers échantillons par le haut-parleur. Zéro mot tronqué en fin de phrase.
+7. **Diagnostic de clôture & réassemblage réseau** : Réassemblage strict des trames WebSocket fragmentées (jusqu'à 64 Ko), extraction des codes d'erreur JSON Gemini et des codes de clôture WebSocket Close (1007, 1008).
 
 ---
 
-## 2. Nouveautés et Correctifs de la v0.1.0.1
-
-Cette version corrective consolide la bibliothèque pour son déploiement réel sur M5Stack CoreS3 :
-
-* **Correction A — Sécurisation des identifiants** : Les fichiers `secrets.h` et `wifi_config.h` ont été retirés de l'index Git et intégrés aux règles `.gitignore`. Les modèles sécurisés `secrets.example.h` et `wifi_config.example.h` fournissent les canevas requis avec valeurs fictives. Les identifiants de repli en dur dans `WiFiTimeSync.h` ont été assainis.
-* **Correction B — Centralisation du Modèle Gemini Live** : Suppression de l'ancienne référence figée `models/gemini-2.0-flash-exp` (incompatible avec le endpoint `bidiGenerateContent`). Alignement sur la référence stabilisée de VoxCore v0.2.2.0 (`VOICEKIT_DEFAULT_MODEL = "models/gemini-3.8-live"`), tout en maintenant le modèle entièrement configurable via `vConfig.model` ou `#define GEMINI_MODEL`.
-* **Correction C — Gestion explicite de la propriété du haut-parleur** : Implémentation du suivi de propriété (`isOwner()`). Si l'application hôte a déjà initialisé le haut-parleur, VoiceKit ne coupe pas le périphérique sur `end()`, `reset()` ou à sa destruction, et n'écrase pas la configuration matérielle hôte.
-* **Correction D — Cohérence de l'heure annoncée** : L'annonce vocale dans `OrientationClockVoice` interroge directement l'instance `ClockManager` existante via `getLocalTime(hour, minute)`. Les heures et minutes annoncées correspondent exactement aux chiffres affichés à l'écran sous le fuseau `Europe/Zurich`, et restent fonctionnelles même lorsque la radio Wi-Fi est éteinte grâce à la persistance du BM8563 RTC.
-* **Correction E — Robustesse des requêtes asynchrones** : Traitement exhaustif des cas limites dans `VoxCoreVoice` (appels `say()` pendant la connexion ou en cours de génération, coupure Wi-Fi, heure TLS non synchronisée, erreurs distantes, interruption avec `stop()`, relance après erreur). Zéro fuite d'état, zéro callback fantôme, zéro boucle infinie.
-* **Correction F — Verrouillage et cycle de vie Wi-Fi** : Verrouillage strict de la radio Wi-Fi pendant toute la chaîne de synthèse et maintien radio « chaud » de 15 secondes après chaque annonce pour des interactions consécutives ultra-rapides (< 800 ms), avec libération garantie en cas d'erreur, timeout ou arrêt.
+## 2. Nouveautés de la v0.1.0.2
+* **Correction Certificats TLS** : Réparation du certificat racine tronqué `GoogleRoots.h` et ajout de GTS Root R2 complet pour mbedTLS.
+* **Réassemblage des fragments WebSocket** : Intégration de `WebSocketReassembler` pour fusionner les fragments réseau avant le parseur JSON cJSON.
+* **Diagnostic approfondi de clôture** : Journalisation et extraction détaillée des codes de statut (1007, 1008) et des raisons envoyées par le serveur Gemini Live.
+* **Extraction des erreurs JSON** : Détection des rejets de configuration (`error`, `errorMessage`) de Gemini.
+* **Normalisation du modèle** : Préfixage automatique `"models/"` pour éviter les rejets de format.
+* **Distinction intentionnelle / réseau** : Déconnexion locale propre sans fausse alerte réseau.
 
 ---
 
@@ -35,11 +33,11 @@ Cette version corrective consolide la bibliothèque pour son déploiement réel 
 
 ```text
 VoxCore-VoiceKit/
-├── library.json                   # Manifeste PlatformIO (v0.1.0.1)
-├── library.properties             # Manifeste Arduino IDE (v0.1.0.1)
+├── library.json                   # Manifeste PlatformIO (v0.1.0.2)
+├── library.properties             # Manifeste Arduino IDE (v0.1.0.2)
 ├── README.md                      # Documentation complète
 ├── CHANGELOG.md                   # Historique des versions
-├── RAPPORT_LIVRAISON_v0.1.0.1.md  # Rapport de conformité v0.1.0.1
+├── RAPPORT_LIVRAISON_v0.1.0.2.md  # Rapport de conformité v0.1.0.2
 ├── include/
 │   ├── VoxCoreVoice.h             # API publique simplifiée
 │   └── VoiceKitConfig.h           # Configuration centralisée et modèles par défaut
@@ -53,6 +51,8 @@ VoxCore-VoiceKit/
 │   ├── gemini/
 │   │   ├── GeminiLiveClient.h     # Client WebSocket TLS Gemini Live
 │   │   ├── GeminiLiveClient.cpp   # Décodage PCM 24 kHz, turns JSON, interruptions
+│   │   ├── WebSocketReassembler.h # Réassemblage des trames fragmentées
+│   │   ├── MockLiveTransport.h    # Transport simulé pour tests unitaires
 │   │   ├── ILiveTransport.h       # Interface d'abstraction transport
 │   │   └── GoogleRoots.h          # Certificats racines Google Trust Services
 │   └── hal/

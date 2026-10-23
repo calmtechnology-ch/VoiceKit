@@ -11,8 +11,8 @@
 
 /**
  * @brief Client WebSocket TLS pour le protocole bidirectionnel Google Gemini Live API.
- * Issu de l'architecture stabilisée VoxCore v0.2.1.3.6 / v0.3.0.
- * Décodage direct PCM 24 kHz mono 16 bits sans latence superflue.
+ * Version v0.1.0.2 : Diagnostic approfondi de fermeture, réassemblage des fragments,
+ * extraction des erreurs serveur JSON et des codes de clôture WebSocket.
  */
 class GeminiLiveClient {
 public:
@@ -20,6 +20,7 @@ public:
     using OutputTranscriptionCallback = std::function<void(const String& text)>;
     using VoidCallback = std::function<void()>;
     using ErrorCallback = std::function<void(const String& error)>;
+    using CloseCallback = std::function<void(uint16_t code, const String& reason)>;
 
     GeminiLiveClient(ILiveTransport* customTransport = nullptr);
     ~GeminiLiveClient();
@@ -44,6 +45,12 @@ public:
     bool isConnected() const;
     bool isSetupComplete() const { return _setupComplete.load(std::memory_order_acquire); }
     const char* getLastError() const { return _lastError.c_str(); }
+    uint16_t getLastCloseCode() const { return _lastCloseCode; }
+    const char* getLastCloseReason() const { return _lastCloseReason.c_str(); }
+    bool isIntentionalDisconnect() const;
+
+    String getModel() const { return _model; }
+    String getVoice() const { return _voice; }
 
     // Enregistrement des callbacks
     void setOnConnected(VoidCallback cb) { _onConnected = std::move(cb); }
@@ -54,6 +61,7 @@ public:
     void setOnTurnComplete(VoidCallback cb) { _onTurnComplete = std::move(cb); }
     void setOnInterrupted(VoidCallback cb) { _onInterrupted = std::move(cb); }
     void setOnError(ErrorCallback cb) { _onError = std::move(cb); }
+    void setOnClose(CloseCallback cb) { _onClose = std::move(cb); }
 
     // Instrumentation métriques audio RX
     void resetTurnRxMetrics();
@@ -74,6 +82,7 @@ public:
     static String encodeBase64(const uint8_t* data, size_t length);
     static bool decodeBase64(const char* input, size_t inLen, std::vector<uint8_t>& output);
     static String escapeJsonString(const String& s);
+    static String normalizeModelName(const String& model);
 
     // Traitement des trames reçues (public pour tests automatisés)
     void handleIncomingMessage(const char* data, size_t len);
@@ -86,6 +95,8 @@ private:
     String _model = VOICEKIT_DEFAULT_MODEL;
     String _voice = VOICEKIT_DEFAULT_VOICE;
     String _lastError;
+    String _lastCloseReason;
+    uint16_t _lastCloseCode = 0;
     String _systemInstruction;
 
     ILiveTransport* _transport = nullptr;
@@ -93,6 +104,7 @@ private:
 
     std::atomic<bool> _connected{false};
     std::atomic<bool> _setupComplete{false};
+    std::atomic<bool> _intentionalDisconnect{false};
     uint32_t _connectStartTimeMs = 0;
 
     // Callbacks
@@ -104,6 +116,7 @@ private:
     VoidCallback _onTurnComplete;
     VoidCallback _onInterrupted;
     ErrorCallback _onError;
+    CloseCallback _onClose;
 
     // Métriques RX
     uint32_t _audioWsMessagesCount = 0;

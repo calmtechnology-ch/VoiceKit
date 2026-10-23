@@ -94,6 +94,11 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         handleClientError(err);
     });
 
+    _client.setOnClose([this](uint16_t code, const String& reason) {
+        Serial.printf("[VoiceKit] Notification fermeture Gemini Live (code=%u, raison=\"%s\")\n",
+                      code, reason.c_str());
+    });
+
     // 3. Gestion du réseau Wi-Fi
     if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
         if (!_config.wifiSSID.isEmpty()) {
@@ -386,22 +391,48 @@ void VoxCoreVoice::handleClientDisconnected() {
     Serial.println("[VoiceKit] Session Gemini Live deconnectee");
     _connectingStartTimeMs = 0;
 
+    // 1. Déconnexion intentionnelle locale (veille, arrêt, interruption utilisateur)
+    if (_client.isIntentionalDisconnect()) {
+        Serial.println("[VoiceKit] Deconnexion intentionnelle locale (pas d'erreur reseau)");
+        _pendingTextOnConnect = "";
+        _generatingStartTimeMs = 0;
+        setState(VoiceState::IDLE);
+        return;
+    }
+
+    // 2. Déconnexion inattendue pendant la génération vocale
     if (_state == VoiceState::GENERATING) {
-        Serial.println("[VoiceKit] Deconnexion pendant la generation vocale");
+        Serial.println("[VoiceKit] Deconnexion inattendue pendant la generation vocale");
         _generatingStartTimeMs = 0;
         _player.stop(AudioStopReason::GEMINI_INTERRUPT);
-        _lastError = "Deconnexion inattendue de Gemini Live pendant la generation";
+        if (strlen(_client.getLastError()) > 0) {
+            _lastError = _client.getLastError();
+        } else {
+            _lastError = "Deconnexion inattendue de Gemini Live pendant la generation";
+        }
         setState(VoiceState::ERROR_STATE);
         if (_onError) _onError(_lastError);
-    } else if (_state == VoiceState::CONNECTING_SERVICE) {
-        Serial.println("[VoiceKit] Deconnexion pendant l'etablissement de session");
+    } 
+    // 3. Déconnexion inattendue pendant l'établissement de session (handshake / setup)
+    else if (_state == VoiceState::CONNECTING_SERVICE) {
+        Serial.println("[VoiceKit] Deconnexion inattendue pendant l'etablissement de session");
         _pendingTextOnConnect = "";
-        _lastError = "Echec connexion Gemini Live (session fermee)";
+        if (strlen(_client.getLastError()) > 0) {
+            _lastError = _client.getLastError();
+        } else {
+            _lastError = "Echec connexion Gemini Live (session fermee par le serveur sans precision)";
+        }
         setState(VoiceState::ERROR_STATE);
         if (_onError) _onError(_lastError);
-    } else if (_state == VoiceState::SPEAKING || _isSpeakingActive) {
+    } 
+    // 4. Déconnexion pendant la restitution sonore
+    else if (_state == VoiceState::SPEAKING || _isSpeakingActive) {
         // En cours de parole : Gemini a clos le flux, notifier la fin de tour au lecteur
         _player.notifyTurnComplete();
+    } 
+    // 5. Déjà en état d'erreur (erreur signalée par onError juste avant la déconnexion)
+    else if (_state == VoiceState::ERROR_STATE) {
+        Serial.println("[VoiceKit] Deconnexion confirmee faisant suite a l'etat d'erreur");
     } else {
         setState(VoiceState::IDLE);
     }

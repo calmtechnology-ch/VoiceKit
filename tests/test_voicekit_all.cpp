@@ -6,6 +6,8 @@
 #include <cmath>
 
 #include "VoxCoreVoice.h"
+#include "gemini/WebSocketReassembler.h"
+#include "gemini/MockLiveTransport.h"
 #include "../examples/OrientationClockVoice/include/FrenchTimeFormatter.h"
 #include "../examples/OrientationClockVoice/src/FrenchTimeFormatter.cpp"
 #include "../examples/OrientationClockVoice/include/WiFiTimeSync.h"
@@ -434,12 +436,247 @@ void test_wifi_lock_lifecycle_and_keepalive() {
 }
 
 // =============================================================================
+// SUITE 10 : WebSocketReassembler — Fragmentation, réassemblage et sécurité mémoire
+// =============================================================================
+void test_websocket_reassembler() {
+    std::cout << "\n[TEST SUITE 10] WebSocketReassembler : Reassemblage trames fragmentees et securite" << std::endl;
+
+    WebSocketReassembler reassembler(4096); // Limite de 4 Ko pour les tests
+    size_t outLen = 0;
+
+    // 1. Trame complete non fragmentee (Fast path sans copie)
+    const char* singleFrame = "{\"setupComplete\":{}}";
+    int singleLen = strlen(singleFrame);
+    const char* res = reassembler.processChunk(0x01, singleFrame, singleLen, singleLen, 0, outLen);
+    TEST_ASSERT(res != nullptr, "Trame complete non fragmentee retournee immediatement");
+    TEST_ASSERT(outLen == (size_t)singleLen, "Longueur correspond exactement a la trame unitaire");
+    TEST_ASSERT(std::string(res, outLen) == singleFrame, "Contenu de la trame complete identique");
+    TEST_ASSERT(!reassembler.hasPartialData(), "Aucun fragment residuel en attente");
+
+    // 2. Trame fragmentee en 3 morceaux (payload_len connu d'avance comme dans ESP-IDF)
+    std::string fullMsg = "{\"serverContent\":{\"modelTurn\":{\"parts\":[{\"text\":\"Bonjour le monde fragmente\"}]}}}";
+    int totalLen = fullMsg.length();
+    int part1Len = 25;
+    int part2Len = 30;
+    int part3Len = totalLen - (part1Len + part2Len);
+
+    // Fragment 1
+    outLen = 0;
+    res = reassembler.processChunk(0x01, fullMsg.data(), part1Len, totalLen, 0, outLen);
+    TEST_ASSERT(res == nullptr, "Fragment 1/3 ne produit aucun message complet");
+    TEST_ASSERT(reassembler.hasPartialData(), "Fragment 1/3 enregistre en tampon partiel");
+    TEST_ASSERT(reassembler.getCurrentSize() == (size_t)part1Len, "Taille partielle 1 exacte");
+
+    // Fragment 2
+    res = reassembler.processChunk(0x00, fullMsg.data() + part1Len, part2Len, totalLen, part1Len, outLen);
+    TEST_ASSERT(res == nullptr, "Fragment 2/3 ne produit pas encore de message complet");
+    TEST_ASSERT(reassembler.getCurrentSize() == (size_t)(part1Len + part2Len), "Taille partielle 1+2 exacte");
+
+    // Fragment 3 (Fin)
+    res = reassembler.processChunk(0x00, fullMsg.data() + part1Len + part2Len, part3Len, totalLen, part1Len + part2Len, outLen);
+    TEST_ASSERT(res != nullptr, "Fragment 3/3 acheve et delivre le message complet");
+    TEST_ASSERT(outLen == (size_t)totalLen, "Longueur totale reassemblee conforme");
+    TEST_ASSERT(std::string(res, outLen) == fullMsg, "Contenu integralement et fidelement reconstitue");
+
+    // 3. Protection anti-debordement : Trame depassant la capacite maximale (ex: 5000 > 4096)
+    reassembler.reset();
+    std::string hugeData(5000, 'X');
+    res = reassembler.processChunk(0x01, hugeData.data(), 100, 5000, 0, outLen);
+    TEST_ASSERT(res == nullptr, "Trame depassant maxBufferSize immediatement rejetee");
+    TEST_ASSERT(!reassembler.hasPartialData(), "Tampon purge apres rejet pour protection OOM");
+
+    // 4. Enchainement immediat d'un message valide apres un reset
+    const char* validMsg = "{\"turnComplete\":true}";
+    int validLen = strlen(validMsg);
+    res = reassembler.processChunk(0x01, validMsg, validLen, validLen, 0, outLen);
+    TEST_ASSERT(res != nullptr, "Message suivant valide traite normalement apres rejet precedent");
+    TEST_ASSERT(std::string(res, outLen) == validMsg, "Aucune contamination residuelle");
+}
+
+// =============================================================================
+// SUITE 11 : GeminiLiveClient — Rejet de configuration JSON et extraction d'erreurs
+// =============================================================================
+void test_gemini_server_json_errors() {
+    std::cout << "\n[TEST SUITE 11] GeminiLiveClient : Extraction des erreurs JSON renvoyees par le serveur" << std::endl;
+
+    GeminiLiveClient client;
+    client.begin("TEST_KEY_123");
+
+    bool errorCallbackFired = false;
+    String lastReportedError = "";
+    client.setOnError([&](const String& err) {
+        errorCallbackFired = true;
+        lastReportedError = err;
+    });
+
+    // 1. Simulation d'un refus de modele / argument invalide renvoye par Google
+    const char* serverErrorJson = 
+        "{\"error\":{\"code\":400,\"message\":\"models/gemini-invalide is not supported for bidiGenerateContent\",\"status\":\"INVALID_ARGUMENT\"}}";
+    
+    errorCallbackFired = false;
+    client.handleIncomingMessage(serverErrorJson, strlen(serverErrorJson));
+
+    TEST_ASSERT(errorCallbackFired, "Callback onError declenche lors d'une erreur JSON serveur");
+    TEST_ASSERT(lastReportedError.indexOf("INVALID_ARGUMENT") >= 0, "Statut de l'erreur Gemini extrait");
+    TEST_ASSERT(lastReportedError.indexOf("400") >= 0, "Code d'erreur 400 extrait");
+    TEST_ASSERT(lastReportedError.indexOf("models/gemini-invalide") >= 0, "Message d'erreur detaille extrait");
+    TEST_ASSERT(String(client.getLastError()) == lastReportedError, "client.getLastError() coherent avec le callback");
+
+    // 2. Erreur avec format errorMessage direct
+    errorCallbackFired = false;
+    const char* altErrorJson = "{\"errorMessage\":\"Quota de requetes Gemini depasse\"}";
+    client.handleIncomingMessage(altErrorJson, strlen(altErrorJson));
+    TEST_ASSERT(errorCallbackFired, "onError declenche pour errorMessage direct");
+    TEST_ASSERT(lastReportedError.indexOf("Quota de requetes Gemini depasse") >= 0, "Message de quota extrait");
+
+    // 3. Reception nominale de setupComplete
+    TEST_ASSERT(!client.isSetupComplete(), "setupComplete initialement false");
+    const char* setupCompleteJson = "{\"setupComplete\":{}}";
+    client.handleIncomingMessage(setupCompleteJson, strlen(setupCompleteJson));
+    TEST_ASSERT(client.isSetupComplete(), "isSetupComplete() passe a true apres setupComplete");
+}
+
+// =============================================================================
+// SUITE 12 : GeminiLiveClient — Trame de cloture Close (Codes 1007, 1008 & Raison)
+// =============================================================================
+void test_gemini_server_close_frame() {
+    std::cout << "\n[TEST SUITE 12] GeminiLiveClient : Trame de fermeture serveur (Close code 1007/1008 & raison)" << std::endl;
+
+    MockLiveTransport mockTransport;
+    GeminiLiveClient client(&mockTransport);
+    client.begin("TEST_KEY_456");
+
+    bool closeCallbackFired = false;
+    uint16_t reportedCode = 0;
+    String reportedReason = "";
+    client.setOnClose([&](uint16_t code, const String& reason) {
+        closeCallbackFired = true;
+        reportedCode = code;
+        reportedReason = reason;
+    });
+
+    bool errorCallbackFired = false;
+    String reportedError = "";
+    client.setOnError([&](const String& err) {
+        errorCallbackFired = true;
+        reportedError = err;
+    });
+
+    client.connect();
+    TEST_ASSERT(client.isConnected(), "Client connecte au transport de test");
+
+    // 1. Simulation d'une cloture 1008 par Google : Modele non supporte
+    const char* reason1008 = "models/gemini-2.0-flash is not found for API version v1beta, or is not supported for bidiGenerateContent";
+    mockTransport.simulateClose(1008, reason1008);
+
+    TEST_ASSERT(closeCallbackFired, "Callback setOnClose declenche sur trame CLOSE 1008");
+    TEST_ASSERT(reportedCode == 1008, "Code de fermeture 1008 fidelement extrait");
+    TEST_ASSERT(reportedReason == reason1008, "Raison de fermeture 1008 fidelement transmise");
+    TEST_ASSERT(errorCallbackFired, "onError declenche lors d'une cloture anormale");
+    TEST_ASSERT(reportedError.indexOf("code 1008") >= 0, "Rapport d'erreur contient le code 1008");
+    TEST_ASSERT(reportedError.indexOf("is not supported for bidiGenerateContent") >= 0, "Rapport d'erreur contient le motif exact");
+
+    // 2. Simulation d'une cloture 1007 par Google : Cle API invalide
+    closeCallbackFired = false;
+    errorCallbackFired = false;
+    client.connect();
+
+    const char* reason1007 = "API key not valid. Please pass a valid API key.";
+    mockTransport.simulateClose(1007, reason1007);
+
+    TEST_ASSERT(closeCallbackFired, "Callback setOnClose declenche sur trame CLOSE 1007");
+    TEST_ASSERT(reportedCode == 1007, "Code de fermeture 1007 fidelement extrait");
+    TEST_ASSERT(reportedReason == reason1007, "Raison de fermeture 1007 fidelement transmise");
+    TEST_ASSERT(reportedError.indexOf("API key not valid") >= 0, "Rapport d'erreur mentionne la cle non valide");
+}
+
+// =============================================================================
+// SUITE 13 : Normalisation automatique du modele Gemini
+// =============================================================================
+void test_model_normalization() {
+    std::cout << "\n[TEST SUITE 13] Normalisation automatique du nom de modele Gemini" << std::endl;
+
+    // Test sans prefixe models/
+    String n1 = GeminiLiveClient::normalizeModelName("gemini-3.8-live");
+    TEST_ASSERT(n1 == "models/gemini-3.8-live", "Prefixe models/ automatiquement ajoute a gemini-3.8-live");
+
+    // Test avec prefixe deja present
+    String n2 = GeminiLiveClient::normalizeModelName("models/gemini-3.8-live");
+    TEST_ASSERT(n2 == "models/gemini-3.8-live", "Prefixe conserve si deja present");
+
+    // Test avec chaine vide
+    String n3 = GeminiLiveClient::normalizeModelName("");
+    TEST_ASSERT(n3 == VOICEKIT_DEFAULT_MODEL, "Modele vide replie sur VOICEKIT_DEFAULT_MODEL");
+
+    // Test begin() avec normalisation
+    GeminiLiveClient client;
+    client.begin("TEST_KEY", "gemini-3.8-live");
+    TEST_ASSERT(client.getModel() == "models/gemini-3.8-live", "client.begin normalise le modele interne");
+}
+
+// =============================================================================
+// SUITE 14 : VoxCoreVoice — Distinction deconnexion intentionnelle vs erreur
+// =============================================================================
+void test_intentional_vs_unexpected_disconnect() {
+    std::cout << "\n[TEST SUITE 14] VoxCoreVoice : Deconnexion intentionnelle vs erreur de cloture" << std::endl;
+
+    VoiceKitConfig cfg;
+    cfg.apiKey = "TEST_API_KEY_VOICEKIT";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfg.hardwareAlreadyInitialized = true;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    bool initOk = voice.begin(cfg);
+    TEST_ASSERT(initOk, "Initialisation VoxCoreVoice reussie");
+
+    bool errorFired = false;
+    String lastErrorMsg = "";
+    voice.onError([&](const String& err) {
+        errorFired = true;
+        lastErrorMsg = err;
+    });
+
+    // 1. Deconnexion intentionnelle via stop()
+    errorFired = false;
+    voice.stop();
+    TEST_ASSERT(!errorFired, "stop() n'entraine AUCUNE fausse erreur de deconnexion");
+    TEST_ASSERT(voice.getState() == VoiceState::IDLE || voice.getState() == VoiceState::READY, 
+                "Etat propre apres deconnexion intentionnelle");
+
+    // 2. Deconnexion inattendue pendant CONNECTING_SERVICE avec remontée du motif serveur
+    WiFi.setConnected(true);
+    voice.getClient().begin("TEST_API_KEY", "models/gemini-3.8-live");
+    
+    // Injecter le mock transport pour simuler la clôture
+    voice.getClient().setTransport(&mockTransport);
+
+    voice.say("Test annonce pour deconnexion");
+    TEST_ASSERT(voice.getState() == VoiceState::CONNECTING_SERVICE, "Moteur en attente CONNECTING_SERVICE");
+
+    // Simuler fermeture serveur avec code 1008
+    errorFired = false;
+    mockTransport.simulateClose(1008, "models/gemini-3.8-live is not found for API version v1beta");
+
+    // update() de VoxCoreVoice pour traiter la déconnexion
+    voice.update();
+
+    TEST_ASSERT(errorFired, "onError declenche suite a la fermeture inattendue du serveur");
+    TEST_ASSERT(voice.getState() == VoiceState::ERROR_STATE, "Passage a ERROR_STATE sur cloture serveur");
+    TEST_ASSERT(voice.getLastError().indexOf("1008") >= 0, "Derniere erreur contient le code serveur");
+    TEST_ASSERT(voice.getLastError().indexOf("is not found") >= 0, "Derniere erreur contient la raison serveur");
+
+    // Nettoyage transport avant destruction
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
     std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoxCore VoiceKit   " << std::endl;
-    std::cout << "  Version : v0.1.0.1 | Cible logique C++17                 " << std::endl;
+    std::cout << "  Version : v0.1.0.2 | Cible logique C++17                 " << std::endl;
     std::cout << "===========================================================" << std::endl;
 
     test_french_time_formatting();
@@ -451,6 +688,11 @@ int main() {
     test_announced_and_displayed_time_coherence();
     test_async_requests_and_resilience();
     test_wifi_lock_lifecycle_and_keepalive();
+    test_websocket_reassembler();
+    test_gemini_server_json_errors();
+    test_gemini_server_close_frame();
+    test_model_normalization();
+    test_intentional_vs_unexpected_disconnect();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

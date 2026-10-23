@@ -50,10 +50,10 @@ inline const char* voiceStateToString(VoiceState state) {
 }
 
 // =============================================================================
-// Configuration centralisee du modele Gemini Live (v0.1.0.1)
-// Modele stabilise dans VoxCore v0.2.2.0 : "models/gemini-3.8-live"
-// Compatible BidiGenerateContent sur generativelanguage.googleapis.com
+// Configuration centralisee du modele Gemini Live (v0.1.0.2)
+// Modele valide BidiGenerateContent : "models/gemini-3.8-live"
 // Surchargable par #define GEMINI_MODEL ou vConfig.model
+// Note : Le prefixe "models/" est automatiquement ajoute si omis.
 // =============================================================================
 #ifndef VOICEKIT_DEFAULT_MODEL
 #define VOICEKIT_DEFAULT_MODEL "models/gemini-3.8-live"
@@ -64,7 +64,7 @@ inline const char* voiceStateToString(VoiceState state) {
 #endif
 
 /**
- * @brief Configuration d'initialisation de VoxCore VoiceKit v0.1.0.1.
+ * @brief Configuration d'initialisation de VoxCore VoiceKit v0.1.0.2.
  */
 struct VoiceKitConfig {
     // Clé d'API Google Gemini

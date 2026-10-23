@@ -1,5 +1,6 @@
 #include "GeminiLiveClient.h"
 #include "GoogleRoots.h"
+#include "WebSocketReassembler.h"
 #include "audio/AudioTraceLog.h"
 #include <cstring>
 #include <vector>
@@ -19,7 +20,8 @@ static constexpr uint32_t GEMINI_LIVE_CONNECT_TIMEOUT_MS = 10000;
 #if defined(ESP32) || defined(ARDUINO)
 /**
  * @brief Transport WebSocket natif ESP-IDF (esp_websocket_client).
- * Tâche dédiée FreeRTOS, buffers sécurisés et pile de 14 Ko pour le handshake TLS mbedTLS.
+ * Tâche dédiée FreeRTOS, buffers sécurisés, réassemblage des trames fragmentées
+ * et pile de 14 Ko pour le handshake TLS mbedTLS.
  */
 class EspWebSocketTransport : public ILiveTransport {
 public:
@@ -39,6 +41,11 @@ public:
             _sendMutex = xSemaphoreCreateMutex();
         }
 
+        _intentionalDisconnect = false;
+        _lastCloseCode = 0;
+        _lastCloseReason.clear();
+        _reassembler.reset();
+
         esp_websocket_client_config_t cfg = {};
         cfg.uri = uri;
         cfg.cert_pem = certPem;
@@ -47,6 +54,8 @@ public:
         cfg.task_prio = 5;
         cfg.pingpong_timeout_sec = 15;
         cfg.ping_interval_sec = 10;
+        cfg.keep_alive_enable = true;
+        cfg.keep_alive_idle = 10;
         cfg.user_context = this;
 
         _client = esp_websocket_client_init(&cfg);
@@ -68,12 +77,15 @@ public:
     }
 
     void disconnect() override {
+        _intentionalDisconnect = true;
         if (_client) {
+            Serial.println("[VoiceKit:WS] Arret demande du client WebSocket (disconnect)...");
             esp_websocket_client_stop(_client);
             esp_websocket_client_destroy(_client);
             _client = nullptr;
         }
         _connected = false;
+        _reassembler.shrink();
     }
 
     bool isConnected() const override {
@@ -85,13 +97,18 @@ public:
         if (!_sendMutex) return false;
 
         if (xSemaphoreTake(_sendMutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+            Serial.println("[VoiceKit:WS] Echec semaphore send (mutex occupe)");
             return false;
         }
 
         int written = esp_websocket_client_send_text(_client, data, len, pdMS_TO_TICKS(3000));
         xSemaphoreGive(_sendMutex);
 
-        return (written > 0);
+        if (written <= 0) {
+            Serial.printf("[VoiceKit:WS] Echec esp_websocket_client_send_text: written=%d\n", written);
+            return false;
+        }
+        return true;
     }
 
     void setHandlers(ConnectHandler onConnect, DisconnectHandler onDisconnect, 
@@ -100,6 +117,10 @@ public:
         _onDisconnect = std::move(onDisconnect);
         _onData = std::move(onData);
         _onError = std::move(onError);
+    }
+
+    void setCloseHandler(CloseHandler onClose) override {
+        _onClose = std::move(onClose);
     }
 
 private:
@@ -109,23 +130,90 @@ private:
 
         switch (event_id) {
             case WEBSOCKET_EVENT_CONNECTED:
+                Serial.println("[VoiceKit:WS] Evenement CONNECTED : Session WebSocket etablie avec succes");
                 self->_connected = true;
+                self->_lastCloseCode = 0;
+                self->_lastCloseReason.clear();
+                self->_reassembler.reset();
                 if (self->_onConnect) self->_onConnect();
                 break;
-            case WEBSOCKET_EVENT_DISCONNECTED:
-                self->_connected = false;
-                if (self->_onDisconnect) self->_onDisconnect();
-                break;
+
             case WEBSOCKET_EVENT_DATA:
-                if (data->op_code == 0x01 && data->data_ptr && data->data_len > 0) {
-                    if (self->_onData) {
-                        self->_onData(data->data_ptr, data->data_len);
+                if (!data) break;
+
+                // Trame CLOSE (Opcode 0x08)
+                if (data->op_code == 0x08) {
+                    uint16_t code = 1005;
+                    char reasonBuf[256] = {0};
+                    if (data->data_len >= 2 && data->data_ptr) {
+                        code = (static_cast<uint8_t>(data->data_ptr[0]) << 8) | 
+                                static_cast<uint8_t>(data->data_ptr[1]);
+                        int reasonLen = data->data_len - 2;
+                        if (reasonLen > 0) {
+                            size_t copyLen = (reasonLen < (int)sizeof(reasonBuf) - 1) ? 
+                                              reasonLen : (sizeof(reasonBuf) - 1);
+                            memcpy(reasonBuf, data->data_ptr + 2, copyLen);
+                            reasonBuf[copyLen] = '\0';
+                        }
+                    }
+                    self->_lastCloseCode = code;
+                    self->_lastCloseReason = reasonBuf;
+                    Serial.printf("[VoiceKit:WS] Evenement DATA [CLOSE]: Code de fermeture=%u, Raison=\"%s\"\n",
+                                  code, reasonBuf);
+                    if (self->_onClose) {
+                        self->_onClose(code, reasonBuf);
+                    }
+                    return;
+                }
+
+                // Trames de donnees Texte (0x01) ou Continuation (0x00)
+                if ((data->op_code == 0x01 || data->op_code == 0x00) && data->data_ptr && data->data_len > 0) {
+                    size_t outLen = 0;
+                    const char* assembled = self->_reassembler.processChunk(
+                        data->op_code, data->data_ptr, data->data_len,
+                        data->payload_len, data->payload_offset, outLen
+                    );
+
+                    if (assembled && outLen > 0) {
+                        if (self->_onData) {
+                            self->_onData(assembled, outLen);
+                        }
+                        self->_reassembler.reset();
                     }
                 }
                 break;
-            case WEBSOCKET_EVENT_ERROR:
-                if (self->_onError) self->_onError("Erreur protocolaire transport WebSocket");
+
+            case WEBSOCKET_EVENT_CLOSED:
+                Serial.printf("[VoiceKit:WS] Evenement CLOSED : Fermeture normale WebSocket (code=%u, raison=\"%s\")\n",
+                              self->_lastCloseCode, self->_lastCloseReason.c_str());
+                self->_connected = false;
+                self->_reassembler.reset();
+                if (self->_onDisconnect) self->_onDisconnect();
                 break;
+
+            case WEBSOCKET_EVENT_DISCONNECTED:
+                if (self->_intentionalDisconnect) {
+                    Serial.println("[VoiceKit:WS] Evenement DISCONNECTED : Deconnexion intentionnelle locale confirmee.");
+                } else {
+                    Serial.printf("[VoiceKit:WS] Evenement DISCONNECTED : Deconnexion transport WebSocket (code=%u, raison=\"%s\")\n",
+                                  self->_lastCloseCode, self->_lastCloseReason.c_str());
+                }
+                self->_connected = false;
+                self->_reassembler.reset();
+                if (self->_onDisconnect) self->_onDisconnect();
+                break;
+
+            case WEBSOCKET_EVENT_ERROR:
+                Serial.println("[VoiceKit:WS] Evenement ERROR : Erreur bas niveau transport WebSocket / TLS");
+                if (self->_onError) {
+                    if (!self->_lastCloseReason.empty()) {
+                        self->_onError(self->_lastCloseReason.c_str());
+                    } else {
+                        self->_onError("Erreur protocolaire transport WebSocket (TLS ou reseau)");
+                    }
+                }
+                break;
+
             default:
                 break;
         }
@@ -134,45 +222,14 @@ private:
     esp_websocket_client_handle_t _client = nullptr;
     SemaphoreHandle_t _sendMutex = nullptr;
     std::atomic<bool> _connected{false};
+    WebSocketReassembler _reassembler;
     ConnectHandler _onConnect;
     DisconnectHandler _onDisconnect;
     DataHandler _onData;
     ErrorHandler _onError;
 };
 #else
-class MockLiveTransport : public ILiveTransport {
-public:
-    bool connect(const char*, const char*) override {
-        _connected = true;
-        if (_onConnect) _onConnect();
-        return true;
-    }
-    void disconnect() override {
-        _connected = false;
-        if (_onDisconnect) _onDisconnect();
-    }
-    bool isConnected() const override { return _connected; }
-    bool send(const char* data, size_t) override {
-        _lastSent = data;
-        return true;
-    }
-    void setHandlers(ConnectHandler onConnect, DisconnectHandler onDisconnect, 
-                            DataHandler onData, ErrorHandler onError) override {
-        _onConnect = std::move(onConnect);
-        _onDisconnect = std::move(onDisconnect);
-        _onData = std::move(onData);
-        _onError = std::move(onError);
-    }
-    std::string getLastSent() const { return _lastSent; }
-
-private:
-    bool _connected = false;
-    std::string _lastSent;
-    ConnectHandler _onConnect;
-    DisconnectHandler _onDisconnect;
-    DataHandler _onData;
-    ErrorHandler _onError;
-};
+#include "MockLiveTransport.h"
 #endif
 
 // =============================================================================
@@ -195,6 +252,8 @@ GeminiLiveClient::GeminiLiveClient(ILiveTransport* customTransport) {
         [this]() {
             _connected = true;
             _setupComplete = false;
+            _lastCloseCode = 0;
+            _lastCloseReason.clear();
             sendSetupMessage();
             if (_onConnected) _onConnected();
         },
@@ -211,6 +270,19 @@ GeminiLiveClient::GeminiLiveClient(ILiveTransport* customTransport) {
             if (_onError) _onError(_lastError);
         }
     );
+
+    _transport->setCloseHandler(
+        [this](uint16_t code, const char* reason) {
+            _lastCloseCode = code;
+            _lastCloseReason = reason ? reason : "";
+            char buf[256];
+            snprintf(buf, sizeof(buf), "Session fermee par Gemini (code %u) : %s", code, _lastCloseReason.c_str());
+            _lastError = buf;
+            Serial.printf("[VoiceKit:Client] ERREUR : %s\n", buf);
+            if (_onClose) _onClose(code, _lastCloseReason);
+            if (_onError) _onError(_lastError);
+        }
+    );
 }
 
 GeminiLiveClient::~GeminiLiveClient() {
@@ -224,6 +296,8 @@ void GeminiLiveClient::setTransport(ILiveTransport* transport) {
             [this]() {
                 _connected = true;
                 _setupComplete = false;
+                _lastCloseCode = 0;
+                _lastCloseReason.clear();
                 sendSetupMessage();
                 if (_onConnected) _onConnected();
             },
@@ -240,7 +314,29 @@ void GeminiLiveClient::setTransport(ILiveTransport* transport) {
                 if (_onError) _onError(_lastError);
             }
         );
+        _transport->setCloseHandler(
+            [this](uint16_t code, const char* reason) {
+                _lastCloseCode = code;
+                _lastCloseReason = reason ? reason : "";
+                char buf[256];
+                snprintf(buf, sizeof(buf), "Session fermee par Gemini (code %u) : %s", code, _lastCloseReason.c_str());
+                _lastError = buf;
+                Serial.printf("[VoiceKit:Client] ERREUR : %s\n", buf);
+                if (_onClose) _onClose(code, _lastCloseReason);
+                if (_onError) _onError(_lastError);
+            }
+        );
     }
+}
+
+String GeminiLiveClient::normalizeModelName(const String& model) {
+    if (model.isEmpty()) {
+        return VOICEKIT_DEFAULT_MODEL;
+    }
+    if (model.startsWith("models/")) {
+        return model;
+    }
+    return "models/" + model;
 }
 
 bool GeminiLiveClient::begin(const char* apiKey, const char* model, const char* voice) {
@@ -249,20 +345,25 @@ bool GeminiLiveClient::begin(const char* apiKey, const char* model, const char* 
         return false;
     }
     _apiKey = apiKey;
-    if (model && strlen(model) > 0) _model = model;
+    if (model && strlen(model) > 0) {
+        _model = normalizeModelName(model);
+    } else {
+        _model = normalizeModelName(VOICEKIT_DEFAULT_MODEL);
+    }
     if (voice && strlen(voice) > 0) _voice = voice;
     return true;
 }
 
 void GeminiLiveClient::buildWebSocketUrl(char* buf, size_t bufSize) const {
-    snprintf(buf, bufSize, "wss://%s:%d%s?key=%s",
-             GEMINI_LIVE_HOST, GEMINI_LIVE_PORT, GEMINI_LIVE_PATH, _apiKey.c_str());
+    // Port 443 implicite par le protocole standard wss:// (evite la pollution SNI sur TLS)
+    snprintf(buf, bufSize, "wss://%s%s?key=%s",
+             GEMINI_LIVE_HOST, GEMINI_LIVE_PATH, _apiKey.c_str());
 }
 
 bool GeminiLiveClient::connect() {
     if (isConnected()) return true;
     if (_apiKey.isEmpty()) {
-        _lastError = "Impossible de connecter: Cle API manquante";
+        _lastError = "Impossible de connecter : Cle API manquante";
         return false;
     }
 
@@ -271,6 +372,9 @@ bool GeminiLiveClient::connect() {
 
     _connected = false;
     _setupComplete = false;
+    _intentionalDisconnect = false;
+    _lastCloseCode = 0;
+    _lastCloseReason.clear();
     _connectStartTimeMs = millis();
 
     Serial.println("[VoiceKit:Client] Etablissement session WebSocket Gemini Live...");
@@ -278,11 +382,18 @@ bool GeminiLiveClient::connect() {
 }
 
 void GeminiLiveClient::disconnect() {
+    _intentionalDisconnect = true;
     if (_transport) {
         _transport->disconnect();
     }
     _connected = false;
     _setupComplete = false;
+}
+
+bool GeminiLiveClient::isIntentionalDisconnect() const {
+    if (_intentionalDisconnect.load()) return true;
+    if (_transport && _transport->isIntentionalDisconnect()) return true;
+    return false;
 }
 
 bool GeminiLiveClient::isConnected() const {
@@ -297,7 +408,7 @@ void GeminiLiveClient::tick() {
     if (_connected && !_setupComplete) {
         if (millis() - _connectStartTimeMs > GEMINI_LIVE_CONNECT_TIMEOUT_MS) {
             _lastError = "Timeout attente setupComplete Gemini Live";
-            Serial.println("[VoiceKit:Client] ERREUR: Timeout setupComplete");
+            Serial.println("[VoiceKit:Client] ERREUR : Timeout setupComplete");
             disconnect();
             if (_onError) _onError(_lastError);
         }
@@ -305,7 +416,8 @@ void GeminiLiveClient::tick() {
 }
 
 void GeminiLiveClient::sendSetupMessage() {
-    String msg = "{\"setup\":{\"model\":\"" + _model + "\",\"generationConfig\":{\"responseModalities\":[\"AUDIO\"],\"speechConfig\":{\"voiceConfig\":{\"prebuiltVoiceConfig\":{\"voiceName\":\"" + _voice + "\"}}}}";
+    String modelName = normalizeModelName(_model);
+    String msg = "{\"setup\":{\"model\":\"" + modelName + "\",\"generationConfig\":{\"responseModalities\":[\"AUDIO\"],\"speechConfig\":{\"voiceConfig\":{\"prebuiltVoiceConfig\":{\"voiceName\":\"" + _voice + "\"}}}}";
 
     if (!_systemInstruction.isEmpty()) {
         msg += ",\"systemInstruction\":{\"parts\":[{\"text\":\"" + escapeJsonString(_systemInstruction) + "\"}]}";
@@ -313,9 +425,14 @@ void GeminiLiveClient::sendSetupMessage() {
 
     msg += "}}";
 
-    Serial.printf("[VoiceKit:Client] Envoi setup Gemini Live (model=%s, voice=%s)\n",
-                  _model.c_str(), _voice.c_str());
-    _transport->send(msg.c_str(), msg.length());
+    Serial.printf("[VoiceKit:Client] Envoi setup Gemini Live (model=%s, voice=%s, taille=%u octets)\n",
+                  modelName.c_str(), _voice.c_str(), (unsigned)msg.length());
+    bool ok = _transport->send(msg.c_str(), msg.length());
+    if (!ok) {
+        _lastError = "Echec envoi setup vers transport WebSocket";
+        Serial.printf("[VoiceKit:Client] ERREUR : %s\n", _lastError.c_str());
+        if (_onError) _onError(_lastError);
+    }
 }
 
 bool GeminiLiveClient::sendTextMessage(const String& text) {
@@ -354,7 +471,49 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
     if (!data || len == 0) return;
 
     cJSON* root = cJSON_ParseWithLength(data, len);
-    if (!root) return;
+    if (!root) {
+        Serial.printf("[VoiceKit:Client] Avertissement : Echec parsing JSON (len=%u)\n", (unsigned)len);
+        return;
+    }
+
+    // 0. Détection d'une erreur JSON renvoyée par le serveur Gemini
+    cJSON* errorItem = cJSON_GetObjectItem(root, "error");
+    if (errorItem) {
+        int errCode = 0;
+        const char* errMsg = "Erreur Gemini inconnue";
+        const char* errStatus = "";
+
+        cJSON* codeObj = cJSON_GetObjectItem(errorItem, "code");
+        if (codeObj && cJSON_IsNumber(codeObj)) errCode = codeObj->valueint;
+
+        cJSON* msgObj = cJSON_GetObjectItem(errorItem, "message");
+        if (msgObj && cJSON_IsString(msgObj) && msgObj->valuestring) errMsg = msgObj->valuestring;
+
+        cJSON* statusObj = cJSON_GetObjectItem(errorItem, "status");
+        if (statusObj && cJSON_IsString(statusObj) && statusObj->valuestring) errStatus = statusObj->valuestring;
+
+        char buf[256];
+        if (strlen(errStatus) > 0) {
+            snprintf(buf, sizeof(buf), "Gemini [%s / %d] : %s", errStatus, errCode, errMsg);
+        } else {
+            snprintf(buf, sizeof(buf), "Gemini [%d] : %s", errCode, errMsg);
+        }
+
+        _lastError = buf;
+        Serial.printf("[VoiceKit:Client] ERREUR JSON SERVEUR GEMINI : %s\n", buf);
+        cJSON_Delete(root);
+        if (_onError) _onError(_lastError);
+        return;
+    }
+
+    cJSON* errMsgRoot = cJSON_GetObjectItem(root, "errorMessage");
+    if (errMsgRoot && cJSON_IsString(errMsgRoot) && errMsgRoot->valuestring) {
+        _lastError = String("Gemini : ") + errMsgRoot->valuestring;
+        Serial.printf("[VoiceKit:Client] ERREUR SERVEUR GEMINI : %s\n", _lastError.c_str());
+        cJSON_Delete(root);
+        if (_onError) _onError(_lastError);
+        return;
+    }
 
     // 1. Détection setupComplete
     if (!_setupComplete) {

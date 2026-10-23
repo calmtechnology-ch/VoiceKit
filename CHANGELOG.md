@@ -7,6 +7,41 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.1.0.2] - 2026-10-23 (Diagnostic et résolution de fermeture Gemini Live)
+
+### Certificats TLS & Transport (`GoogleRoots.h`, `GeminiLiveClient.cpp`)
+- **Réparation du certificat racine GTS Root R1** : Correction d'une troncature critique dans `GoogleRoots.h` où les dernières lignes de base64 et le marqueur `-----END CERTIFICATE-----` étaient absents, provoquant l'échec de la validation TLS mbedTLS sur ESP32.
+- **Ajout de GTS Root R2** : Chaîne CA consolidée intégrant les deux certificats racines officiels de Google Trust Services (valides jusqu'en 2036).
+- **Format d'URL standardisé** : Suppression du port `:443` explicite dans la chaîne d'URL (`wss://generativelanguage.googleapis.com/...`) afin de prévenir la pollution du champ SNI (*Server Name Indication*) lors du handshake TLS mbedTLS.
+
+### Découpage & Réassemblage des Fragments WebSocket (`WebSocketReassembler.h`)
+- **Nouvelle classe `WebSocketReassembler`** : Réassemblage dynamique des paquets fragmentés avant leur transmission au parseur JSON cJSON.
+- **Prise en charge des fragments ESP-IDF** : Gestion des trames segmentées par le tampon réseau (8 Ko) via `payload_offset` et `payload_len`.
+- **Prise en charge de la continuation RFC 6455** : Gestion transparente des opcodes `0x00` (continuation).
+- **Protection anti-débordement mémoire (OOM)** : Plafond strict configurable (64 Ko par défaut) avec purge immédiate en cas de payload anormalement grand.
+- **Fast-path sans copie** : Délivrance directe sans allocation pour les messages mono-trames non fragmentés.
+
+### Diagnostic de Fermeture & Trames Close (`EspWebSocketTransport`, `ILiveTransport.h`)
+- **Journalisation exhaustive des événements WebSocket** : Traçage systématique des événements `WEBSOCKET_EVENT_CONNECTED`, `WEBSOCKET_EVENT_DATA`, `WEBSOCKET_EVENT_CLOSED`, `WEBSOCKET_EVENT_DISCONNECTED` et `WEBSOCKET_EVENT_ERROR`.
+- **Extraction des trames de fermeture CLOSE (Opcode `0x08`)** : Extraction du code de statut sur 2 octets big-endian (RFC 6455) et de la raison textuelle associée (ex: codes 1007, 1008).
+- **Remontée contextuelle vers l'hôte** : Ajout du callback `CloseHandler` dans `ILiveTransport` et propagation du motif précis de fermeture au client et à l'application hôte au lieu d'un message générique.
+
+### Extraction des Erreurs JSON Serveur (`GeminiLiveClient.cpp`)
+- **Interprétation de l'objet `"error"`** : Détection et extraction systématique des champs `code`, `status` et `message` envoyés par Gemini en cas de rejet (ex: modèle inconnu, paramètres invalides, quota).
+- **Interprétation de `"errorMessage"`** : Prise en charge des messages d'erreur textuels racine.
+
+### Normalisation du Modèle & Robustesse
+- **Préfixage automatique `"models/"`** : Normalisation automatique via `normalizeModelName()` pour accepter indifféremment `gemini-3.8-live` ou `models/gemini-3.8-live`, évitant le rejet serveur immédiat (code 1007 : *unexpected model name format*).
+- **Vérification d'envoi du `setup`** : Contrôle du statut de transmission de la trame initiale de configuration et journalisation de la taille du payload.
+- **Distinction des déconnexions intentionnelles** : Marquage explicite des fermetures locales (`stop()`, veille énergétique) pour ne plus les confondre avec des pannes réseau ou des fermetures inattendues, et préservation de l'état `ERROR_STATE` lors du teardown.
+- **Confidentialité absolue** : Aucune journalisation des clés API ni des URL complètes.
+
+### Tests Automatisés
+- **Passage à 149 tests automatisés** (+48 nouveaux tests) couvrant le réassemblage, les limites mémoire, l'extraction JSON, les trames de fermeture, la normalisation et la robustesse de cycle de vie.
+- **Validation matérielle** : Compilation réussie sous PlatformIO pour `examples/MinimalTTS` et `examples/OrientationClockVoice`.
+
+---
+
 ## [0.1.0.1] - 2026-10-23 (Version corrective)
 
 ### Sécurité (Correction A)

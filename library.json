@@ -1,6 +1,6 @@
 {
   "name": "VoxCore-VoiceKit",
-  "version": "0.1.0.1",
+  "version": "0.1.0.2",
   "description": "Bibliothèque C++/Arduino de synthèse vocale TTS asynchrone pour M5Stack CoreS3 via Gemini Live",
   "keywords": [
     "tts",
