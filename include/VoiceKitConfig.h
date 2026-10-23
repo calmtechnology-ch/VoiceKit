@@ -57,7 +57,7 @@ struct VoiceKitConfig {
     String apiKey = "";
 
     // Modèle et voix Gemini Live
-    String model = "models/gemini-3.8-live";
+    String model = "models/gemini-2.0-flash-exp";
     String voice = "Aoede"; // Voix supportées : Aoede, Charon, Fenrir, Kore, Puck
 
     // Instructions système strictes pour TTS mot à mot fidèle

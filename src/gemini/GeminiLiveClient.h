@@ -82,7 +82,7 @@ private:
     void buildWebSocketUrl(char* buf, size_t bufSize) const;
 
     String _apiKey;
-    String _model = "models/gemini-3.8-live";
+    String _model = "models/gemini-2.0-flash-exp";
     String _voice = "Aoede";
     String _lastError;
     String _systemInstruction;

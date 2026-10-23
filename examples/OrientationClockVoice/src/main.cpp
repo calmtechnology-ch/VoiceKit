@@ -44,10 +44,23 @@ static VoxCoreVoice voice;
 static bool ui_ready = false;
 static bool imu_ready = false;
 
+enum class VoiceRequestState {
+    IDLE,
+    WAITING_WIFI,
+    ANNOUNCING
+};
+
+static VoiceRequestState voice_req_state = VoiceRequestState::IDLE;
+static String pending_speech_text = "";
+static uint32_t voice_req_start_ms = 0;
+static uint32_t wifi_keepalive_until_ms = 0;
+static constexpr uint32_t WIFI_VOICE_TIMEOUT_MS = 15000;
+static constexpr uint32_t WIFI_KEEPALIVE_POST_SPEECH_MS = 15000; // Maintien radio chaud 15 s après parole
+
 // Prononciation vocale de l'heure
 static void announceCurrentTime() {
-    if (voice.isBusy()) {
-        Serial.println("[ClockVoice] Demande vocale ignoree : parole deja en cours.");
+    if (voice.isBusy() || voice_req_state != VoiceRequestState::IDLE) {
+        Serial.println("[ClockVoice] Demande vocale ignoree : requete deja en cours ou parole active.");
         return;
     }
 
@@ -55,28 +68,42 @@ static void announceCurrentTime() {
     struct tm timeinfo;
     localtime_r(&now, &timeinfo);
 
-    // Si l'heure système n'est pas encore synchronisée, utiliser l'heure brute
-    int hour = timeinfo.tm_hour;
-    int min = timeinfo.tm_min;
-
-    String speechText = formatTimeInFrench(hour, min);
-    Serial.printf("[ClockVoice] Annonce vocale demandee: \"%s\"\n", speechText.c_str());
-
-    // Coordination Wi-Fi : verrouiller le maintien radio et réveiller le Wi-Fi si nécessaire
-    wifi_sync.setKeepAliveLock(true);
-
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[ClockVoice] Wi-Fi inactif : demande de reconnexion a WiFiTimeSync...");
-        wifi_sync.requestWiFiForVoice();
+    String speechText;
+    if (timeinfo.tm_year < 124) {
+        Serial.println("[ClockVoice] Heure non synchronisee (< 2024).");
+        speechText = "L'heure n'est pas encore synchronisée.";
+    } else {
+        speechText = formatTimeInFrench(timeinfo.tm_hour, timeinfo.tm_min);
     }
 
-    bool accepted = voice.say(speechText);
-    if (!accepted) {
-        Serial.printf("[ClockVoice] voice.say() refuse : %s\n", voice.getLastError().c_str());
-        // Si la demande est immédiatement rejetée (ex: pas de Wi-Fi), libérer le verrou
-        if (WiFi.status() != WL_CONNECTED) {
+    Serial.printf("[ClockVoice] Annonce vocale demandee: \"%s\"\n", speechText.c_str());
+
+    // Verrouiller formellement le maintien radio Wi-Fi pour VoiceKit
+    wifi_keepalive_until_ms = 0;
+    wifi_sync.setKeepAliveLock(true);
+
+    if (WiFi.status() == WL_CONNECTED && VoxCoreVoice::isSystemTimeValid()) {
+        // Wi-Fi déjà prêt et heure système valide pour TLS : envoi direct
+        bool accepted = voice.say(speechText);
+        if (accepted) {
+            voice_req_state = VoiceRequestState::ANNOUNCING;
+            pending_speech_text = "";
+        } else {
+            Serial.printf("[ClockVoice] voice.say() refuse immediatement : %s\n", voice.getLastError().c_str());
             wifi_sync.setKeepAliveLock(false);
+            voice_req_state = VoiceRequestState::IDLE;
+            pending_speech_text = "";
         }
+    } else {
+        // Wi-Fi éteint ou en cours de réveil : mise en attente asynchrone sécurisée
+        Serial.println("[ClockVoice] Wi-Fi inactif : demande de reconnexion et mise en attente de l'annonce...");
+        pending_speech_text = speechText;
+        voice_req_state = VoiceRequestState::WAITING_WIFI;
+        voice_req_start_ms = millis();
+        if (ui_ready) {
+            clock_ui.setVoiceIndicator(VoiceState::CONNECTING_WIFI);
+        }
+        wifi_sync.requestWiFiForVoice();
     }
 }
 
@@ -129,6 +156,7 @@ void setup() {
     // 6. Initialisation de VoxCore VoiceKit en composant invité (EXTERNAL_WIFI)
     VoiceKitConfig vConfig;
     vConfig.apiKey = GEMINI_KEY;
+    vConfig.model = "models/gemini-2.0-flash-exp";
     vConfig.wifiMode = WiFiMode::EXTERNAL_WIFI; // VoiceKit s'adapte au Wi-Fi de l'horloge
     vConfig.hardwareAlreadyInitialized = true;  // M5.begin() déjà effectué
     vConfig.connectOnDemand = true;             // Connexion à la demande pour batterie
@@ -150,12 +178,13 @@ void setup() {
     });
 
     voice.onSpeechFinished([]() {
-        Serial.println("[ClockVoice] Annonce terminee. Liberation du verrou Wi-Fi.");
+        Serial.println("[ClockVoice] Annonce terminee. Maintien Wi-Fi chaud pendant 15 s...");
         if (ui_ready) {
             clock_ui.setVoiceIndicator(VoiceState::READY);
         }
-        // Coordination Wi-Fi : libération du verrou une fois la phrase intégralement émise
-        wifi_sync.setKeepAliveLock(false);
+        voice_req_state = VoiceRequestState::IDLE;
+        // Maintien radio chaud 15 s pour que tout appui consécutif soit immédiat (< 800 ms)
+        wifi_keepalive_until_ms = millis() + WIFI_KEEPALIVE_POST_SPEECH_MS;
     });
 
     voice.onError([](const String& err) {
@@ -163,6 +192,9 @@ void setup() {
         if (ui_ready) {
             clock_ui.setVoiceIndicator(VoiceState::ERROR_STATE);
         }
+        voice_req_state = VoiceRequestState::IDLE;
+        pending_speech_text = "";
+        wifi_keepalive_until_ms = 0;
         wifi_sync.setKeepAliveLock(false);
     });
 
@@ -206,9 +238,71 @@ void loop() {
     // 5. Mise à jour du moteur vocal VoiceKit
     voice.update();
 
+    // 5b. Traitement asynchrone d'une annonce en attente de la reconnexion Wi-Fi
+    if (voice_req_state == VoiceRequestState::WAITING_WIFI) {
+        if (WiFi.status() == WL_CONNECTED && VoxCoreVoice::isSystemTimeValid()) {
+            Serial.printf("[ClockVoice] Wi-Fi connecte (%u ms) -> Lancement de voice.say(\"%s\")...\n",
+                          millis() - voice_req_start_ms, pending_speech_text.c_str());
+            if (ui_ready) {
+                clock_ui.setVoiceIndicator(VoiceState::GENERATING);
+            }
+            bool accepted = voice.say(pending_speech_text);
+            if (accepted) {
+                voice_req_state = VoiceRequestState::ANNOUNCING;
+                pending_speech_text = "";
+            } else {
+                Serial.printf("[ClockVoice] voice.say() refuse apres reconnexion Wi-Fi : %s\n",
+                              voice.getLastError().c_str());
+                if (ui_ready) {
+                    clock_ui.setVoiceIndicator(VoiceState::ERROR_STATE);
+                }
+                voice_req_state = VoiceRequestState::IDLE;
+                pending_speech_text = "";
+                wifi_sync.setKeepAliveLock(false);
+            }
+        } else if (millis() - voice_req_start_ms > WIFI_VOICE_TIMEOUT_MS) {
+            Serial.println("[ClockVoice] Timeout de reconnexion Wi-Fi pour annonce vocale.");
+            if (ui_ready) {
+                clock_ui.setVoiceIndicator(VoiceState::ERROR_STATE);
+            }
+            voice_req_state = VoiceRequestState::IDLE;
+            pending_speech_text = "";
+            wifi_sync.setKeepAliveLock(false);
+        }
+    }
+
+    // 5c. Libération différée du verrou Wi-Fi après 15 s d'inactivité
+    if (wifi_keepalive_until_ms > 0 && millis() >= wifi_keepalive_until_ms) {
+        wifi_keepalive_until_ms = 0;
+        if (!voice.isBusy() && voice_req_state == VoiceRequestState::IDLE) {
+            Serial.println("[ClockVoice] Fin du maintien Wi-Fi chaud (15 s) -> Liberation du verrou Wi-Fi");
+            wifi_sync.setKeepAliveLock(false);
+        }
+    }
+
     // 6. Détection de l'appui tactile pour annoncer l'heure
-    auto detail = M5.Touch.getDetail();
-    if (detail.wasClicked() || detail.wasPressed()) {
+    bool screenTouched = false;
+    if (M5.Touch.getCount() > 0) {
+        auto detail = M5.Touch.getDetail(0);
+        if (detail.wasClicked() || detail.wasPressed()) {
+            screenTouched = true;
+        }
+    } else {
+        auto detail = M5.Touch.getDetail();
+        if (detail.wasClicked() || detail.wasPressed()) {
+            screenTouched = true;
+        }
+    }
+
+    // Support des zones tactiles virtuelles du bandeau / boutons CoreS3
+    if (M5.BtnA.wasClicked() || M5.BtnA.wasPressed() ||
+        M5.BtnB.wasClicked() || M5.BtnB.wasPressed() ||
+        M5.BtnC.wasClicked() || M5.BtnC.wasPressed() ||
+        M5.BtnPWR.wasClicked()) {
+        screenTouched = true;
+    }
+
+    if (screenTouched) {
         announceCurrentTime();
     }
 

@@ -60,6 +60,9 @@ void WiFiTimeSync::requestWiFiForVoice() {
     if (WiFi.status() == WL_CONNECTED) {
         return;
     }
+    if (state == SyncState::CONNECTING) {
+        return;
+    }
     Serial.println("[WiFiTimeSync] Activation Wi-Fi a la demande pour VoiceKit...");
     startSync();
 }

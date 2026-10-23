@@ -87,12 +87,20 @@ void ClockUI::setVoiceIndicator(VoiceState state) {
 
     switch (state) {
         case VoiceState::READY:
+        case VoiceState::IDLE:
             // Pret mais inactif : indicateur masque pour epurer le design
             lv_obj_add_flag(voice_indicator, LV_OBJ_FLAG_HIDDEN);
             break;
 
+        case VoiceState::CONNECTING_WIFI:
+            // Reveil et connexion Wi-Fi : petit point orange / ambre
+            lv_obj_clear_flag(voice_indicator, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_bg_color(voice_indicator, lv_color_hex(0xFBBC05), 0);
+            break;
+
+        case VoiceState::CONNECTING_SERVICE:
         case VoiceState::GENERATING:
-            // En attente de generation : petit point bleu discret
+            // En attente de generation / connexion Gemini : petit point bleu discret
             lv_obj_clear_flag(voice_indicator, LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_style_bg_color(voice_indicator, lv_color_hex(0x4285F4), 0);
             break;
