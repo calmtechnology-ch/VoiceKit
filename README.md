@@ -1,16 +1,16 @@
-# VoiceKit v0.4.1.1 — Bibliothèque Audio TTS + STT + Conversation Vocale pour M5Stack CoreS3
+# VoiceKit v0.4.1.2 — Bibliothèque Audio TTS + STT + Dictée Continue Mains Libres + Conversation Vocale pour M5Stack CoreS3
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
 [![ESP32-S3](https://img.shields.io/badge/Target-M5Stack%20CoreS3%20(ESP32--S3)-blue.svg)](https://docs.m5stack.com/en/core/CoreS3)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)** et de **conversation vocale bidirectionnelle native (Mode B)** haute fidélité pour **M5Stack CoreS3** (ESP32-S3), propulsée par l'API **Gemini Live** (protocole bidirectionnel BidiGenerateContent) et construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
+Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)** et de **conversation vocale bidirectionnelle native (Mode B)** haute fidélité pour **M5Stack CoreS3** (ESP32-S3), propulsée par l'API **Gemini Live** (protocole bidirectionnel BidiGenerateContent) et construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
 
-La version **v0.4.1.1** apporte une **corrective stricte de stabilisation** :
-- Sécurisation robuste des changements de profil vocal et reconnexions Gemini Live (validation différée après `setupComplete`, conservation du profil actif précédent jusqu'à confirmation, restauration cohérente en cas d'échec).
-- Fiabilisation totale de la transition bidirectionnelle entre TTS unitaire et conversation (reconnexion maîtrisée au repos, verrouillage pendant les tours actifs, préservation absolue des instructions système et directives vocales).
-- Clarification explicite de la compatibilité des paramètres linguistiques avec Gemini Live (orientation par consignes textuelles, zéro champ non supporté).
+La version **v0.4.1.2** introduit la **reconnaissance vocale continue mains libres (ContinuousSTT)** et la **détection automatique de fin d'intervention (VAD 16 kHz)** :
+- **Détecteur d'activité vocale local léger (`VoiceActivityDetector`)** : Analyse synchrone des blocs PCM 16 kHz (32 ms), seuil adaptatif au bruit ambiant (EMA), hystérésis d'attaque/maintien, validation de durée minimale de parole (200 ms), clôture propre après 1 200 ms de silence consécutif et durée maximale de 30 secondes.
+- **Nouvel exemple complet `examples/ContinuousSTT/`** : Dictée vocale mains libres sur M5Stack CoreS3 avec interface réactive M5Unified (320 × 240), 7 états colorés, VU-mètre RMS micro, jauge de compte à rebours silence, et bouton tactile PAUSE / REPRENDRE.
+- **Support UTF-8 français intégral** : Police bitmap compatible `efontJA_12` affichant fidèlement tous les accents sans simplification ni troncature.
 
 ---
 
@@ -289,7 +289,17 @@ Grâce à la structure `src/` de VoiceKit v0.2.1, **aucun paramètre `-I../../in
 | `bool isTranscribing() const` | Indique que l'acquisition est finie et que la transcription finale est en attente. | Non bloquant |
 | `void onTranscription(TranscriptionCallback cb)` | Enregistre le callback de réception des transcriptions : `void(const String& text, bool isFinal)`. | Immédiat |
 | `void onListeningStarted(VoidCallback cb)` | Déclenché dès que la capture microphone et le streaming sont effectifs. | Immédiat |
-| `void onListeningFinished(VoidCallback cb)` | Déclenché au relâchement du bouton microphone. | Immédiat |
+| `void onListeningFinished(VoidCallback cb)` | Déclenché au relâchement du bouton microphone ou à l'arrêt du flux. | Immédiat |
+| `uint32_t getAudioLevel() const` | Retourne le niveau RMS instantané du dernier bloc micro PCM 16 kHz capturé. | **Non bloquant** |
+| `void onAudioChunk(AudioChunkCallback cb)` | Enregistre un callback léger invoqué sur chaque bloc audio acquis (pour VAD, visualiseur ou télémétrie). | Immédiat |
+
+### Détecteur d'Activité Vocale Léger (`VoiceActivityDetector`) (v0.4.1.2)
+
+Le composant `VoiceActivityDetector` (`src/core/VoiceActivityDetector.h`) permet une détection de parole et de silence autonome sans surcharger le micro :
+- **Seuil adaptatif** : Plancher de bruit (`noiseFloor`) estimé en continu durant le silence par lissage exponentiel (EMA).
+- **Hystérésis** : Seuil haut de détection `(noiseFloor * 2.0) + 250 RMS` vs seuil bas de maintien `(noiseFloor * 1.3) + 120 RMS`.
+- **Validation temporelle** : Rejet des bruits transitoires (< 200 ms), détection de fin après 1 200 ms de silence consécutif, et coupure de sécurité à 30 secondes max.
+- **Accesseurs riches** : `getState()`, `getNoiseFloor()`, `getLastRms()`, `getSilenceProgressRatio()`, `onSpeechStarted()`, `onSpeechEnded()`.
 
 ### API Conversation Vocale Bidirectionnelle (v0.4.0 / v0.4.1.1)
 
@@ -389,7 +399,9 @@ voice.onConversationTurnMetrics([](const ConversationMetrics& m) {
 
 ## 5. Exemples Inclus
 
-1. **`examples/VoiceSettingsDemo/`** (PlatformIO) — **NOUVEAU v0.4.1** :  
+1. **`examples/ContinuousSTT/`** (PlatformIO) — **NOUVEAU v0.4.1.2** :  
+   Application de reconnaissance vocale continue mains libres (dictée vocale moderne) pour M5Stack CoreS3. Écoute permanente, détection automatique de parole (> 200 ms) et de fin d'intervention (1 200 ms de silence) par VAD local léger sur blocs PCM 16 kHz. Interface graphique réactive M5Unified (320 × 240) sans LVGL affichant 7 états distincts (`ATTENTE`, `ECOUTE`, `PAROLE`, `SILENCE`, `TRANSCRIPTION`, `TERMINE`, `ERREUR`), VU-mètre RMS micro, jauge de compte à rebours du silence, compteur de segments, bouton tactile `PAUSE` / `REPRENDRE`, et préservation intégrale des accents français UTF-8.
+2. **`examples/VoiceSettingsDemo/`** (PlatformIO) :  
    Démonstrateur tactile multi-profils et validation UTF-8 pour M5Stack CoreS3. Permet de faire défiler et tester 5 scénarios complets :
    - Français naturel avec la phrase de test obligatoire complète :  
      *« À Noël, Élise prépare un café crème. L'été à Genève est agréable. François préfère un cœur léger. »*
@@ -398,15 +410,15 @@ voice.onConversationTurnMetrics([](const ConversationMetrics& m) {
    - Allemand avec accents et umlauts (`Kore`, `de-DE`, naturel et calme).
    - Anglais américain narration dynamique (`Charon`, `en-US`, ton chaleureux).  
    Affichage graphique de l'état, de la configuration en temps réel, navigation par écran tactile ou moniteur série (`N`/`R`/`S`).
-2. **`examples/MinimalConversation/`** (PlatformIO) :  
+3. **`examples/MinimalConversation/`** (PlatformIO) :  
    Application conversationnelle vocale bidirectionnelle native (Mode B) pour M5Stack CoreS3. L'utilisateur appuie sur « PARLER », pose sa question, relâche le bouton, voit sa transcription, puis entend la réponse vocale de Gemini sur le haut-parleur CoreS3. Grand bouton tactile dynamique (« PARLER » / « STOP »), cartes d'affichage 320x240, contrôle parallèle via port série (`P`/`R`/`S`).
-3. **`examples/MinimalTTS/`** (PlatformIO) :  
+4. **`examples/MinimalTTS/`** (PlatformIO) :  
    Validation physique TTS minimale sans LVGL. Démonstration de `voice.say()` au démarrage puis déclenchement tactile sur l'écran.
-4. **`examples/MinimalSTT/`** (PlatformIO) :  
+5. **`examples/MinimalSTT/`** (PlatformIO) :  
    Démonstration de reconnaissance vocale Push-to-Talk STT pour M5Stack CoreS3. Bouton tactile « DICTER », affichage des états (PRÊT, ÉCOUTE, TRANSCRIPTION, TERMINÉ, ERREUR), affichage dynamique des résultats intérimaires et finaux à l'écran et sur le moniteur série.
-5. **`examples/OrientationClockVoice/`** (PlatformIO) :  
+6. **`examples/OrientationClockVoice/`** (PlatformIO) :  
    Application complète d'horloge dynamique intégrant **LVGL 9**, accéléromètre **BMI270** (rotation 360°), horloge RTC **BM8563**, et annonce de l'heure en français sur appui tactile.
-6. **`examples/MinimalTTS_Arduino/`** (Arduino IDE) :  
+7. **`examples/MinimalTTS_Arduino/`** (Arduino IDE) :  
    Croquis autonome `.ino` prêt à l'emploi avec documentation pas-à-pas des menus Arduino IDE.
 
 ---
@@ -417,8 +429,8 @@ La version **v0.4.1** garantit une non-régression absolue sur l'ensemble des mo
 - **Intégrité absolue du moteur audio VoxCore** : Aucune modification des buffers DMA, de la tâche FreeRTOS Mode 2, du ring buffer PSRAM, ou des mécanismes d'évacuation audio (`LiveAudioPlayer`, `LiveAudioStreamer`, `LiveSessionController`).
 - **Chaîne UTF-8 sans translittération** : Séparation stricte entre l'affichage éventuel (ex. LVGL / ASCII) et le canal audio de transport. Les phrases françaises accentuées, ligatures et apostrophes typographiques sont envoyées intactes à Gemini Live.
 - **Arbitrage matériel garanti** : Pas de conflit I2S ni de larsen grâce au `HardwareManager` qui coupe automatiquement le haut-parleur lors de la prise de son micro et le réactive pour la réponse.
-- **Suite de tests automatisés** : 39 suites de tests unitaires et 396 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
-- **Compatibilité multi-exemples** : Les 5 projets d'exemples PlatformIO compilent avec succès sous PlatformIO (M5Stack CoreS3).
+- **Suite de tests automatisés** : 46 suites de tests unitaires et 567 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
+- **Compatibilité multi-exemples** : Les 6 projets d'exemples PlatformIO compilent avec succès sous PlatformIO (M5Stack CoreS3).
 - **Zéro identifiant en clair** : Aucun secret, SSID Wi-Fi ni clé API n'est publié dans le dépôt.
 
-Consultez le [Rapport de Livraison v0.4.1](RAPPORT_LIVRAISON_v0.4.1.md) pour les détails d'architecture, les preuves de compilation et les limitations documentées de l'API Gemini.
+Consultez le [Rapport de Livraison v0.4.1.2](RAPPORT_LIVRAISON_v0.4.1.2.md) pour les détails d'architecture, l'analyse expérimentale du VAD et les preuves de compilation.

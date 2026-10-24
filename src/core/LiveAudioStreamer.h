@@ -8,6 +8,8 @@
 #include "hal/IAudioInput.h"
 #include "hal/IAudioOutput.h"
 
+#include <functional>
+
 #if defined(ESP32) || defined(ARDUINO)
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -16,7 +18,6 @@
 #else
 #include <queue>
 #include <mutex>
-#include <functional>
 #endif
 
 // Primitives de synchronisation FreeRTOS pour le cycle de vie des tâches micro et émission (v0.1.0.3 & v0.2.1.1)
@@ -118,6 +119,12 @@ public:
     uint32_t getSendRefusedCount() const { return _sendRefusedCount; }
     uint32_t getAverageRms() const { return _rmsCount > 0 ? (uint32_t)(_sumRms / _rmsCount) : 0; }
     uint32_t getPeakRms() const { return _peakRms; }
+    uint32_t getLastChunkRms() const { return _lastChunkRms; }
+
+    // Callback léger sur chaque bloc audio acquis (pour VAD, visualiseur ou métriques)
+    using AudioChunkCallback = std::function<void(const int16_t* samples, size_t count, uint32_t rms)>;
+    void onAudioChunk(AudioChunkCallback cb) { _chunkCallback = std::move(cb); }
+
     bool isActivityStartConfirmed() const { return _activityStartSent; }
     bool isActivityEndConfirmed() const { return _activityEndSent; }
     bool isActivityEndSent() const { return _activityEndSent; }
@@ -244,6 +251,8 @@ private:
     uint64_t _sumRms = 0;
     uint32_t _rmsCount = 0;
     uint32_t _peakRms = 0;
+    volatile uint32_t _lastChunkRms = 0;
+    AudioChunkCallback _chunkCallback = nullptr;
     bool _activityStartSent = false;
     bool _activityEndSent = false;
 

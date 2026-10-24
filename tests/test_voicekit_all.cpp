@@ -7,6 +7,7 @@
 
 #include "VoxCoreVoice.h"
 #include "Utf8Utils.h"
+#include "VoiceActivityDetector.h"
 #include "cJSON.h"
 #include "native_mock/MockLiveTransport.h"
 #include "../examples/OrientationClockVoice/include/FrenchTimeFormatter.h"
@@ -1907,12 +1908,377 @@ void test_utf8_and_language_compatibility_stabilization() {
 }
 
 // =============================================================================
+// NOUVELLES SUITES CONTINUOUS STT & VAD (VOICEKIT v0.4.1.2)
+// =============================================================================
+
+// SUITE 43 : VAD (Voice Activity Detection) - Algorithme, seuils adaptatifs, hystérésis et transitions
+void test_vad_algorithm_and_state_transitions() {
+    std::cout << "\n[TEST SUITE 43] VAD : Algorithme, seuils adaptatifs, hysteresis et transitions" << std::endl;
+    VoiceActivityDetector vad;
+
+    // 1. Initialisation et configuration par défaut
+    TEST_ASSERT(vad.getState() == VadState::SILENCE, "Etat initial VAD est SILENCE");
+    TEST_ASSERT(vad.getConfig().minSpeechDurationMs == 200, "Duree min parole = 200 ms");
+    TEST_ASSERT(vad.getConfig().silenceDurationMs == 1200, "Duree silence = 1200 ms");
+    TEST_ASSERT(vad.getConfig().maxSegmentDurationMs == 30000, "Duree max segment = 30000 ms");
+    TEST_ASSERT(!vad.isSpeechActive(), "isSpeechActive() initialement faux");
+    TEST_ASSERT(!vad.isSpeechEnded(), "isSpeechEnded() initialement faux");
+
+    // 2. Calcul et verification de l'hysteresis
+    vad.setNoiseFloor(200);
+    uint32_t spThresh = vad.getSpeechThreshold();
+    uint32_t silThresh = vad.getSilenceThreshold();
+    TEST_ASSERT(spThresh == (uint32_t)(200 * 2.0f) + 250, "Seuil de parole calcule conformement a la formule");
+    TEST_ASSERT(silThresh == (uint32_t)(200 * 1.3f) + 120, "Seuil de silence calcule conformement a la formule");
+    TEST_ASSERT(spThresh > silThresh, "Hysteresis validee : seuil de parole superieur au seuil de silence");
+
+    // 3. Suivi adaptatif du bruit de fond pendant le silence
+    for (int i = 0; i < 30; ++i) {
+        vad.processRms(100, 32);
+    }
+    TEST_ASSERT(vad.getState() == VadState::SILENCE, "Reste en SILENCE avec bruit faible (100 RMS)");
+    TEST_ASSERT(vad.getNoiseFloor() < 180, "Plancher de bruit s'adapte a la baisse vers 100 RMS");
+
+    // 4. Rejet du bruit transitoire (clic / impulsion de 64 ms < 200 ms)
+    vad.processRms(3000, 32); // 1er bloc fort -> SPEECH_STARTING
+    TEST_ASSERT(vad.getState() == VadState::SPEECH_STARTING, "Transition en SPEECH_STARTING sur front montant");
+    vad.processRms(3000, 32); // 2e bloc fort (total 64 ms < 200 ms)
+    vad.processRms(100, 32);  // retour au silence
+    TEST_ASSERT(vad.getState() == VadState::SILENCE, "Rejet du bruit transitoire : retour en SILENCE");
+    TEST_ASSERT(!vad.isSpeechConfirmed(), "Parole non confirmee pour bruit < 200 ms");
+
+    // 5. Validation de la parole (> 200 ms)
+    bool startedCbFired = false;
+    vad.onSpeechStarted([&]() { startedCbFired = true; });
+
+    // 7 blocs a 2500 RMS = 224 ms (> 200 ms)
+    for (int i = 0; i < 7; ++i) {
+        vad.processRms(2500, 32);
+    }
+    TEST_ASSERT(vad.getState() == VadState::SPEECH_ACTIVE, "Parole confirmee (> 200 ms) -> SPEECH_ACTIVE");
+    TEST_ASSERT(vad.isSpeechActive(), "isSpeechActive() vrai");
+    TEST_ASSERT(vad.isSpeechConfirmed(), "isSpeechConfirmed() vrai");
+    TEST_ASSERT(startedCbFired, "Callback onSpeechStarted declenche a la confirmation");
+
+    // 6. Silence post-parole et detection de fin de segment (1200 ms)
+    bool endedCbFired = false;
+    VadEndReason reportedReason = VadEndReason::NONE;
+    vad.onSpeechEnded([&](VadEndReason reason) {
+        endedCbFired = true;
+        reportedReason = reason;
+    });
+
+    // 1 bloc sous seuil bas -> transition en SILENCE_STARTING
+    vad.processRms(80, 32);
+    TEST_ASSERT(vad.getState() == VadState::SILENCE_STARTING, "Transition en SILENCE_STARTING post-parole");
+    TEST_ASSERT(vad.isSilenceCounting(), "isSilenceCounting() vrai");
+    TEST_ASSERT(vad.isSpeechActive(), "isSpeechActive() toujours vrai pendant le compte a rebours silence");
+
+    // Suite du silence jusqu'a 1200 ms (encore 37 blocs de 32 ms : 38 * 32 = 1216 ms >= 1200 ms)
+    for (int i = 0; i < 37; ++i) {
+        vad.processRms(80, 32);
+    }
+    TEST_ASSERT(vad.getState() == VadState::SPEECH_ENDED, "Fin de segment confirmee apres 1200 ms de silence -> SPEECH_ENDED");
+    TEST_ASSERT(vad.isSpeechEnded(), "isSpeechEnded() vrai");
+    TEST_ASSERT(endedCbFired, "Callback onSpeechEnded declenche");
+    TEST_ASSERT(reportedReason == VadEndReason::SILENCE_TIMEOUT, "Raison de fin = SILENCE_TIMEOUT");
+    TEST_ASSERT(vad.getEndReason() == VadEndReason::SILENCE_TIMEOUT, "getEndReason() = SILENCE_TIMEOUT");
+}
+
+// SUITE 44 : VAD - Scénarios temporels avancés (pauses inter-mots, durée max 30s, silence prolongé, PCM)
+void test_vad_advanced_temporal_scenarios() {
+    std::cout << "\n[TEST SUITE 44] VAD : Scenarios temporels avances (pauses, 30s max, silence prolonge, PCM)" << std::endl;
+    VoiceActivityDetector vad;
+
+    // 1. Pause au milieu d'une phrase (mid-sentence pause de 400 ms < 1200 ms)
+    for (int i = 0; i < 8; ++i) vad.processRms(2500, 32);
+    TEST_ASSERT(vad.getState() == VadState::SPEECH_ACTIVE, "Phase parole 1 active");
+
+    // Pause de 400 ms (12 blocs de 32 ms = 384 ms)
+    for (int i = 0; i < 12; ++i) vad.processRms(80, 32);
+    TEST_ASSERT(vad.getState() == VadState::SILENCE_STARTING, "Pause inter-mots en cours");
+    TEST_ASSERT(vad.getCurrentSilenceMs() >= 380 && vad.getCurrentSilenceMs() < 1200, "Compteur silence avance sans expirer");
+
+    // Reprise de la parole avant 1200 ms
+    vad.processRms(2500, 32);
+    TEST_ASSERT(vad.getState() == VadState::SPEECH_ACTIVE, "Reprise vocale : retour direct en SPEECH_ACTIVE");
+    TEST_ASSERT(vad.getCurrentSilenceMs() == 0, "Compteur silence reinitialise a 0");
+
+    // Cloture du segment apres la deuxieme partie de phrase
+    for (int i = 0; i < 5; ++i) vad.processRms(2500, 32);
+    for (int i = 0; i < 38; ++i) vad.processRms(80, 32);
+    TEST_ASSERT(vad.isSpeechEnded(), "Segment finalise apres le deuxieme silence complet");
+
+    // 2. Duree maximale de segment (30 secondes = 30000 ms)
+    vad.reset();
+    bool maxDurationFired = false;
+    vad.onSpeechEnded([&](VadEndReason r) {
+        if (r == VadEndReason::MAX_DURATION) maxDurationFired = true;
+    });
+
+    // Envoi continu de blocs de parole pendant 30 secondes (940 blocs de 32 ms = 30080 ms)
+    for (int i = 0; i < 940; ++i) {
+        bool ended = vad.processRms(2000, 32);
+        if (ended) break;
+    }
+    TEST_ASSERT(vad.getState() == VadState::SPEECH_ENDED, "Coupure automatique a 30 secondes -> SPEECH_ENDED");
+    TEST_ASSERT(vad.getEndReason() == VadEndReason::MAX_DURATION, "Raison = MAX_DURATION");
+    TEST_ASSERT(maxDurationFired, "Notification de duree max recue");
+
+    // 3. Silence prolonge (10 secondes = 312 blocs) sans fausse detection
+    vad.reset();
+    for (int i = 0; i < 312; ++i) {
+        vad.processRms(120, 32);
+    }
+    TEST_ASSERT(vad.getState() == VadState::SILENCE, "Reste strictement en SILENCE apres 10s de silence");
+    TEST_ASSERT(!vad.isSpeechConfirmed(), "Aucun debut de parole n'a ete confirme");
+    TEST_ASSERT(!vad.isSpeechEnded(), "Aucune fin de segment n'a ete declenchee a tort");
+
+    // 4. Adaptation au bruit ambiant dynamique
+    vad.reset();
+    vad.setNoiseFloor(150);
+    // Bruit de fond monte progressivement de 150 a 600 RMS
+    for (int step = 150; step <= 600; step += 15) {
+        for (int i = 0; i < 6; ++i) {
+            vad.processRms(step, 32);
+        }
+    }
+    TEST_ASSERT(vad.getNoiseFloor() > 500, "Plancher de bruit a suivi l'elevation ambiante (> 500)");
+    TEST_ASSERT(vad.getSpeechThreshold() > 1200, "Seuil de parole eleve pour eviter les declenchements par le bruit");
+    TEST_ASSERT(vad.getState() == VadState::SILENCE, "Toujours en SILENCE malgre un bruit a 600 RMS");
+
+    // La voix au-dessus du nouveau seuil (3000 RMS) declenche bien la parole
+    for (int i = 0; i < 8; ++i) {
+        vad.processRms(3000, 32);
+    }
+    TEST_ASSERT(vad.getState() == VadState::SPEECH_ACTIVE, "Voix a 3000 RMS detectee malgre un bruit ambiant eleve");
+
+    // 5. Test de traitement PCM brut via processSamples()
+    vad.reset();
+    int16_t silentPcm[512] = {0};
+    int16_t speechPcm[512];
+    for (size_t i = 0; i < 512; ++i) {
+        speechPcm[i] = (int16_t)(2000.0 * sin(2.0 * M_PI * i / 16.0));
+    }
+    vad.processSamples(silentPcm, 512, 16000);
+    TEST_ASSERT(vad.getState() == VadState::SILENCE, "processSamples(silentPcm) maintient SILENCE");
+    for (int i = 0; i < 8; ++i) {
+        vad.processSamples(speechPcm, 512, 16000);
+    }
+    TEST_ASSERT(vad.getState() == VadState::SPEECH_ACTIVE, "processSamples(speechPcm) active SPEECH_ACTIVE");
+}
+
+// SUITE 45 : Flux ContinuousSTT complet - Écoute continue, streaming et segments
+void test_continuous_stt_complete_lifecycle() {
+    std::cout << "\n[TEST SUITE 45] Flux ContinuousSTT complet : Ecoute continue, streaming et segments" << std::endl;
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+
+    VoiceKitConfig config;
+    config.apiKey = "AIzaFakeKey";
+    config.systemInstruction = VOICEKIT_DEFAULT_STT_INSTRUCTION;
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.sttFinalTimeoutMs = 6000;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    VoiceActivityDetector vad;
+    uint32_t chunksReceived = 0;
+
+    // Enregistrement du callback de chunk audio
+    voice.onAudioChunk([&](const int16_t* samples, size_t count, uint32_t rms) {
+        (void)samples;
+        (void)count;
+        chunksReceived++;
+        if (voice.isListening()) {
+            vad.processRms(rms, 32);
+        }
+    });
+
+    int finalTranscriptionsCount = 0;
+    String lastFinalReceived = "";
+    voice.onTranscription([&](const String& text, bool isFinal) {
+        if (isFinal) {
+            finalTranscriptionsCount++;
+            lastFinalReceived = text;
+        }
+    });
+
+    // === SEGMENT 1 ===
+    vad.reset();
+    bool listen1 = voice.startListening();
+    TEST_ASSERT(listen1, "startListening() segment 1 accepte");
+    TEST_ASSERT(voice.isListening(), "voice.isListening() actif");
+
+    // Injection de 10 blocs de parole PCM (320 ms)
+    int16_t speechChunk[AUDIO_CHUNK_SAMPLES];
+    for (size_t i = 0; i < AUDIO_CHUNK_SAMPLES; ++i) {
+        speechChunk[i] = (int16_t)(3000.0 * sin(2.0 * M_PI * i / 16.0));
+    }
+    for (int i = 0; i < 10; ++i) {
+        voice.getStreamer().pushSimulatedChunk(speechChunk, AUDIO_CHUNK_SAMPLES);
+        voice.update();
+    }
+
+    TEST_ASSERT(chunksReceived >= 10, "onAudioChunk() invoque pour chaque bloc");
+    TEST_ASSERT(voice.getAudioLevel() > 1000, "voice.getAudioLevel() rapporte un RMS eleve");
+    TEST_ASSERT(vad.isSpeechActive(), "VAD detecte la parole du segment 1");
+
+    // Injection de 38 blocs de silence (1216 ms)
+    int16_t silenceChunk[AUDIO_CHUNK_SAMPLES] = {0};
+    for (int i = 0; i < 38; ++i) {
+        voice.getStreamer().pushSimulatedChunk(silenceChunk, AUDIO_CHUNK_SAMPLES);
+        voice.update();
+    }
+
+    TEST_ASSERT(vad.isSpeechEnded(), "VAD signale la fin du segment 1 apres 1200 ms de silence");
+
+    // L'application arrete l'ecoute suite a la detection VAD
+    bool stopOk1 = voice.stopListening();
+    TEST_ASSERT(stopOk1, "stopListening() segment 1 effectue avec succes");
+    TEST_ASSERT(voice.isTranscribing(), "voice.isTranscribing() actif en attente de reponse Gemini");
+
+    // Reception de la transcription finale authentique
+    const char* finalJson1 = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Bonjour Gemini voici ma première phrase\"}}}";
+    voice.getClient().handleIncomingMessage(finalJson1, strlen(finalJson1));
+    voice.update();
+
+    TEST_ASSERT(finalTranscriptionsCount == 1, "Transcription finale 1 recue");
+    TEST_ASSERT(lastFinalReceived == "Bonjour Gemini voici ma première phrase", "Texte final 1 exact");
+    TEST_ASSERT(!voice.isTranscribing(), "Fin d'attente de transcription");
+    TEST_ASSERT(voice.isReady(), "VoiceKit pret pour le segment suivant");
+
+    // === SEGMENT 2 (Enchainement mains libres sur la meme session) ===
+    vad.reset();
+    bool listen2 = voice.startListening();
+    TEST_ASSERT(listen2, "startListening() segment 2 accepte sans reconnexion de session");
+    TEST_ASSERT(voice.isListening(), "voice.isListening() actif pour segment 2");
+
+    for (int i = 0; i < 8; ++i) {
+        voice.getStreamer().pushSimulatedChunk(speechChunk, AUDIO_CHUNK_SAMPLES);
+        voice.update();
+    }
+    TEST_ASSERT(vad.isSpeechActive(), "Parole segment 2 detectee");
+
+    for (int i = 0; i < 38; ++i) {
+        voice.getStreamer().pushSimulatedChunk(silenceChunk, AUDIO_CHUNK_SAMPLES);
+        voice.update();
+    }
+    TEST_ASSERT(vad.isSpeechEnded(), "VAD termine segment 2");
+
+    voice.stopListening();
+    const char* finalJson2 = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Deuxième phrase en dictée continue\"}}}";
+    voice.getClient().handleIncomingMessage(finalJson2, strlen(finalJson2));
+    voice.update();
+
+    TEST_ASSERT(finalTranscriptionsCount == 2, "Transcription finale 2 recue");
+    TEST_ASSERT(lastFinalReceived == "Deuxième phrase en dictée continue", "Texte final 2 exact");
+    TEST_ASSERT(voice.isReady(), "VoiceKit pret apres segment 2");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// SUITE 46 : Résilience ContinuousSTT - Absence de transcription finale, pause et UTF-8
+void test_continuous_stt_resilience_and_utf8() {
+    std::cout << "\n[TEST SUITE 46] Resilience ContinuousSTT : Timeout sans invention, pause et accents" << std::endl;
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+
+    VoiceKitConfig config;
+    config.apiKey = "AIzaFakeKey";
+    config.systemInstruction = VOICEKIT_DEFAULT_STT_INSTRUCTION;
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.sttFinalTimeoutMs = 6000;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    // 1. Absence de transcription finale (timeout 6000 ms) et non-invention
+    String interimReceived = "";
+    String finalReceived = "";
+    bool finalFired = false;
+    voice.onTranscription([&](const String& text, bool isFinal) {
+        if (isFinal) {
+            finalFired = true;
+            finalReceived = text;
+        } else {
+            interimReceived = text;
+        }
+    });
+
+    voice.startListening();
+    const char* partialJson = "{\"serverContent\":{\"interimInputTranscription\":{\"text\":\"Texte partiel incomplet...\"}}}";
+    voice.getClient().handleIncomingMessage(partialJson, strlen(partialJson));
+    TEST_ASSERT(interimReceived == "Texte partiel incomplet...", "Interim enregistre");
+
+    voice.stopListening();
+    TEST_ASSERT(voice.isTranscribing(), "En attente de transcription finale");
+
+    // Avancement de l'horloge au-dela de sttFinalTimeoutMs (6000 ms)
+    advanceMockMillis(6500);
+    voice.update();
+
+    TEST_ASSERT(!voice.isTranscribing(), "Sortie de l'etat transcribing apres timeout");
+    TEST_ASSERT(voice.isReady(), "Retour a READY");
+    TEST_ASSERT(!finalFired, "REGLE ABSOLUE : Aucune transcription finale n'a ete inventee depuis l'interim");
+    TEST_ASSERT(finalReceived.isEmpty(), "Le texte final reste vide");
+
+    // 2. Mise en pause manuelle
+    bool paused = true;
+    if (voice.isListening()) {
+        voice.stopListening();
+    }
+    TEST_ASSERT(!voice.isListening(), "Ecoute arretee lors de la pause");
+    TEST_ASSERT(paused, "Flag pause actif");
+
+    // Reprise de la pause
+    paused = false;
+    bool resumed = voice.startListening();
+    TEST_ASSERT(resumed, "startListening() accepte lors de la reprise de pause");
+    TEST_ASSERT(voice.isListening(), "Micro actif suite a la reprise");
+    voice.cancelListening();
+
+    // 3. Deconnexion et reconnexion du transport
+    WiFi.setConnected(false);
+    mockTransport.disconnect();
+    voice.update();
+    TEST_ASSERT(voice.getState() == VoiceState::ERROR_STATE || voice.getState() == VoiceState::DISCONNECTED || !voice.isReady(),
+                "Etat session signale la coupure");
+
+    // Reconnexion du transport
+    WiFi.setConnected(true);
+    prepareMockVoiceReady(voice, mockTransport);
+    TEST_ASSERT(voice.isReady(), "VoiceKit redevient READY apres retablissement de la session");
+
+    // 4. Chaine UTF-8 francaise avec accents transmise sans alteration
+    const char* frenchPhrase = "À Noël, Élise prépare un café crème. L'été à Genève est agréable. François préfère un cœur léger.";
+    String receivedFinalAccent = "";
+    voice.onTranscription([&](const String& text, bool isFinal) {
+        if (isFinal) receivedFinalAccent = text;
+    });
+
+    voice.startListening();
+    std::string frenchJson = std::string("{\"serverContent\":{\"inputTranscription\":{\"text\":\"") + frenchPhrase + "\"}}}";
+    voice.getClient().handleIncomingMessage(frenchJson.c_str(), frenchJson.length());
+    voice.update();
+
+    TEST_ASSERT(receivedFinalAccent == frenchPhrase, "Phrase francaise accentuee complete restituee a 100%");
+    TEST_ASSERT(receivedFinalAccent.indexOf("À") >= 0, "Accent A majuscule conserve");
+    TEST_ASSERT(receivedFinalAccent.indexOf("É") >= 0, "Accent E majuscule conserve");
+    TEST_ASSERT(receivedFinalAccent.indexOf("é") >= 0, "Accent e aigu conserve");
+    TEST_ASSERT(receivedFinalAccent.indexOf("è") >= 0, "Accent e grave conserve");
+    TEST_ASSERT(receivedFinalAccent.indexOf("ç") >= 0, "Cedille conservee");
+    TEST_ASSERT(receivedFinalAccent.indexOf("œ") >= 0, "Ligature oe conservee");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.4.1.1  " << std::endl;
-    std::cout << "  Validation Stabilisation Profils + Transitions + Langues " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.4.1.2  " << std::endl;
+    std::cout << "  Validation ContinuousSTT & VAD (Detection Fin de Parole)  " << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
     std::cout << "===========================================================" << std::endl;
 
@@ -1966,6 +2332,12 @@ int main() {
     test_voice_profile_safety_stabilization();
     test_mode_transition_stabilization();
     test_utf8_and_language_compatibility_stabilization();
+
+    // Nouvelles suites ContinuousSTT & VAD VoiceKit v0.4.1.2
+    test_vad_algorithm_and_state_transitions();
+    test_vad_advanced_temporal_scenarios();
+    test_continuous_stt_complete_lifecycle();
+    test_continuous_stt_resilience_and_utf8();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

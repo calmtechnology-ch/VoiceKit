@@ -7,6 +7,57 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.4.1.2] - 2026-10-24 (ContinuousSTT & VAD Détection Fin de Parole)
+
+### Nouvel Exemple PlatformIO `ContinuousSTT`
+- **Reconnaissance Vocale Continue Mains Libres** :
+  - Nouveau sixième exemple autonome dans `examples/ContinuousSTT/` avec son propre `platformio.ini`, `no_ota.csv`, `secrets.example.h` et `README.md`.
+  - Fonctionnement comparable à une dictée vocale moderne : écoute automatique dès que le moteur est prêt, détection de début et de fin de parole sans maintien de bouton, et réactivation automatique pour le segment suivant après finalisation.
+  - Découpage naturel des interventions en segments transcrits via une session Gemini Live unique maintenue en continu.
+
+### Détecteur d'Activité Vocale Léger (`VoiceActivityDetector`)
+- **Composant Réutilisable et Non Bloquant (`src/core/VoiceActivityDetector.h`)** :
+  - Analyse synchrone sur blocs PCM 16 kHz mono 16 bits (chunks de 512 échantillons = 32 ms).
+  - Plancher de bruit ambiant adaptatif (`noiseFloor`) ajusté en continu en phase de silence via lissage exponentiel (EMA).
+  - Hystérésis déterministe entre seuil d'attaque (parole : `noiseFloor * 2.0 + 250 RMS`) et seuil de relâchement (maintien : `noiseFloor * 1.3 + 120 RMS`).
+  - Validation de durée minimale de parole : 200 ms consécutifs requis au-dessus du seuil haut pour éliminer les clics et bruits transitoires.
+  - Détection automatique de fin d'intervention après 1 200 ms de silence consécutif post-parole avec déclenchement propre de `voice.stopListening()`.
+  - Bornage de sécurité : durée maximale de segment limitée à 30 secondes.
+  - Tolérance aux pauses inter-mots : un silence inférieur à 1 200 ms est réinitialisé dès que la voix reprend, sans interruption de phrase.
+
+### Extensions de l'API Publique
+- **`VoxCoreVoice::getAudioLevel()`** :
+  - Retourne le niveau RMS instantané du dernier bloc micro PCM 16 kHz capturé.
+- **`VoxCoreVoice::onAudioChunk(cb)`** :
+  - Enregistre un callback léger invoqué sur chaque bloc audio acquis (pour VAD, visualiseur graphique ou télémétrie).
+- **`LiveAudioStreamer::getLastChunkRms()`** & **`LiveAudioStreamer::onAudioChunk(cb)`** :
+  - Accès au niveau audio sans modifier le chemin critique de streaming, les tampons DMA ni la tâche FreeRTOS.
+
+### Interface Graphique M5Unified (CoreS3 320 × 240)
+- **Visualisation Complète et Réactive sans LVGL** :
+  - 7 états applicatifs distincts avec code couleur dédié : `ATTENTE`, `ECOUTE`, `PAROLE`, `SILENCE`, `TRANSCRIPTION`, `TERMINE`, `ERREUR`.
+  - Barregraphe VU-mètre dynamique avec curseur de seuil de parole.
+  - Jauge de silence dynamique visualisant le compte à rebours 0 à 1 200 ms avant clôture.
+  - Compteur de segments transcrits et affichage du bruit ambiant.
+  - Zone de texte scindée : texte définitif authentique mis en évidence et conservé à l'écran vs texte en direct (intérim).
+  - Bouton tactile dynamique `PAUSE` / `REPRENDRE`.
+  - Prise en charge intégrale de l'UTF-8 français via la police compatible `fonts::efontJA_12` (accents `é`, `è`, `à`, `ç`, `ê`, `ô`, `ù`, `û`).
+  - Détection explicite des timeouts de transcription avec affichage `[Transcription non confirmée (délai dépassé)]` sans invention de texte final.
+
+### Tests & Validations
+- **Suites de Tests Automatisés (MinGW C++14/C++17)** :
+  - Ajout des suites 43, 44, 45 et 46 dans `tests/test_voicekit_all.cpp` (567 assertions réussies, 0 échec).
+  - Validation du VAD, des seuils adaptatifs, de l'hystérésis, des pauses inter-mots, de la durée maximale 30s, de l'enchaînement multi-segments, des timeouts sans invention et de la fidélité UTF-8.
+- **Compilations PlatformIO Validées (6 applications)** :
+  - `examples/MinimalTTS` : SUCCESS
+  - `examples/MinimalSTT` : SUCCESS
+  - `examples/MinimalConversation` : SUCCESS
+  - `examples/VoiceSettingsDemo` : SUCCESS
+  - `examples/OrientationClockVoice` : SUCCESS
+  - `examples/ContinuousSTT` : SUCCESS (Flash: 71.4%, RAM: 20.8%)
+
+---
+
 ## [0.4.1.1] - 2026-10-24 (Corrective de Stabilisation)
 
 ### Sécurisation des Profils Vocaux & Reconnexions Gemini Live

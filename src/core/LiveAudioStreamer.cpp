@@ -380,7 +380,10 @@ void LiveAudioStreamer::micTaskLoop() {
         } else {
             _ringBuffers[currentSlot].state = LiveBufferState::READY;
             _blocksCompleted++;
-            computeRms(_ringBuffers[currentSlot].samples, AUDIO_CHUNK_SAMPLES);
+            uint32_t rms = computeRms(_ringBuffers[currentSlot].samples, AUDIO_CHUNK_SAMPLES);
+            if (_chunkCallback) {
+                _chunkCallback(_ringBuffers[currentSlot].samples, AUDIO_CHUNK_SAMPLES, rms);
+            }
 
             // Envoi de l'index du bloc prêt dans la file d'émission réseau (non bloquant)
             if (_txQueue) {
@@ -509,6 +512,7 @@ bool LiveAudioStreamer::start(GeminiLiveClient* client) {
     _sumRms = 0;
     _rmsCount = 0;
     _peakRms = 0;
+    _lastChunkRms = 0;
     _activityStartSent = false;
     _activityEndSent = false;
 
@@ -977,6 +981,7 @@ uint32_t LiveAudioStreamer::computeRms(const int16_t* samples, size_t count) {
     uint32_t rms = static_cast<uint32_t>(sqrt((double)sumSq / count));
     _sumRms += rms;
     _rmsCount++;
+    _lastChunkRms = rms;
     if (rms > _peakRms) {
         _peakRms = rms;
     }
@@ -1012,7 +1017,10 @@ bool LiveAudioStreamer::pushSimulatedChunk(const int16_t* samples, size_t count)
     _ringBuffers[freeSlot].state = LiveBufferState::READY;
     _blocksAcquired++;
     _blocksCompleted++;
-    computeRms(samples, count);
+    uint32_t rms = computeRms(samples, count);
+    if (_chunkCallback) {
+        _chunkCallback(samples, count, rms);
+    }
     _nativeTxQueue.push((size_t)freeSlot);
     if (_nativeTxQueue.size() > _maxQueueOccupancy) {
         _maxQueueOccupancy = _nativeTxQueue.size();

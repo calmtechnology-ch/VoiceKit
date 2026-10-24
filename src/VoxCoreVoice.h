@@ -241,6 +241,17 @@ public:
      */
     void onListeningFinished(VoidCallback cb) { _onListeningFinished = std::move(cb); }
 
+    /**
+     * @brief Retourne le niveau RMS instantané du dernier bloc micro PCM 16 kHz capturé.
+     */
+    uint32_t getAudioLevel() const { return _streamer.getLastChunkRms(); }
+
+    /**
+     * @brief Enregistre un callback léger invoqué sur chaque bloc audio PCM 16 kHz acquis (32 ms).
+     * @param cb Callback recevant les échantillons PCM, leur nombre et le niveau RMS calculé.
+     */
+    void onAudioChunk(LiveAudioStreamer::AudioChunkCallback cb) { _streamer.onAudioChunk(std::move(cb)); }
+
     // =========================================================================
     // API Conversation Bidirectionnelle (v0.4.0 / v0.4.1.1)
     // =========================================================================
