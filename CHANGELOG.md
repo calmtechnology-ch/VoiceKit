@@ -7,6 +7,37 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.2.1] - 2026-10-24 (Conditionnement Bibliothèque Installable PlatformIO & Arduino IDE)
+
+### Conditionnement & Structure de Bibliothèque
+- **Conformité Arduino 1.5+ et PlatformIO Registry** :
+  - Déplacement et organisation de l'ensemble des en-têtes publics et internes dans le répertoire `src/` (`src/VoxCoreVoice.h`, `src/VoiceKitConfig.h`, `src/core/`, `src/hal/`).
+  - Suppression de la dépendance obligatoire à `-I../../include` : les projets consommateurs découvrent désormais automatiquement les en-têtes via la résolution native de bibliothèque de PlatformIO et de l'Arduino IDE.
+  - Mise en place d'en-têtes relais (`#pragma once`) assurant une rétrocompatibilité totale ascendante et descendante.
+- **Manifestes de Bibliothèque** :
+  - `library.json` : Nommage unifié `"VoiceKit"`, version `0.2.1`, compatibilité plateforme `espressif32`, framework `arduino`, dépendances `M5CoreS3@1.0.0` et `M5Unified@0.2.23`, options de compilation `-std=gnu++17` et `-DVOXCORE_AUDIO_MODE=2`.
+  - `library.properties` : Version `0.2.1`, catégorie `Audio`, architectures `esp32`, dépendances déclarées pour l'Arduino IDE.
+- **Licence Officielle** :
+  - Ajout du fichier `LICENSE` (Licence MIT).
+
+### Compatibilité & Exemples
+- **Exemple Arduino IDE Autonome (`examples/MinimalTTS_Arduino/`)** :
+  - Ajout du croquis `MinimalTTS_Arduino.ino` directement compatible avec l'installateur de bibliothèque ZIP de l'Arduino IDE 2.x.
+  - Documentation intégrée des prérequis matériels CoreS3 (PSRAM OPI, schéma de partition Huge APP / 16M).
+- **Nettoyage des Exemples PlatformIO** :
+  - Suppression des drapeaux de contournement `-I../../include` dans `examples/MinimalTTS/platformio.ini` et `examples/OrientationClockVoice/platformio.ini`.
+  - Validation réussie de la compilation sans chemin d'accès absolu ou relatif forcé.
+- **Validation Projet Externe (`tests/external-consumer/`)** :
+  - Création d'un projet PlatformIO tiers indépendant validant l'installation de VoiceKit directement depuis GitHub via `lib_deps`.
+
+### Sanctuaire Audio & Zéro Régression
+- **Conservation stricte et intégrale du moteur VoxCore** :
+  - Empreintes SHA-256 rigoureusement identiques à la version de référence v0.2.0 (`4670a27`) pour l'ensemble des fichiers critiques du moteur : `GeminiLiveClient.cpp`, `LiveAudioPlayer.cpp`, `LiveSessionController.cpp`, `WiFiManager.cpp`, `AudioTraceLog.cpp`, `M5AudioOutput.cpp` et `GoogleRoots.h`.
+  - Zéro modification du transport TLS, de la gestion DMA audio, du tampon PSRAM ou du protocole BidiGenerateContent.
+  - Zéro identifiant confidentiel (clés API, identifiants Wi-Fi) publié dans le dépôt.
+
+---
+
 ## [0.2.0] - 2026-10-23 (Reconstruction sur la Base Stable de VoxCore)
 
 ### Changement Fondamental de Méthode

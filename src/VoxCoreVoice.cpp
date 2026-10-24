@@ -27,7 +27,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _lastError = "";
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.2.0 — Moteur Audio & TLS VoxCore  ");
+    Serial.println("  VoxCore VoiceKit v0.2.1 — Moteur Audio & TLS VoxCore  ");
     Serial.printf("  Mode Audio : %s\n",
                   (LiveAudioPlayer::getCompiledAudioMode() == 1) ? "MODE 1 (REACTIVE_CALLBACK)" : "MODE 2 (DEDICATED_AUDIO_TASK)");
     Serial.println("========================================================");
