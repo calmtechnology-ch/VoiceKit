@@ -7,6 +7,57 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.3.0] - 2026-10-24 (Ajout Reconnaissance Vocale STT & Push-to-Talk)
+
+### Reconnaissance Vocale STT (Speech-to-Text)
+- **Intégration des composants éprouvés de VoxCore et VoxTranscribe** :
+  - `LiveAudioStreamer` (`src/core/LiveAudioStreamer.h`, `src/core/LiveAudioStreamer.cpp`) : Gestionnaire d'acquisition et de streaming PCM 16 kHz vers Gemini Live.
+  - `IAudioInput` (`src/hal/IAudioInput.h`) : Abstraction matérielle de l'entrée microphone.
+  - `M5AudioInput` (`src/hal/M5AudioInput.h`, `src/hal/M5AudioInput.cpp`) : Pilote matériel pour le double microphone ES7210 du M5Stack CoreS3 via `M5.Mic`.
+  - `HardwareManager` (`src/hal/HardwareManager.h`) : Arbitrage matériel centralisé pour le partage propre du bus I2S entre haut-parleur et microphone.
+- **Acquisition & Streaming Découplé** :
+  - Échantillonnage PCM 16 kHz, 16 bits mono avec double-buffering ping-pong DMA 512 échantillons (32 ms).
+  - Pipeline FreeRTOS découplé (`live_mic_task` pour la capture, `live_tx_task` pour l'envoi réseau sans bloquer la boucle Arduino).
+  - Protocole Gemini Live BidiGenerateContent complet avec signalisation officielle `activityStart` au début de l'écoute et `activityEnd` au relâchement.
+- **Règles Strictes de Transcription & Résilience** :
+  - Transcriptions partielles (`interimInputTranscription`) et finales (`inputTranscription`) transmises avec le booléen `isFinal`.
+  - **Zéro hallucination** : Règle formelle interdisant d'inventer une transcription finale à partir de fragments partiels lors d'un silence ou d'une absence de retour serveur.
+  - Surveillance automatique d'un timeout de silence paramétrable (`sttFinalTimeoutMs`, défaut 4000 ms) avec retour propre à l'état `READY`.
+  - **Arbitrage I2S Anti-Larsen** : Coupure automatique du haut-parleur pendant l'écoute (`muteSpeakerDuringSTT = true`) et réarmement automatique en fin de dictée.
+
+### Extension de l'API Publique `VoxCoreVoice`
+- **Méthodes STT Non-Bloquantes** :
+  - `bool startListening()` : Démarre la capture microphone et le streaming vers Gemini Live. Interrompt prioritairement toute synthèse TTS en cours.
+  - `bool stopListening()` : Arrête l'acquisition, envoie `activityEnd` et attend la transcription finale.
+  - `void cancelListening()` : Annulation immédiate de la dictée sans attendre de résultat.
+  - `bool isListening() const` : Indique si le microphone est activement en cours de capture.
+  - `bool isTranscribing() const` : Indique que la voix a été capturée et que la transcription finale est en attente.
+  - `void onTranscription(TranscriptionCallback cb)` : Callback de réception des transcriptions `(const String& text, bool isFinal)`.
+  - `void onListeningStarted(VoidCallback cb)` et `void onListeningFinished(VoidCallback cb)`.
+- **Nouveaux États Opérationnels (`VoiceState`)** :
+  - `VoiceState::LISTENING` : Écoute micro active (Push-to-Talk enfoncé).
+  - `VoiceState::TRANSCRIBING` : Relâchement effectué, attente de transcription finale.
+
+### Nouvelle Application Exemple (`examples/MinimalSTT/`)
+- **Démonstrateur Push-to-Talk Autonome** :
+  - Bouton tactile grand format « DICTER » sur l'écran LCD du CoreS3.
+  - Acquisition pendant l'appui continu, arrêt et transmission au relâchement.
+  - Machine d'état visuelle claire : `PRÊT` (vert), `ÉCOUTE` (rouge clignotant), `TRANSCRIPTION` (orange), `TERMINÉ` (vert foncé), `ERREUR` (rouge).
+  - Affichage dynamique des transcriptions partielles et finales à l'écran et sur le port série (115200 bauds).
+  - Configuration PlatformIO installable sans copie de sources (`lib_deps`).
+
+### Non-Régression Absolue TTS v0.2.1
+- **Empreintes SHA-256 identiques bit à bit** :
+  - `LiveAudioPlayer.cpp`, `GeminiLiveClient.cpp`, `LiveSessionController.cpp`, `WiFiManager.cpp`, `AudioTraceLog.cpp`, `M5AudioOutput.cpp` et `GoogleRoots.h` sont strictement identiques à la version v0.2.1.
+- **Compilation vérifiée avec succès** :
+  - `examples/MinimalTTS` : SUCCESS (RAM 20.5%, Flash 55.5%).
+  - `examples/OrientationClockVoice` : SUCCESS (RAM 48.6%, Flash 75.8%).
+  - `examples/MinimalSTT` : SUCCESS (RAM 20.5%, Flash 55.9%).
+- **Validation automatisée native** :
+  - 25 suites de tests unitaires couvrant l'intégralité du cycle de vie TTS et STT (165 validations passées, 0 échec).
+
+---
+
 ## [0.2.1] - 2026-10-24 (Conditionnement Bibliothèque Installable PlatformIO & Arduino IDE)
 
 ### Conditionnement & Structure de Bibliothèque

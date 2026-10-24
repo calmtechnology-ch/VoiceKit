@@ -5,8 +5,14 @@
 
 #ifdef ARDUINO
 #include <Arduino.h>
-#else
+#elif __has_include("native_mock/Arduino.h")
+#include "native_mock/Arduino.h"
+#elif __has_include("test/native_mock/Arduino.h")
 #include "test/native_mock/Arduino.h"
+#elif __has_include("tests/native_mock/Arduino.h")
+#include "tests/native_mock/Arduino.h"
+#else
+#include <Arduino.h>
 #endif
 
 // =============================================================================

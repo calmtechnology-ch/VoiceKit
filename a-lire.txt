@@ -6,3 +6,7 @@
 
 pio run -d examples/MinimalTTS -t upload
 pio device monitor -d examples/MinimalTTS -b 115200
+
+-pouvoir changer de voix 
+ et le style d'intonation , le language, le ton , etc, le tout configurer au demarage avec des  paramètres de la classe !!
+

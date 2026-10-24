@@ -41,6 +41,10 @@ public:
         if (_onData) _onData(data, len);
     }
 
+    void simulateError(const char* err) {
+        if (_onError) _onError(err);
+    }
+
     const std::string& getLastSent() const { return _lastSent; }
     size_t getSendCount() const { return _sendCount; }
 

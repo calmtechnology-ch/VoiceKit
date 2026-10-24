@@ -88,6 +88,8 @@ inline void delay(uint32_t ms) {
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 }
 
+inline void configTime(long, int, const char*, const char* = nullptr, const char* = nullptr) {}
+
 #ifndef PROGMEM
 #define PROGMEM
 #endif

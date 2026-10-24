@@ -24,6 +24,7 @@ public:
     void mode(int) {}
     void begin(const char*, const char*) {}
     void reconnect() {}
+    void setAutoReconnect(bool) {}
     void disconnect(bool = false, bool = false) {}
 
 private:

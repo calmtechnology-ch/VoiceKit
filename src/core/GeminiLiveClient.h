@@ -44,6 +44,8 @@ public:
     // Configuration applicative de la session (VoxCore v0.2.0)
     void setSystemInstruction(const String& instruction) { _systemInstruction = instruction; }
     const String& getSystemInstruction() const { return _systemInstruction; }
+    const String& getModel() const { return _model; }
+    const String& getVoice() const { return _voice; }
     void setTools(const std::vector<ToolDeclaration>& tools) { _tools = tools; }
     const std::vector<ToolDeclaration>& getTools() const { return _tools; }
 

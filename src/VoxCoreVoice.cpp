@@ -27,12 +27,12 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _lastError = "";
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.2.1 — Moteur Audio & TLS VoxCore  ");
+    Serial.println("  VoxCore VoiceKit v0.3.0 — TTS + STT (Gemini Live)    ");
     Serial.printf("  Mode Audio : %s\n",
                   (LiveAudioPlayer::getCompiledAudioMode() == 1) ? "MODE 1 (REACTIVE_CALLBACK)" : "MODE 2 (DEDICATED_AUDIO_TASK)");
     Serial.println("========================================================");
 
-    // 1. Initialisation HAL audio matérielle (M5Unified Speaker)
+    // 1. Initialisation HAL audio matérielle (Sortie : Haut-parleur M5Unified)
     if (_config.audioOutput) {
         _audioOutput = _config.audioOutput;
     } else {
@@ -48,7 +48,19 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         return false;
     }
 
-    // 2. Initialisation du lecteur LiveAudioPlayer (tampon PSRAM, tâche audio FreeRTOS)
+    // 2. Initialisation HAL audio matérielle (Entrée : Microphone M5Unified ES7210)
+    if (_config.audioInput) {
+        _audioInput = _config.audioInput;
+    } else {
+        _internalAudioInput = std::unique_ptr<M5AudioInput>(new M5AudioInput());
+        _audioInput = _internalAudioInput.get();
+    }
+
+    // Arbitrage centralisé I2S
+    HardwareManager::getInstance().setAudioOutput(_audioOutput);
+    HardwareManager::getInstance().setAudioInput(_audioInput);
+
+    // 3. Initialisation du lecteur LiveAudioPlayer (tampon PSRAM, tâche audio FreeRTOS)
     _player.setAudioOutput(_audioOutput);
     _player.setVolume(_config.volume);
     _player.setPlaybackAllowed(true);
@@ -61,7 +73,18 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         return false;
     }
 
-    // 3. Initialisation du client Gemini Live (protocole BidiGenerateContent)
+    // 4. Initialisation du streamer audio LiveAudioStreamer (capture PCM 16 kHz et double-buffering)
+    _streamer.setAudioInput(_audioInput);
+    _streamer.setAudioOutput(_audioOutput);
+    if (!_streamer.begin()) {
+        _lastError = "Echec initialisation memoire LiveAudioStreamer";
+        Serial.printf("[VoiceKit] ERREUR : %s\n", _lastError.c_str());
+        setState(VoiceState::ERROR_STATE);
+        if (_onError) _onError(_lastError);
+        return false;
+    }
+
+    // 5. Initialisation du client Gemini Live (protocole BidiGenerateContent)
     if (!_client.begin(_config.apiKey.c_str(), _config.model.c_str(), _config.voice.c_str())) {
         _lastError = _client.getLastError();
         Serial.printf("[VoiceKit] ERREUR : %s\n", _lastError.c_str());
@@ -72,7 +95,12 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
 
     _client.setSystemInstruction(_config.systemInstruction);
 
-    // 4. Initialisation du contrôleur de session LiveSessionController
+    // Enregistrement de l'écouteur de transcriptions entrantes utilisateur
+    _client.setOnInputTranscription([this](const String& text, bool isFinal) {
+        handleIncomingTranscription(text, isFinal);
+    });
+
+    // 6. Initialisation du contrôleur de session LiveSessionController
     if (!_session.begin(&_client, &_player)) {
         _lastError = "Echec initialisation LiveSessionController";
         Serial.printf("[VoiceKit] ERREUR : %s\n", _lastError.c_str());
@@ -85,16 +113,23 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _session.setOnStateChanged([this](LiveSessionState s) {
         switch (s) {
             case LiveSessionState::CONNECTED:
-                setState(VoiceState::READY);
-                if (_onReady) {
-                    _onReady();
+                // Si on n'est pas déjà en train d'écouter ou de transcrire
+                if (_state != VoiceState::LISTENING && _state != VoiceState::TRANSCRIBING) {
+                    setState(VoiceState::READY);
+                    if (_onReady) {
+                        _onReady();
+                    }
                 }
                 break;
             case LiveSessionState::WAITING_RESPONSE:
-                setState(VoiceState::WAITING_RESPONSE);
+                if (_state != VoiceState::LISTENING && _state != VoiceState::TRANSCRIBING) {
+                    setState(VoiceState::WAITING_RESPONSE);
+                }
                 break;
             case LiveSessionState::PLAYING:
-                setState(VoiceState::SPEAKING);
+                if (_state != VoiceState::LISTENING && _state != VoiceState::TRANSCRIBING) {
+                    setState(VoiceState::SPEAKING);
+                }
                 break;
             case LiveSessionState::ERROR:
                 _lastError = _session.getLastError();
@@ -109,6 +144,10 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     });
 
     _session.setOnFirstAudio([this]() {
+        // En mode STT pur ou pendant l'écoute, le haut-parleur est silencieux
+        if (_state == VoiceState::LISTENING || _state == VoiceState::TRANSCRIBING) {
+            return;
+        }
         setState(VoiceState::SPEAKING);
         if (_onSpeechStarted) {
             _onSpeechStarted();
@@ -116,12 +155,15 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     });
 
     _session.setOnPlaybackFinished([this]() {
+        if (_state == VoiceState::LISTENING || _state == VoiceState::TRANSCRIBING) {
+            return;
+        }
         setState(VoiceState::READY);
         if (_onSpeechFinished) {
             _onSpeechFinished();
         }
 
-        // Dépilement de la requête suivante en file FIFO
+        // Dépilement de la requête TTS suivante en file FIFO
         if (!_textQueue.empty()) {
             String nextText = _textQueue.front();
             _textQueue.pop();
@@ -131,13 +173,14 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
 
     _session.setOnError([this](const String& err) {
         _lastError = err;
+        _pendingText = "";
         setState(VoiceState::ERROR_STATE);
         if (_onError) {
             _onError(err);
         }
     });
 
-    // 5. Connectivité Wi-Fi
+    // 7. Connectivité Wi-Fi
     if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
         if (!_config.wifiSSID.isEmpty()) {
             Serial.printf("[VoiceKit] Demarrage WiFiManager gere (SSID: %s)...\n", _config.wifiSSID.c_str());
@@ -152,11 +195,13 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         setState(VoiceState::IDLE);
     }
 
-    Serial.println("[VoiceKit] Initialisation terminee avec succes.");
+    Serial.println("[VoiceKit] Initialisation TTS + STT terminee avec succes.");
     return true;
 }
 
 void VoxCoreVoice::update() {
+    const uint32_t now = millis();
+
     // 1. Mise à jour réseau Wi-Fi / SNTP si en mode MANAGED_WIFI
     if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
         _wifi.tick();
@@ -182,6 +227,13 @@ void VoxCoreVoice::update() {
                 }
             }
         }
+        if (_state == VoiceState::CONNECTING_SERVICE && WiFi.status() != WL_CONNECTED) {
+            _lastError = "Perte Wi-Fi pendant connexion";
+            _pendingText = "";
+            _connectingStartTimeMs = 0;
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+        }
     }
 
     // 2. Traitement régulier des moteurs VoxCore
@@ -189,17 +241,50 @@ void VoxCoreVoice::update() {
     _player.tick();
     _session.tick();
 
-    // 3. Traitement des requêtes en attente
+    // 3. Traitement régulier du streamer audio STT
+    if (_streamer.isStreaming()) {
+        if (!_client.isConnected()) {
+            _lastError = "Perte connexion Gemini Live pendant ecoute micro";
+            Serial.printf("[VoiceKit] %s\n", _lastError.c_str());
+            _streamer.cancel();
+            _player.setPlaybackAllowed(true);
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+        } else if (!_streamer.tick()) {
+            if (_streamer.isQueueSaturated()) {
+                _lastError = "File emission saturee (reseau lent)";
+            } else {
+                _lastError = _streamer.getLastError();
+            }
+            Serial.printf("[VoiceKit] Erreur streaming micro : %s\n", _lastError.c_str());
+            _streamer.cancel();
+            _player.setPlaybackAllowed(true);
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+        }
+    }
+
+    // 4. Surveillance du timeout de transcription finale (STT)
+    if (_state == VoiceState::TRANSCRIBING && _transcriptionPending) {
+        if (_stopListeningTimeMs > 0 && (now - _stopListeningTimeMs > _config.sttFinalTimeoutMs)) {
+            Serial.println("[VoiceKit] Avertissement : Timeout attente transcription finale de Gemini Live");
+            _transcriptionPending = false;
+            _player.setPlaybackAllowed(true);
+            setState(VoiceState::READY);
+            // Règle formelle v0.3.0 : NE PAS inventer de transcription finale à partir de l'intérim.
+        }
+    }
+
+    // 5. Traitement des requêtes TTS en attente
     if (!_pendingText.isEmpty()) {
-        if (_session.getState() == LiveSessionState::CONNECTED) {
+        if (_session.getState() == LiveSessionState::CONNECTED && !isListening() && !isTranscribing()) {
             String textToSay = _pendingText;
             _pendingText = "";
             dispatchSpeech(textToSay);
         }
     }
 
-    // 4. Surveillance des timeouts
-    const uint32_t now = millis();
+    // 6. Surveillance des timeouts de connexion initiale
     if (_state == VoiceState::CONNECTING_SERVICE) {
         if (_connectingStartTimeMs > 0 && (now - _connectingStartTimeMs > GEMINI_LIVE_CONNECT_TIMEOUT_MS + 2000)) {
             Serial.println("[VoiceKit] ERREUR : Delai de connexion depasse vers Gemini Live");
@@ -211,6 +296,10 @@ void VoxCoreVoice::update() {
         }
     }
 }
+
+// =============================================================================
+// Implémentation TTS (Text-to-Speech)
+// =============================================================================
 
 bool VoxCoreVoice::say(const String& text) {
     if (text.isEmpty()) {
@@ -229,7 +318,7 @@ bool VoxCoreVoice::say(const String& text) {
                 return false;
 
             case QueuePolicy::INTERRUPT_CURRENT:
-                Serial.println("[VoiceKit] say() interruption demandee de la parole en cours");
+                Serial.println("[VoiceKit] say() interruption demandee de l'activite en cours");
                 stop();
                 break;
 
@@ -270,6 +359,9 @@ bool VoxCoreVoice::say(const String& text) {
         }
     }
 
+    // Réarmer la restitution haut-parleur
+    _player.setPlaybackAllowed(true);
+
     // Si la session est prête, envoi direct
     if (_session.getState() == LiveSessionState::CONNECTED) {
         return dispatchSpeech(text);
@@ -309,7 +401,13 @@ void VoxCoreVoice::stop() {
     while (!_textQueue.empty()) {
         _textQueue.pop();
     }
+    if (isListening() || isTranscribing()) {
+        _streamer.cancel();
+        _transcriptionPending = false;
+        _finalTranscriptionReceived = false;
+    }
     _session.requestStop();
+    _player.setPlaybackAllowed(true);
     setState(VoiceState::READY);
 }
 
@@ -323,6 +421,8 @@ bool VoxCoreVoice::isSpeaking() const {
 
 bool VoxCoreVoice::isBusy() const {
     return (isSpeaking() || 
+            isListening() ||
+            isTranscribing() ||
             _session.getState() == LiveSessionState::WAITING_RESPONSE || 
             !_pendingText.isEmpty() || 
             !_textQueue.empty());
@@ -335,4 +435,134 @@ void VoxCoreVoice::setVolume(uint8_t percent) {
 
 uint8_t VoxCoreVoice::getVolume() const {
     return _player.getVolume();
+}
+
+// =============================================================================
+// Implémentation STT (Speech-to-Text)
+// =============================================================================
+
+bool VoxCoreVoice::startListening() {
+    _lastError = "";
+
+    // 1. Si une restitution sonore TTS ou attente de réponse est en cours, l'interrompre prioritairement
+    if (_session.getState() == LiveSessionState::WAITING_RESPONSE || isSpeaking()) {
+        _session.requestStop();
+    }
+    if (isSpeaking()) {
+        _player.stop(AudioStopReason::NEW_TURN);
+    }
+    if (_config.muteSpeakerDuringSTT) {
+        _player.setPlaybackAllowed(false);
+    }
+
+    // 2. Vérification réseau
+    if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
+        if (!_wifi.isConnected() || !_wifi.isTimeSynced()) {
+            _lastError = "Wi-Fi non connecte ou horloge non synchronisee";
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+    } else {
+        if (WiFi.status() != WL_CONNECTED || !isSystemTimeValid()) {
+            _lastError = "Wi-Fi hote non connecte ou horloge non synchronisee";
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+    }
+
+    // 3. Vérification de la disponibilité du client Gemini Live
+    if (!_client.isConnected() || !_client.isSetupComplete()) {
+        _lastError = "Session Gemini Live non prete";
+        Serial.printf("[VoiceKit] startListening() refuse : %s\n", _lastError.c_str());
+        if (_onError) _onError(_lastError);
+        return false;
+    }
+
+    // 4. Réinitialisation des états de transcription pour ce tour
+    _finalTranscriptionReceived = false;
+    _transcriptionPending = false;
+    _lastInterimText = "";
+    _lastFinalText = "";
+
+    // 5. Démarrage effectif du streamer (envoie activityStart et active double-buffering)
+    if (!_streamer.start(&_client)) {
+        _lastError = _streamer.getLastError();
+        Serial.printf("[VoiceKit] ERREUR startListening() : %s\n", _lastError.c_str());
+        _player.setPlaybackAllowed(true);
+        setState(VoiceState::ERROR_STATE);
+        if (_onError) _onError(_lastError);
+        return false;
+    }
+
+    setState(VoiceState::LISTENING);
+    if (_onListeningStarted) {
+        _onListeningStarted();
+    }
+    Serial.println("[VoiceKit] startListening() : Acquisition microphone et streaming actifs");
+    return true;
+}
+
+bool VoxCoreVoice::stopListening() {
+    if (!isListening() && !_streamer.isStreaming()) {
+        return false;
+    }
+
+    Serial.println("[VoiceKit] stopListening() : Arret capture micro et envoi de activityEnd...");
+    bool stopped = _streamer.stop();
+    _transcriptionPending = true;
+    _stopListeningTimeMs = millis();
+
+    if (_onListeningFinished) {
+        _onListeningFinished();
+    }
+
+    if (!stopped) {
+        _lastError = _streamer.getLastError();
+        Serial.printf("[VoiceKit] Avertissement stopListening() : %s\n", _lastError.c_str());
+    }
+
+    setState(VoiceState::TRANSCRIBING);
+    return true;
+}
+
+void VoxCoreVoice::cancelListening() {
+    Serial.println("[VoiceKit] cancelListening() : Annulation ecoute sans transcription");
+    _streamer.cancel();
+    _transcriptionPending = false;
+    _finalTranscriptionReceived = false;
+    _lastInterimText = "";
+    _lastFinalText = "";
+    _player.setPlaybackAllowed(true);
+    setState(VoiceState::READY);
+}
+
+bool VoxCoreVoice::isListening() const {
+    return (_state == VoiceState::LISTENING || _streamer.isStreaming());
+}
+
+bool VoxCoreVoice::isTranscribing() const {
+    return (_state == VoiceState::TRANSCRIBING || _transcriptionPending);
+}
+
+void VoxCoreVoice::handleIncomingTranscription(const String& text, bool isFinal) {
+    if (isFinal) {
+        Serial.printf("[VoiceKit] Transcription FINALE recue : \"%s\"\n", text.c_str());
+        _finalTranscriptionReceived = true;
+        _transcriptionPending = false;
+        _lastFinalText = text;
+        _player.setPlaybackAllowed(true);
+
+        if (_state == VoiceState::TRANSCRIBING || _state == VoiceState::LISTENING) {
+            setState(VoiceState::READY);
+        }
+
+        if (_onTranscription) {
+            _onTranscription(text, true);
+        }
+    } else {
+        _lastInterimText = text;
+        if (_onTranscription) {
+            _onTranscription(text, false);
+        }
+    }
 }

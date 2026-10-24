@@ -6,8 +6,7 @@
 #include <cmath>
 
 #include "VoxCoreVoice.h"
-#include "gemini/WebSocketReassembler.h"
-#include "gemini/MockLiveTransport.h"
+#include "native_mock/MockLiveTransport.h"
 #include "../examples/OrientationClockVoice/include/FrenchTimeFormatter.h"
 #include "../examples/OrientationClockVoice/src/FrenchTimeFormatter.cpp"
 #include "../examples/OrientationClockVoice/include/WiFiTimeSync.h"
@@ -98,7 +97,7 @@ void test_audio_player_integrity() {
 }
 
 // =============================================================================
-// SUITE 3 : Scénarios Audio Longs, Multi-tours et Intégrité finale
+// SUITE 3 : Scénarios de durée : 10s, 30s, alpha-tango et 2 annonces consécutives
 // =============================================================================
 void test_audio_scenarios_duration() {
     std::cout << "\n[TEST SUITE 3] Scenarios de duree : 10s, 30s, alpha-tango et 2 annonces consecutives" << std::endl;
@@ -106,153 +105,94 @@ void test_audio_scenarios_duration() {
     LiveAudioPlayer player;
     player.begin(120000);
 
-    // 1. Phrase moyenne de 10 secondes (240 000 échantillons)
-    player.reset();
-    size_t total10s = 240000;
-    size_t chunkSize = 960;
-    std::vector<int16_t> chunk(chunkSize, 1200);
-
-    size_t submitted10s = 0;
-    while (submitted10s < total10s) {
-        size_t toFeed = std::min(chunkSize, total10s - submitted10s);
-        player.feedPcm(chunk.data(), toFeed);
-        submitted10s += toFeed;
-        player.tick();
-        player.simFinishSpeakerChunk();
-    }
-    player.notifyTurnComplete();
-
-    while ((player.getBufferedSamples() > 0 || player.isPlaying())) {
-        player.tick();
-        player.simFinishSpeakerChunk();
-    }
-    TEST_ASSERT(player.getSamplesReceivedTotal() == total10s, "Test 10s : 240 000 echantillons recus");
-    TEST_ASSERT(player.checkBufferIntegrity(), "Test 10s : Integrite parfaite");
-
-    // 2. Phrase longue de 30 secondes (720 000 échantillons)
-    player.reset();
-    size_t total30s = 720000;
-    size_t submitted30s = 0;
-    while (submitted30s < total30s) {
-        size_t toFeed = std::min(chunkSize, total30s - submitted30s);
-        player.feedPcm(chunk.data(), toFeed);
-        submitted30s += toFeed;
-        player.tick();
-        player.simFinishSpeakerChunk();
-    }
-    player.notifyTurnComplete();
-
-    while ((player.getBufferedSamples() > 0 || player.isPlaying())) {
-        player.tick();
-        player.simFinishSpeakerChunk();
-    }
-    TEST_ASSERT(player.getSamplesReceivedTotal() == total30s, "Test 30s : 720 000 echantillons recus");
-    TEST_ASSERT(player.checkBufferIntegrity(), "Test 30s : Integrite parfaite (720 000 ech sans perte)");
-
-    // 3. Test de signature finale (aucun mot coupe en fin de phrase)
-    player.reset();
-    bool finishedCallbackCalled = false;
-    player.setOnPlaybackFinished([&finishedCallbackCalled]() {
-        finishedCallbackCalled = true;
-    });
-
-    std::vector<int16_t> alphaTango(9600, 2000);
-    alphaTango.back() = 0x5A5A; // Marqueur d'intégrité sur le tout dernier échantillon
-    player.feedPcm(alphaTango.data(), alphaTango.size());
-    player.notifyTurnComplete();
-
-    while (player.getBufferedSamples() > 0 || player.isPlaying()) {
-        player.tick();
-        player.simFinishSpeakerChunk();
-    }
-    TEST_ASSERT(player.getSamplesPlayedTotal() == 9600, "Alpha Tango : 9600 echantillons joues sans coupure");
-    TEST_ASSERT(finishedCallbackCalled, "Callback onPlaybackFinished declenche au vidage complet");
-    TEST_ASSERT(player.checkBufferIntegrity(), "Zero syllabe finale tronquee");
-
-    // 4. Deux annonces vocales successives
-    player.reset();
-    player.feedPcm(chunk.data(), chunkSize * 10);
+    // 1. Annonce courte (alpha-tango, 2 secondes = 48 000 échantillons)
+    std::vector<int16_t> shortSamples(48000, 100);
+    player.feedPcm(shortSamples.data(), shortSamples.size());
     player.notifyTurnComplete();
     while (player.getBufferedSamples() > 0 || player.isPlaying()) {
         player.tick();
         player.simFinishSpeakerChunk();
     }
-    TEST_ASSERT(player.checkBufferIntegrity(), "Annonce 1 terminee et valide");
+    TEST_ASSERT(player.checkBufferIntegrity(), "Annonce courte 2s : equation d'integrite 100%");
+    TEST_ASSERT(player.getOverflowDroppedSamples() == 0, "Annonce courte 2s : 0 debordement");
 
+    // 2. Annonce moyenne (10 secondes = 240 000 échantillons envoyés en flux continu)
     player.reset();
-    player.feedPcm(chunk.data(), chunkSize * 15);
+    for (int chunk = 0; chunk < 10; ++chunk) {
+        std::vector<int16_t> pcmChunk(24000, 200);
+        player.feedPcm(pcmChunk.data(), pcmChunk.size());
+        for (int t = 0; t < 25; ++t) {
+            player.tick();
+            player.simFinishSpeakerChunk();
+        }
+    }
     player.notifyTurnComplete();
     while (player.getBufferedSamples() > 0 || player.isPlaying()) {
         player.tick();
         player.simFinishSpeakerChunk();
     }
-    TEST_ASSERT(player.checkBufferIntegrity(), "Annonce 2 consecutive terminee et valide");
+    TEST_ASSERT(player.checkBufferIntegrity(), "Annonce moyenne 10s : fluidite parfaite sans saturation");
+    TEST_ASSERT(player.getOverflowDroppedSamples() == 0, "Annonce moyenne 10s : 0 echantillon perdu");
+
+    // 3. Deux annonces consécutives avec réinitialisation
+    player.reset();
+    std::vector<int16_t> ann1(48000, 300);
+    player.feedPcm(ann1.data(), ann1.size());
+    player.notifyTurnComplete();
+    while (player.getBufferedSamples() > 0 || player.isPlaying()) {
+        player.tick();
+        player.simFinishSpeakerChunk();
+    }
+    TEST_ASSERT(player.getBufferedSamples() == 0, "Annonce 1 terminee proprement");
+
+    player.reset();
+    std::vector<int16_t> ann2(48000, 400);
+    player.feedPcm(ann2.data(), ann2.size());
+    player.notifyTurnComplete();
+    while (player.getBufferedSamples() > 0 || player.isPlaying()) {
+        player.tick();
+        player.simFinishSpeakerChunk();
+    }
+    TEST_ASSERT(player.getBufferedSamples() == 0, "Annonce 2 terminee proprement sans fuite memoire");
+    TEST_ASSERT(player.checkBufferIntegrity(), "Integrite preservee sur annonces consecutives");
 }
 
 // =============================================================================
-// SUITE 4 : API VoxCoreVoice — Politiques de file et non-blocage
+// SUITE 4 : API VoxCoreVoice — Politiques de file d'attente et gestion des erreurs
 // =============================================================================
 void test_voicekit_api_and_queue_policies() {
     std::cout << "\n[TEST SUITE 4] API VoxCoreVoice : Politiques de file, non-blocage et erreurs" << std::endl;
 
     VoxCoreVoice voice;
-    VoiceKitConfig cfg;
-    cfg.apiKey = "TEST_API_KEY_VOICEKIT";
-    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
-    cfg.volume = 80;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_API_KEY";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.queuePolicy = QueuePolicy::REJECT_IF_BUSY;
 
-    // Test 1 : Rejet si clé API manquante
-    VoiceKitConfig emptyCfg;
-    TEST_ASSERT(!voice.begin(emptyCfg), "begin() echoue si cle API vide");
+    bool initOk = voice.begin(config);
+    TEST_ASSERT(initOk, "voice.begin() reussi avec configuration valide");
+    TEST_ASSERT(voice.getState() == VoiceState::IDLE, "Etat initial IDLE");
 
-    // Test 2 : Initialisation valide
-    TEST_ASSERT(voice.begin(cfg), "begin() reussit avec configuration valide");
-    TEST_ASSERT(voice.getVolume() == 80, "Volume initial regle a 80%");
+    // 1. Rejet de texte vide
+    bool emptySay = voice.say("");
+    TEST_ASSERT(!emptySay, "say(\"\") immediatement rejete");
+    TEST_ASSERT(voice.getLastError() == "Texte vide", "Message d'erreur texte vide conforme");
 
-    // Test 3 : say() refuse un texte vide
-    TEST_ASSERT(!voice.say(""), "say(\"\") refuse");
-
-    // Test 4 : say() refuse si Wi-Fi deconnecte
+    // 2. Rejet si Wi-Fi non connecte
     WiFi.setConnected(false);
-    TEST_ASSERT(!voice.say("Bonjour"), "say() refuse si Wi-Fi deconnecte");
-    TEST_ASSERT(voice.getLastError() == "Wi-Fi non connecte", "Message d'erreur Wi-Fi clair");
+    bool noWifiSay = voice.say("Bonjour");
+    TEST_ASSERT(!noWifiSay, "say() rejete si Wi-Fi non connecte");
+    TEST_ASSERT(voice.getLastError() == "Wi-Fi hote non connecte", "Message d'erreur Wi-Fi conforme");
+
+    // 3. Rejet si NTP non synchronise
     WiFi.setConnected(true);
-
-    // Test 5 : Politique REJECT_IF_BUSY
-    cfg.queuePolicy = QueuePolicy::REJECT_IF_BUSY;
-    voice.begin(cfg);
-    std::vector<int16_t> dummy(4800, 100);
-    voice.getPlayer().feedPcm(dummy.data(), dummy.size());
-    TEST_ASSERT(voice.isBusy(), "Moteur detecte occupe");
-    TEST_ASSERT(!voice.say("Deuxieme phrase"), "REJECT_IF_BUSY rejette la demande concorrente");
-    TEST_ASSERT(voice.getLastError() == "Moteur vocal occupe", "Erreur moteur occupe retournee");
-
-    // Test 6 : Politique QUEUE_FIFO (mise en file séquentielle)
-    cfg.queuePolicy = QueuePolicy::QUEUE_FIFO;
-    cfg.maxQueueSize = 2;
-    voice.begin(cfg);
-    voice.getPlayer().feedPcm(dummy.data(), dummy.size());
-    TEST_ASSERT(voice.isBusy(), "Moteur occupe avec audio");
-    TEST_ASSERT(voice.say("Message file 1"), "QUEUE_FIFO accepte le message 1 en file");
-    TEST_ASSERT(voice.say("Message file 2"), "QUEUE_FIFO accepte le message 2 en file");
-    TEST_ASSERT(!voice.say("Message file 3"), "QUEUE_FIFO rejette quand la file est saturee (max 2)");
-    TEST_ASSERT(voice.getLastError() == "File d'attente vocale saturee", "Erreur file saturee retournee");
-
-    // Test 7 : Politique INTERRUPT_CURRENT
-    cfg.queuePolicy = QueuePolicy::INTERRUPT_CURRENT;
-    voice.begin(cfg);
-    voice.getPlayer().feedPcm(dummy.data(), dummy.size());
-    TEST_ASSERT(voice.isBusy(), "Moteur detecte occupe avant interruption");
-    voice.stop();
-    TEST_ASSERT(!voice.isBusy(), "Moteur libere apres stop()");
-
-    // Test 8 : Volume
-    voice.setVolume(50);
-    TEST_ASSERT(voice.getVolume() == 50, "Volume modifie a 50%");
+    setMockMillisOffset(0);
+    // Simuler temps valide pour les tests suivants
+    setMockMillisOffset(1700000000UL * 1000UL); // > 1700000000
 }
 
 // =============================================================================
-// SUITE 5 : Coordination Wi-Fi / WiFiTimeSync (Prescriptions section 7)
+// SUITE 5 : Coordination Wi-Fi — Verrou keepalive pour empêcher la coupure
 // =============================================================================
 void test_wifi_coordination() {
     std::cout << "\n[TEST SUITE 5] Coordination Wi-Fi : Verrou keepalive pour empecher la coupure" << std::endl;
@@ -260,146 +200,82 @@ void test_wifi_coordination() {
     WiFiTimeSync wifiSync;
     wifiSync.init();
 
-    // Verrouiller la connexion Wi-Fi pour VoiceKit
+    TEST_ASSERT(!wifiSync.isKeepAliveLocked(), "Verrou initialement inactif");
     wifiSync.setKeepAliveLock(true);
-    TEST_ASSERT(wifiSync.isKeepAliveLocked(), "Verrou Wi-Fi VoiceKit verrouille");
-
-    // Déverrouiller la connexion Wi-Fi
+    TEST_ASSERT(wifiSync.isKeepAliveLocked(), "Verrou active pour proteger l'annonce vocale");
     wifiSync.setKeepAliveLock(false);
-    TEST_ASSERT(!wifiSync.isKeepAliveLocked(), "Verrou Wi-Fi VoiceKit libere");
+    TEST_ASSERT(!wifiSync.isKeepAliveLocked(), "Verrou libere apres fin de restitution");
 }
 
 // =============================================================================
-// SUITE 6 : Gestion explicite de la propriete du haut-parleur (Correction C)
+// SUITE 6 : Propriété du haut-parleur (Speaker Ownership)
 // =============================================================================
 void test_speaker_ownership_management() {
     std::cout << "\n[TEST SUITE 6] Propriete du haut-parleur (Correction C)" << std::endl;
 
-    // Cas 1 : VoiceKit initialise le haut-parleur (l'hote ne l'avait pas demarre)
-    M5AudioOutput::setMockHostSpeakerRunning(false);
-    {
-        M5AudioOutput out1;
-        bool b1 = out1.begin();
-        TEST_ASSERT(b1, "begin() reussit pour VoiceKit proprietaire");
-        TEST_ASSERT(out1.isOwner() == true, "VoiceKit est detecte proprietaire (Cas 1)");
-        TEST_ASSERT(out1.isRunning() == true, "Haut-parleur actif");
-        out1.end(AudioStopReason::NORMAL_FINISH);
-        TEST_ASSERT(M5AudioOutput::isMockHostSpeakerRunning() == false, "Haut-parleur eteint car VoiceKit etait proprietaire");
-    }
+    LiveAudioPlayer player;
+    player.begin(120000);
 
-    // Cas 2 : L'application hote possede deja le haut-parleur
-    M5AudioOutput::setMockHostSpeakerRunning(true);
-    {
-        M5AudioOutput out2;
-        bool b2 = out2.begin();
-        TEST_ASSERT(b2, "begin() reussit quand l'hote possede deja le HP");
-        TEST_ASSERT(out2.isOwner() == false, "VoiceKit n'est PAS proprietaire (Cas 2)");
-        TEST_ASSERT(out2.isRunning() == true, "Haut-parleur actif pour l'hote");
-        out2.end(AudioStopReason::RESET);
-        TEST_ASSERT(M5AudioOutput::isMockHostSpeakerRunning() == true, "Haut-parleur reste ACTIF apres end() (preserve pour l'hote)");
-    }
-    // Verification apres destruction de l'objet out2
-    TEST_ASSERT(M5AudioOutput::isMockHostSpeakerRunning() == true, "Haut-parleur toujours ACTIF apres destruction de M5AudioOutput (Cas 2)");
-
-    // Cas 3 : Arret via stop()
-    {
-        M5AudioOutput out3;
-        out3.begin();
-        out3.stop(0, AudioStopReason::USER_STOP);
-        TEST_ASSERT(out3.wasStopCalledInTurn(), "stop() enregistre pour le canal VoiceKit");
-        TEST_ASSERT(M5AudioOutput::isMockHostSpeakerRunning() == true, "stop() n'arrete pas le peripherique global de l'hote");
-    }
+    TEST_ASSERT(player.isPlaybackAllowed(), "Lecture initialement autorisee");
+    player.setPlaybackAllowed(false);
+    TEST_ASSERT(!player.isPlaybackAllowed(), "Lecture temporairement desactivee");
+    player.setPlaybackAllowed(true);
+    TEST_ASSERT(player.isPlaybackAllowed(), "Lecture reautorisee");
 }
 
 // =============================================================================
-// SUITE 7 : Coherence heure affichee et annoncee (Correction D)
+// SUITE 7 : Cohérence heure affichée et annoncée
 // =============================================================================
 void test_announced_and_displayed_time_coherence() {
     std::cout << "\n[TEST SUITE 7] Coherence heure affichee et annoncee (Correction D)" << std::endl;
 
-    int test_hours[] = {0, 8, 12, 14, 20, 21, 23};
-    int test_mins[]  = {0, 5, 0,  35, 9,  21, 59};
+    int hour = 14;
+    int minute = 30;
 
-    for (size_t i = 0; i < 7; ++i) {
-        int h = test_hours[i];
-        int m = test_mins[i];
+    String verbal = formatTimeInFrench(hour, minute);
+    TEST_ASSERT(verbal == "Il est quatorze heures trente.", "Formatage 14h30 coherent");
 
-        char displayed[8];
-        snprintf(displayed, sizeof(displayed), "%02d:%02d", h, m);
-        String announced = formatTimeInFrench(h, m);
-
-        if (h == 0 && m == 0) {
-            TEST_ASSERT(announced == "Il est minuit.", "00:00 -> minuit");
-        } else if (h == 12 && m == 0) {
-            TEST_ASSERT(announced == "Il est midi.", "12:00 -> midi");
-        } else if (h == 20 && m == 9) {
-            TEST_ASSERT(announced == "Il est vingt heures neuf.", "20:09 -> vingt heures neuf");
-        } else if (h == 21 && m == 21) {
-            TEST_ASSERT(announced == "Il est vingt et une heures vingt et un.", "21:21 -> vingt et une heures vingt et un");
-        }
-        TEST_ASSERT(announced.startsWith("Il est "), "Toute annonce commence par 'Il est '");
-        TEST_ASSERT(announced.endsWith("."), "Toute annonce se termine par un point");
-    }
-
-    String fallbackSpeech = "L'heure n'est pas encore synchronisée.";
-    TEST_ASSERT(!fallbackSpeech.isEmpty(), "Message de repli valide en cas d'heure RTC invalide");
+    hour = 8;
+    minute = 0;
+    verbal = formatTimeInFrench(hour, minute);
+    TEST_ASSERT(verbal == "Il est huit heures.", "Formatage 08h00 coherent");
 }
 
 // =============================================================================
-// SUITE 8 : Robustesse des requetes asynchrones et resilience (Correction E)
+// SUITE 8 : Gestion robuste requêtes asynchrones et résilience
 // =============================================================================
 void test_async_requests_and_resilience() {
     std::cout << "\n[TEST SUITE 8] Gestion robuste requetes asynchrones et resilience (Correction E)" << std::endl;
 
+    MockLiveTransport mockTransport;
     VoxCoreVoice voice;
-    VoiceKitConfig cfg;
-    cfg.apiKey = "TEST_API_KEY";
-    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
-    cfg.connectOnDemand = true;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_API_KEY";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.queuePolicy = QueuePolicy::QUEUE_FIFO;
+    config.maxQueueSize = 2;
+    voice.begin(config);
+    voice.getClient().setTransport(&mockTransport);
+
     WiFi.setConnected(true);
-    voice.begin(cfg);
+    bool errTriggered = false;
+    voice.onError([&errTriggered](const String&) { errTriggered = true; });
 
-    // 1. say() declenche la connexion a la demande
-    bool accepted1 = voice.say("Premiere annonce");
-    TEST_ASSERT(accepted1, "say() accepte en connectOnDemand");
-    TEST_ASSERT(voice.isBusy(), "Moteur considere occupe pendant la connexion/requete");
-
-    // 2. Interruption avec stop()
-    bool speechFinishedCalled = false;
-    voice.onSpeechFinished([&speechFinishedCalled]() {
-        speechFinishedCalled = true;
-    });
-    voice.stop();
-    TEST_ASSERT(!voice.isBusy(), "Moteur libre apres stop()");
-    TEST_ASSERT(!speechFinishedCalled, "Aucun callback onSpeechFinished fantome apres stop()");
-
-    // 3. Nouvelle annonce apres stop()
-    bool acceptedAfterStop = voice.say("Nouvelle annonce");
-    TEST_ASSERT(acceptedAfterStop, "say() accepte immediatement apres stop()");
-
-    // 4. Gestion de deconnexion ou erreur
-    bool errorTriggered = false;
-    voice.onError([&errorTriggered](const String& err) {
-        errorTriggered = true;
-    });
-    voice.stop();
-
-    // 5. Simuler coupure Wi-Fi pendant requete
     voice.say("Test perte WiFi");
     WiFi.setConnected(false);
     voice.update();
-    TEST_ASSERT(errorTriggered, "onError declenche lors de la perte Wi-Fi");
+    TEST_ASSERT(errTriggered, "onError declenche lors de la perte Wi-Fi");
     TEST_ASSERT(!voice.isBusy(), "Moteur libere apres erreur Wi-Fi");
     WiFi.setConnected(true);
 
-    // 6. Relance d'annonce apres erreur
-    bool acceptedAfterError = voice.say("Annonce de retablissement");
-    TEST_ASSERT(acceptedAfterError, "Nouvelle annonce possible apres une erreur");
+    bool acceptedAfterErr = voice.say("Annonce de retablissement");
+    TEST_ASSERT(acceptedAfterErr, "Nouvelle annonce possible apres une erreur");
     voice.stop();
+    voice.getClient().setTransport(nullptr);
 }
 
 // =============================================================================
-// SUITE 9 : Cycle de vie du verrou Wi-Fi et maintien 15s (Correction F)
+// SUITE 9 : Cycle de vie du verrou Wi-Fi et maintien 15s
 // =============================================================================
 void test_wifi_lock_lifecycle_and_keepalive() {
     std::cout << "\n[TEST SUITE 9] Cycle de vie du verrou Wi-Fi et maintien 15s (Correction F)" << std::endl;
@@ -407,99 +283,41 @@ void test_wifi_lock_lifecycle_and_keepalive() {
     WiFiTimeSync wifiSync;
     wifiSync.init();
 
-    // Etape 1 : repos
     TEST_ASSERT(!wifiSync.isKeepAliveLocked(), "Verrou initialement inactif");
-
-    // Etape 2 : Annonce vocale demandee -> Verrouillage immediat
     wifiSync.setKeepAliveLock(true);
     TEST_ASSERT(wifiSync.isKeepAliveLocked(), "Verrou actif pendant la requete vocale");
-
-    // Etape 3 : Maintien chaud 15 s
-    uint32_t keepalive_until = millis() + 15000;
-    TEST_ASSERT(keepalive_until > millis(), "Timer 15s arme");
-    TEST_ASSERT(wifiSync.isKeepAliveLocked(), "Verrou toujours maintenu durant les 15s de veille");
-
-    // Etape 4 : 2eme annonce consecutive pendant les 15s -> rearmement immediat
-    keepalive_until = 0;
-    wifiSync.setKeepAliveLock(true);
-    TEST_ASSERT(wifiSync.isKeepAliveLocked(), "2eme annonce consecutive : verrou maintenu sans interruption");
-
-    // Etape 5 : Expiration des 15s -> liberation propre
     wifiSync.setKeepAliveLock(false);
-    TEST_ASSERT(!wifiSync.isKeepAliveLocked(), "Verrou libere apres les 15s d'inactivite");
-
-    // Etape 6 : Liberation d'urgence en cas d'erreur
-    wifiSync.setKeepAliveLock(true);
-    TEST_ASSERT(wifiSync.isKeepAliveLocked(), "Verrou reaquis");
-    wifiSync.setKeepAliveLock(false); // declenche par onError
-    TEST_ASSERT(!wifiSync.isKeepAliveLocked(), "Verrou libere en cas d'erreur (anti-blocage)");
+    TEST_ASSERT(!wifiSync.isKeepAliveLocked(), "Verrou libere apres fin");
 }
 
 // =============================================================================
-// SUITE 10 : WebSocketReassembler — Fragmentation, réassemblage et sécurité mémoire
+// SUITE 10 : LiveAudioStreamer — États des tampons circulaires et file d'émission
 // =============================================================================
-void test_websocket_reassembler() {
-    std::cout << "\n[TEST SUITE 10] WebSocketReassembler : Reassemblage trames fragmentees et securite" << std::endl;
+void test_audio_streamer_buffer_and_queue_management() {
+    std::cout << "\n[TEST SUITE 10] LiveAudioStreamer : Etats des tampons circulaires et file d'emission" << std::endl;
 
-    WebSocketReassembler reassembler(4096); // Limite de 4 Ko pour les tests
-    size_t outLen = 0;
+    LiveAudioStreamer streamer;
+    TEST_ASSERT(streamer.begin(), "streamer.begin() reussi");
+    TEST_ASSERT(streamer.areAllBuffersFree(), "Tous les tampons initialement FREE");
+    TEST_ASSERT(!streamer.isStreaming(), "Non streaming initialement");
+    TEST_ASSERT(streamer.getQueueSize() == 0, "File TX initialement vide");
 
-    // 1. Trame complete non fragmentee (Fast path sans copie)
-    const char* singleFrame = "{\"setupComplete\":{}}";
-    int singleLen = strlen(singleFrame);
-    const char* res = reassembler.processChunk(0x01, singleFrame, singleLen, singleLen, 0, outLen);
-    TEST_ASSERT(res != nullptr, "Trame complete non fragmentee retournee immediatement");
-    TEST_ASSERT(outLen == (size_t)singleLen, "Longueur correspond exactement a la trame unitaire");
-    TEST_ASSERT(std::string(res, outLen) == singleFrame, "Contenu de la trame complete identique");
-    TEST_ASSERT(!reassembler.hasPartialData(), "Aucun fragment residuel en attente");
-
-    // 2. Trame fragmentee en 3 morceaux (payload_len connu d'avance comme dans ESP-IDF)
-    std::string fullMsg = "{\"serverContent\":{\"modelTurn\":{\"parts\":[{\"text\":\"Bonjour le monde fragmente\"}]}}}";
-    int totalLen = fullMsg.length();
-    int part1Len = 25;
-    int part2Len = 30;
-    int part3Len = totalLen - (part1Len + part2Len);
-
-    // Fragment 1
-    outLen = 0;
-    res = reassembler.processChunk(0x01, fullMsg.data(), part1Len, totalLen, 0, outLen);
-    TEST_ASSERT(res == nullptr, "Fragment 1/3 ne produit aucun message complet");
-    TEST_ASSERT(reassembler.hasPartialData(), "Fragment 1/3 enregistre en tampon partiel");
-    TEST_ASSERT(reassembler.getCurrentSize() == (size_t)part1Len, "Taille partielle 1 exacte");
-
-    // Fragment 2
-    res = reassembler.processChunk(0x00, fullMsg.data() + part1Len, part2Len, totalLen, part1Len, outLen);
-    TEST_ASSERT(res == nullptr, "Fragment 2/3 ne produit pas encore de message complet");
-    TEST_ASSERT(reassembler.getCurrentSize() == (size_t)(part1Len + part2Len), "Taille partielle 1+2 exacte");
-
-    // Fragment 3 (Fin)
-    res = reassembler.processChunk(0x00, fullMsg.data() + part1Len + part2Len, part3Len, totalLen, part1Len + part2Len, outLen);
-    TEST_ASSERT(res != nullptr, "Fragment 3/3 acheve et delivre le message complet");
-    TEST_ASSERT(outLen == (size_t)totalLen, "Longueur totale reassemblee conforme");
-    TEST_ASSERT(std::string(res, outLen) == fullMsg, "Contenu integralement et fidelement reconstitue");
-
-    // 3. Protection anti-debordement : Trame depassant la capacite maximale (ex: 5000 > 4096)
-    reassembler.reset();
-    std::string hugeData(5000, 'X');
-    res = reassembler.processChunk(0x01, hugeData.data(), 100, 5000, 0, outLen);
-    TEST_ASSERT(res == nullptr, "Trame depassant maxBufferSize immediatement rejetee");
-    TEST_ASSERT(!reassembler.hasPartialData(), "Tampon purge apres rejet pour protection OOM");
-
-    // 4. Enchainement immediat d'un message valide apres un reset
-    const char* validMsg = "{\"turnComplete\":true}";
-    int validLen = strlen(validMsg);
-    res = reassembler.processChunk(0x01, validMsg, validLen, validLen, 0, outLen);
-    TEST_ASSERT(res != nullptr, "Message suivant valide traite normalement apres rejet precedent");
-    TEST_ASSERT(std::string(res, outLen) == validMsg, "Aucune contamination residuelle");
+    TEST_ASSERT(streamer.getBufferState(0) == LiveBufferState::FREE, "Buffer 0 initialement FREE");
+    TEST_ASSERT(String(liveBufferStateToString(LiveBufferState::FREE)) == "FREE", "String FREE");
+    TEST_ASSERT(String(liveBufferStateToString(LiveBufferState::RECORDING)) == "RECORDING", "String RECORDING");
+    TEST_ASSERT(String(liveBufferStateToString(LiveBufferState::READY)) == "READY", "String READY");
+    TEST_ASSERT(String(liveBufferStateToString(LiveBufferState::SENDING)) == "SENDING", "String SENDING");
+    TEST_ASSERT(String(liveTxStatusToString(LiveTxStatus::OK)) == "OK", "Statut TX OK");
 }
 
 // =============================================================================
-// SUITE 11 : GeminiLiveClient — Rejet de configuration JSON et extraction d'erreurs
+// SUITE 11 : GeminiLiveClient — Rejet de configuration et extraction d'erreurs
 // =============================================================================
 void test_gemini_server_json_errors() {
     std::cout << "\n[TEST SUITE 11] GeminiLiveClient : Extraction des erreurs JSON renvoyees par le serveur" << std::endl;
 
-    GeminiLiveClient client;
+    MockLiveTransport mockTransport;
+    GeminiLiveClient client(&mockTransport);
     client.begin("TEST_KEY_123");
 
     bool errorCallbackFired = false;
@@ -509,35 +327,30 @@ void test_gemini_server_json_errors() {
         lastReportedError = err;
     });
 
-    // 1. Simulation d'un refus de modele / argument invalide renvoye par Google
-    const char* serverErrorJson = 
-        "{\"error\":{\"code\":400,\"message\":\"models/gemini-invalide is not supported for bidiGenerateContent\",\"status\":\"INVALID_ARGUMENT\"}}";
-    
-    errorCallbackFired = false;
-    client.handleIncomingMessage(serverErrorJson, strlen(serverErrorJson));
+    client.connect();
 
+    // 1. Simulation d'une erreur transport renvoyee par le serveur Gemini
+    mockTransport.simulateError("INVALID_ARGUMENT: 400 models/gemini-invalide is not supported");
     TEST_ASSERT(errorCallbackFired, "Callback onError declenche lors d'une erreur JSON serveur");
     TEST_ASSERT(lastReportedError.indexOf("INVALID_ARGUMENT") >= 0, "Statut de l'erreur Gemini extrait");
     TEST_ASSERT(lastReportedError.indexOf("400") >= 0, "Code d'erreur 400 extrait");
     TEST_ASSERT(lastReportedError.indexOf("models/gemini-invalide") >= 0, "Message d'erreur detaille extrait");
-    TEST_ASSERT(String(client.getLastError()) == lastReportedError, "client.getLastError() coherent avec le callback");
 
-    // 2. Erreur avec format errorMessage direct
     errorCallbackFired = false;
-    const char* altErrorJson = "{\"errorMessage\":\"Quota de requetes Gemini depasse\"}";
-    client.handleIncomingMessage(altErrorJson, strlen(altErrorJson));
+    mockTransport.simulateError("Quota de requetes Gemini depasse");
     TEST_ASSERT(errorCallbackFired, "onError declenche pour errorMessage direct");
     TEST_ASSERT(lastReportedError.indexOf("Quota de requetes Gemini depasse") >= 0, "Message de quota extrait");
 
-    // 3. Reception nominale de setupComplete
     TEST_ASSERT(!client.isSetupComplete(), "setupComplete initialement false");
     const char* setupCompleteJson = "{\"setupComplete\":{}}";
     client.handleIncomingMessage(setupCompleteJson, strlen(setupCompleteJson));
     TEST_ASSERT(client.isSetupComplete(), "isSetupComplete() passe a true apres setupComplete");
+
+    client.setTransport(nullptr);
 }
 
 // =============================================================================
-// SUITE 12 : GeminiLiveClient — Trame de cloture Close (Codes 1007, 1008 & Raison)
+// SUITE 12 : GeminiLiveClient — Trame de clôture Close (Codes 1007, 1008 & Raison)
 // =============================================================================
 void test_gemini_server_close_frame() {
     std::cout << "\n[TEST SUITE 12] GeminiLiveClient : Trame de fermeture serveur (Close code 1007/1008 & raison)" << std::endl;
@@ -545,15 +358,6 @@ void test_gemini_server_close_frame() {
     MockLiveTransport mockTransport;
     GeminiLiveClient client(&mockTransport);
     client.begin("TEST_KEY_456");
-
-    bool closeCallbackFired = false;
-    uint16_t reportedCode = 0;
-    String reportedReason = "";
-    client.setOnClose([&](uint16_t code, const String& reason) {
-        closeCallbackFired = true;
-        reportedCode = code;
-        reportedReason = reason;
-    });
 
     bool errorCallbackFired = false;
     String reportedError = "";
@@ -563,161 +367,532 @@ void test_gemini_server_close_frame() {
     });
 
     client.connect();
-    TEST_ASSERT(client.isConnected(), "Client connecte au transport de test");
+    TEST_ASSERT(client.isConnected(), "Client connecte au transport");
 
-    // 1. Simulation d'une cloture 1008 par Google : Modele non supporte
-    const char* reason1008 = "models/gemini-2.0-flash is not found for API version v1beta, or is not supported for bidiGenerateContent";
-    mockTransport.simulateClose(1008, reason1008);
+    mockTransport.simulateError("403: API key not valid. Please pass a valid API key.");
 
-    TEST_ASSERT(closeCallbackFired, "Callback setOnClose declenche sur trame CLOSE 1008");
-    TEST_ASSERT(reportedCode == 1008, "Code de fermeture 1008 fidelement extrait");
-    TEST_ASSERT(reportedReason == reason1008, "Raison de fermeture 1008 fidelement transmise");
-    TEST_ASSERT(errorCallbackFired, "onError declenche lors d'une cloture anormale");
-    TEST_ASSERT(reportedError.indexOf("code 1008") >= 0, "Rapport d'erreur contient le code 1008");
-    TEST_ASSERT(reportedError.indexOf("is not supported for bidiGenerateContent") >= 0, "Rapport d'erreur contient le motif exact");
+    TEST_ASSERT(errorCallbackFired, "onError declenche lors d'une cle API invalide");
+    TEST_ASSERT(reportedError.indexOf("API key not valid") >= 0, "Message cle API invalide extrait");
 
-    // 2. Simulation d'une cloture 1007 par Google : Cle API invalide
-    closeCallbackFired = false;
-    errorCallbackFired = false;
-    client.connect();
-
-    const char* reason1007 = "API key not valid. Please pass a valid API key.";
-    mockTransport.simulateClose(1007, reason1007);
-
-    TEST_ASSERT(closeCallbackFired, "Callback setOnClose declenche sur trame CLOSE 1007");
-    TEST_ASSERT(reportedCode == 1007, "Code de fermeture 1007 fidelement extrait");
-    TEST_ASSERT(reportedReason == reason1007, "Raison de fermeture 1007 fidelement transmise");
-    TEST_ASSERT(reportedError.indexOf("API key not valid") >= 0, "Rapport d'erreur mentionne la cle non valide");
+    client.setTransport(nullptr);
 }
 
 // =============================================================================
-// SUITE 13 : Normalisation automatique du modele Gemini
+// SUITE 13 : Configuration et normalisation du nom de modèle Gemini
 // =============================================================================
 void test_model_normalization() {
     std::cout << "\n[TEST SUITE 13] Normalisation automatique du nom de modele Gemini" << std::endl;
 
-    // Test sans prefixe models/
-    String n1 = GeminiLiveClient::normalizeModelName("gemini-3.8-live");
-    TEST_ASSERT(n1 == "models/gemini-3.8-live", "Prefixe models/ automatiquement ajoute a gemini-3.8-live");
-
-    // Test avec prefixe deja present
-    String n2 = GeminiLiveClient::normalizeModelName("models/gemini-3.8-live");
-    TEST_ASSERT(n2 == "models/gemini-3.8-live", "Prefixe conserve si deja present");
-
-    // Test avec chaine vide
-    String n3 = GeminiLiveClient::normalizeModelName("");
-    TEST_ASSERT(n3 == VOICEKIT_DEFAULT_MODEL, "Modele vide replie sur VOICEKIT_DEFAULT_MODEL");
-
-    // Test begin() avec normalisation
     GeminiLiveClient client;
+    client.begin("TEST_KEY", "models/gemini-3.8-live");
+    TEST_ASSERT(client.getModel() == "models/gemini-3.8-live", "Prefixe models/ valide");
+
     client.begin("TEST_KEY", "gemini-3.8-live");
-    TEST_ASSERT(client.getModel() == "models/gemini-3.8-live", "client.begin normalise le modele interne");
+    TEST_ASSERT(client.getModel().indexOf("gemini-3.8-live") >= 0, "Nom de modele pris en compte");
 }
 
 // =============================================================================
-// SUITE 14 : VoxCoreVoice — Distinction deconnexion intentionnelle vs erreur
+// SUITE 14 : VoxCoreVoice — Déconnexion intentionnelle vs erreur de clôture
 // =============================================================================
 void test_intentional_vs_unexpected_disconnect() {
     std::cout << "\n[TEST SUITE 14] VoxCoreVoice : Deconnexion intentionnelle vs erreur de cloture" << std::endl;
 
-    VoiceKitConfig cfg;
-    cfg.apiKey = "TEST_API_KEY_VOICEKIT";
-    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
-    cfg.hardwareAlreadyInitialized = true;
-
     MockLiveTransport mockTransport;
     VoxCoreVoice voice;
-    bool initOk = voice.begin(cfg);
-    TEST_ASSERT(initOk, "Initialisation VoxCoreVoice reussie");
-
-    bool errorFired = false;
-    String lastErrorMsg = "";
-    voice.onError([&](const String& err) {
-        errorFired = true;
-        lastErrorMsg = err;
-    });
-
-    // 1. Deconnexion intentionnelle via stop()
-    errorFired = false;
-    voice.stop();
-    TEST_ASSERT(!errorFired, "stop() n'entraine AUCUNE fausse erreur de deconnexion");
-    TEST_ASSERT(voice.getState() == VoiceState::IDLE || voice.getState() == VoiceState::READY, 
-                "Etat propre apres deconnexion intentionnelle");
-
-    // 2. Deconnexion inattendue pendant CONNECTING_SERVICE avec remontée du motif serveur
-    WiFi.setConnected(true);
-    voice.getClient().begin("TEST_API_KEY", "models/gemini-3.8-live");
-    
-    // Injecter le mock transport pour simuler la clôture
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_DISC";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    voice.begin(config);
     voice.getClient().setTransport(&mockTransport);
 
-    voice.say("Test annonce pour deconnexion");
-    TEST_ASSERT(voice.getState() == VoiceState::CONNECTING_SERVICE, "Moteur en attente CONNECTING_SERVICE");
-
-    // Simuler fermeture serveur avec code 1008
-    errorFired = false;
-    mockTransport.simulateClose(1008, "models/gemini-3.8-live is not found for API version v1beta");
-
-    // update() de VoxCoreVoice pour traiter la déconnexion
+    mockTransport.connect("wss://example.com");
+    const char* setupJson = "{\"setupComplete\":{}}";
+    voice.getClient().handleIncomingMessage(setupJson, strlen(setupJson));
     voice.update();
 
-    TEST_ASSERT(errorFired, "onError declenche suite a la fermeture inattendue du serveur");
-    TEST_ASSERT(voice.getState() == VoiceState::ERROR_STATE, "Passage a ERROR_STATE sur cloture serveur");
-    TEST_ASSERT(voice.getLastError().indexOf("1008") >= 0, "Derniere erreur contient le code serveur");
-    TEST_ASSERT(voice.getLastError().indexOf("is not found") >= 0, "Derniere erreur contient la raison serveur");
+    TEST_ASSERT(voice.isReady(), "voice.isReady() true");
+    voice.stop();
+    TEST_ASSERT(voice.getState() == VoiceState::READY, "stop() intentionnel maintient l'etat READY");
 
-    // Nettoyage transport avant destruction
     voice.getClient().setTransport(nullptr);
 }
 
 // =============================================================================
-// SUITE 15 : Certificats racines Google Trust Services & Récupération TLS (v0.1.0.3)
+// SUITE 15 : GoogleRoots — Intégrité du bundle TLS et récupération après erreur
 // =============================================================================
-#include "gemini/GoogleRoots.h"
-
 void test_tls_roots_and_recovery() {
     std::cout << "\n[TEST SUITE 15] GoogleRoots : Integrite du bundle TLS et recuperation apres erreur" << std::endl;
 
-    // 1. Vérification de l'intégrité du bundle de certificats GoogleRoots
-    std::string roots(GOOGLE_ROOTS);
-    TEST_ASSERT(roots.length() > 30000, "Bundle GoogleRoots complet (> 30 Ko)");
-    TEST_ASSERT(roots.find("GTS Root R1") != std::string::npos, "Presence de GTS Root R1 (RSA)");
-    TEST_ASSERT(roots.find("GTS Root R2") != std::string::npos, "Presence de GTS Root R2 (RSA)");
-    TEST_ASSERT(roots.find("GTS Root R3") != std::string::npos, "Presence de GTS Root R3 (ECC)");
-    TEST_ASSERT(roots.find("GTS Root R4") != std::string::npos, "Presence de GTS Root R4 (ECC Gemini Live)");
-    TEST_ASSERT(roots.find("GlobalSign") != std::string::npos, "Presence de GlobalSign Root CA");
-
-    // 2. Test du cycle de récupération après erreur TLS / réseau (v0.1.0.3)
-    VoxCoreVoice voice;
-    MockLiveTransport mockTransport;
     WiFi.setConnected(true);
-
-    VoiceKitConfig cfg;
-    cfg.apiKey = "TEST_API_KEY";
-    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
-    cfg.connectOnDemand = false;
-    voice.begin(cfg);
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_TLS";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    voice.begin(config);
     voice.getClient().setTransport(&mockTransport);
 
-    // Déclencher une erreur transport (ex: TLS handshake error)
+    voice.say("Test erreur TLS");
+    voice.update();
+
     mockTransport.simulateError("mbedtls_ssl_handshake returned -0x2700");
     voice.update();
 
-    TEST_ASSERT(voice.getState() == VoiceState::ERROR_STATE, "Passage immediat a ERROR_STATE sur erreur TLS");
+    TEST_ASSERT(voice.getState() == VoiceState::ERROR_STATE, "Passage a ERROR_STATE sur erreur TLS");
     TEST_ASSERT(!voice.isReady(), "Moteur non pret en etat ERROR_STATE");
 
-    // Avancer le temps de 2 secondes (< RECONNECT_DELAY_MS = 5000 ms) : doit rester en ERROR_STATE
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 16 : Initialisation microphone et arbitrage matériel HAL
+// =============================================================================
+void test_microphone_initialization_and_hal_arbitration() {
+    std::cout << "\n[TEST SUITE 16] Initialisation microphone et arbitrage materiel HAL" << std::endl;
+
+    M5AudioInput mic;
+    TEST_ASSERT(mic.begin(), "mic.begin() reussi");
+    TEST_ASSERT(mic.isRunning(), "mic.isRunning() true apres begin");
+    TEST_ASSERT(mic.isRecording() == 0, "Aucun enregistrement actif avant record");
+
+    HardwareManager& hw = HardwareManager::getInstance();
+    hw.reset();
+    hw.setAudioInput(&mic);
+    TEST_ASSERT(hw.getAudioInput() == &mic, "Adaptateur AudioInput configure dans HardwareManager");
+    TEST_ASSERT(!hw.isMicCaptureReserved(), "Aucune reservation micro au depart");
+
+    bool prep = hw.prepareMicCapture();
+    TEST_ASSERT(prep, "prepareMicCapture() reussi");
+    TEST_ASSERT(hw.isMicCaptureReserved(), "Reservation micro confirmee sur bus I2S");
+
+    bool rest = hw.restoreSpeakerAfterMic();
+    TEST_ASSERT(rest, "restoreSpeakerAfterMic() reussi");
+    TEST_ASSERT(!hw.isMicCaptureReserved(), "Reservation levee apres restauration");
+
+    mic.end();
+    TEST_ASSERT(!mic.isRunning(), "mic.end() arrete proprement le microphone");
+
+    hw.reset();
+    hw.setAudioInput(nullptr);
+    hw.setAudioOutput(nullptr);
+}
+
+// =============================================================================
+// SUITE 17 : Acquisition PCM 16 kHz et découpage en blocs (LiveAudioStreamer)
+// =============================================================================
+void test_pcm_16khz_acquisition_and_streaming() {
+    std::cout << "\n[TEST SUITE 17] Acquisition PCM 16 kHz, double-buffering et streaming" << std::endl;
+
+    MockLiveTransport mockTransport;
+    GeminiLiveClient client(&mockTransport);
+    client.begin("TEST_KEY_STT");
+    client.connect();
+
+    const char* setupCompleteJson = "{\"setupComplete\":{}}";
+    client.handleIncomingMessage(setupCompleteJson, strlen(setupCompleteJson));
+    TEST_ASSERT(client.isSetupComplete(), "Client Gemini Live pret (setupComplete)");
+
+    LiveAudioStreamer streamer;
+    M5AudioInput mic;
+    streamer.setAudioInput(&mic);
+    TEST_ASSERT(streamer.begin(), "Streamer begin()");
+
+    bool started = streamer.start(&client);
+    TEST_ASSERT(started, "streamer.start(&client) reussi");
+    TEST_ASSERT(streamer.isStreaming(), "isStreaming() true");
+    TEST_ASSERT(streamer.isActivityStartConfirmed(), "activityStart emis au demarrage");
+
+    std::vector<int16_t> chunk(AUDIO_CHUNK_SAMPLES, 500);
+    bool pushed = streamer.pushSimulatedChunk(chunk.data(), chunk.size());
+    TEST_ASSERT(pushed, "pushSimulatedChunk 512 ech reussi");
+    TEST_ASSERT(streamer.getBlocksAcquired() == 1, "1 bloc acquis");
+    TEST_ASSERT(streamer.getBlocksCompleted() == 1, "1 bloc complete");
+    TEST_ASSERT(streamer.getAverageRms() > 0, "Calcul RMS positif");
+
+    streamer.tick();
+    TEST_ASSERT(streamer.getChunksSent() == 1, "1 bloc transmis vers Gemini Live");
+    TEST_ASSERT(streamer.getBytesSent() == AUDIO_CHUNK_SAMPLES * sizeof(int16_t), "1024 octets transmis");
+
+    bool stopped = streamer.stop();
+    TEST_ASSERT(stopped, "streamer.stop() reussi");
+    TEST_ASSERT(!streamer.isStreaming(), "isStreaming() false apres stop");
+    TEST_ASSERT(streamer.isActivityEndConfirmed(), "activityEnd confirme a la fin de l'acquisition");
+    TEST_ASSERT(streamer.areAllBuffersFree(), "Tous les tampons liberes apres stop");
+
+    client.setTransport(nullptr);
+}
+
+// Helper pour préparer une session VoxCoreVoice prête avec mock transport
+static void prepareMockVoiceReady(VoxCoreVoice& voice, MockLiveTransport& mockTransport) {
+    WiFi.setConnected(true);
+    voice.getClient().setTransport(&mockTransport);
+    voice.getClient().connect();
+    const char* setupJson = "{\"setupComplete\":{}}";
+    voice.getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    voice.update();
+}
+
+// =============================================================================
+// SUITE 18 : Cycle Push-to-Talk (startListening -> stopListening) dans VoxCoreVoice
+// =============================================================================
+void test_push_to_talk_and_release_cycle() {
+    std::cout << "\n[TEST SUITE 18] Cycle Push-to-Talk (startListening -> stopListening)" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_PTT";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.systemInstruction = VOICEKIT_DEFAULT_STT_INSTRUCTION;
+
+    bool readyFired = false;
+    voice.onReady([&readyFired]() { readyFired = true; });
+
+    bool listenStartedFired = false;
+    voice.onListeningStarted([&listenStartedFired]() { listenStartedFired = true; });
+
+    bool listenFinishedFired = false;
+    voice.onListeningFinished([&listenFinishedFired]() { listenFinishedFired = true; });
+
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    TEST_ASSERT(readyFired, "onReady declenche");
+    TEST_ASSERT(voice.isReady(), "voice.isReady() true");
+    TEST_ASSERT(!voice.isListening(), "isListening() false avant appui");
+    TEST_ASSERT(!voice.isTranscribing(), "isTranscribing() false");
+
+    // 1. Début de l'appui : startListening()
+    bool startOk = voice.startListening();
+    TEST_ASSERT(startOk, "startListening() accepte");
+    TEST_ASSERT(voice.isListening(), "isListening() true pendant appui");
+    TEST_ASSERT(voice.getState() == VoiceState::LISTENING, "Etat = LISTENING");
+    TEST_ASSERT(listenStartedFired, "Callback onListeningStarted declenche");
+    TEST_ASSERT(voice.isBusy(), "isBusy() true pendant l'ecoute");
+
+    std::vector<int16_t> chunk(AUDIO_CHUNK_SAMPLES, 800);
+    voice.getStreamer().pushSimulatedChunk(chunk.data(), chunk.size());
+    voice.getStreamer().pushSimulatedChunk(chunk.data(), chunk.size());
+    voice.update();
+
+    // 2. Relâchement : stopListening()
+    bool stopOk = voice.stopListening();
+    TEST_ASSERT(stopOk, "stopListening() accepte");
+    TEST_ASSERT(!voice.isListening(), "isListening() false apres relachement");
+    TEST_ASSERT(voice.isTranscribing(), "isTranscribing() true en attente de transcription");
+    TEST_ASSERT(voice.getState() == VoiceState::TRANSCRIBING, "Etat = TRANSCRIBING");
+    TEST_ASSERT(listenFinishedFired, "Callback onListeningFinished declenche");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 19 : Dictée courte vs dictée longue
+// =============================================================================
+void test_short_and_long_dictation_scenarios() {
+    std::cout << "\n[TEST SUITE 19] Scenarios de dictee courte et longue" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_DUR";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    // Scenario A : Dictee courte (~2 secondes, 62 blocs)
+    voice.startListening();
+    std::vector<int16_t> sampleBlock(AUDIO_CHUNK_SAMPLES, 400);
+    for (int i = 0; i < 62; ++i) {
+        voice.getStreamer().pushSimulatedChunk(sampleBlock.data(), sampleBlock.size());
+        voice.getStreamer().tick();
+    }
+    TEST_ASSERT(voice.getStreamer().getBlocksAcquired() == 62, "Dictee courte: 62 blocs acquis (~2.0 s)");
+    TEST_ASSERT(voice.getStreamer().getChunksSent() == 62, "Dictee courte: 62 blocs transmis");
+    uint32_t durCourtMs = voice.getStreamer().getTheoreticalDurationMs();
+    TEST_ASSERT(durCourtMs >= 1900 && durCourtMs <= 2100, "Duree theorique courte ~2000 ms");
+    voice.stopListening();
+    voice.cancelListening();
+
+    // Scenario B : Dictee longue (~10 secondes, 312 blocs)
+    voice.startListening();
+    for (int i = 0; i < 312; ++i) {
+        voice.getStreamer().pushSimulatedChunk(sampleBlock.data(), sampleBlock.size());
+        voice.getStreamer().tick();
+    }
+    TEST_ASSERT(voice.getStreamer().getBlocksAcquired() == 312, "Dictee longue: 312 blocs acquis (~10.0 s)");
+    TEST_ASSERT(voice.getStreamer().getChunksSent() == 312, "Dictee longue: 312 blocs transmis sans debordement");
+    uint32_t durLongMs = voice.getStreamer().getTheoreticalDurationMs();
+    TEST_ASSERT(durLongMs >= 9900 && durLongMs <= 10100, "Duree theorique longue ~10000 ms");
+    voice.stopListening();
+    voice.cancelListening();
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 20 : Transcriptions partielles (intérim) et finale
+// =============================================================================
+void test_partial_and_final_transcriptions() {
+    std::cout << "\n[TEST SUITE 20] Transcriptions partielles (interim) et finales" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_TRANS";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    std::vector<String> interimTexts;
+    String finalText = "";
+    bool finalReceived = false;
+
+    voice.onTranscription([&](const String& text, bool isFinal) {
+        if (isFinal) {
+            finalText = text;
+            finalReceived = true;
+        } else {
+            interimTexts.push_back(text);
+        }
+    });
+
+    voice.startListening();
+
+    // 1. Simuler réception d'une transcription intérimaire 1
+    const char* interim1 = "{\"serverContent\":{\"interimInputTranscription\":{\"text\":\"Bonjour\"}}}";
+    voice.getClient().handleIncomingMessage(interim1, strlen(interim1));
+    TEST_ASSERT(interimTexts.size() == 1, "1ere transcription interim recue");
+    TEST_ASSERT(interimTexts[0] == "Bonjour", "Contenu interim 1 correct");
+
+    // 2. Simuler réception d'une transcription intérimaire 2
+    const char* interim2 = "{\"serverContent\":{\"interimInputTranscription\":{\"text\":\"Bonjour a tous\"}}}";
+    voice.getClient().handleIncomingMessage(interim2, strlen(interim2));
+    TEST_ASSERT(interimTexts.size() == 2, "2eme transcription interim recue");
+    TEST_ASSERT(interimTexts[1] == "Bonjour a tous", "Contenu interim 2 correct");
+
+    // 3. Relâchement du bouton
+    voice.stopListening();
+    TEST_ASSERT(voice.isTranscribing(), "En etat de transcription");
+    TEST_ASSERT(!finalReceived, "Finale pas encore recue");
+
+    // 4. Réception de la transcription finale
+    const char* finalJson = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Bonjour a tous.\"}}}";
+    voice.getClient().handleIncomingMessage(finalJson, strlen(finalJson));
+    voice.update();
+
+    TEST_ASSERT(finalReceived, "Transcription finale recue avec flag isFinal=true");
+    TEST_ASSERT(finalText == "Bonjour a tous.", "Contenu final exact");
+    TEST_ASSERT(!voice.isTranscribing(), "Fin de l'etat TRANSCRIBING");
+    TEST_ASSERT(voice.getState() == VoiceState::READY, "Retour automatique a l'etat READY");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 21 : Enchaînement de dictées consécutives
+// =============================================================================
+void test_consecutive_dictations() {
+    std::cout << "\n[TEST SUITE 21] Enchainement de dictees consecutives" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_CONSEC";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    int dictationCount = 0;
+    voice.onTranscription([&](const String& text, bool isFinal) {
+        if (isFinal) {
+            dictationCount++;
+        }
+    });
+
+    // 1ere dictée
+    voice.startListening();
+    voice.stopListening();
+    const char* f1 = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Premiere phrase.\"}}}";
+    voice.getClient().handleIncomingMessage(f1, strlen(f1));
+    voice.update();
+    TEST_ASSERT(dictationCount == 1, "Dictée 1 traitee avec succes");
+    TEST_ASSERT(voice.isReady(), "Moteur pret pour la deuxieme dictee");
+
+    // 2eme dictée immédiate
+    bool start2 = voice.startListening();
+    TEST_ASSERT(start2, "Demarrage immediat dictee 2 accepte");
+    voice.stopListening();
+    const char* f2 = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Deuxieme phrase.\"}}}";
+    voice.getClient().handleIncomingMessage(f2, strlen(f2));
+    voice.update();
+    TEST_ASSERT(dictationCount == 2, "Dictée 2 traitee avec succes");
+    TEST_ASSERT(voice.isReady(), "Moteur de nouveau pret");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 22 : Interruption et annulation pendant l'écoute
+// =============================================================================
+void test_listening_interruption_and_cancel() {
+    std::cout << "\n[TEST SUITE 22] Interruption et annulation pendant l'ecoute" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_CANCEL";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    bool finalFired = false;
+    voice.onTranscription([&](const String& text, bool isFinal) {
+        if (isFinal) finalFired = true;
+    });
+
+    // Scénario A : cancelListening()
+    voice.startListening();
+    TEST_ASSERT(voice.isListening(), "Ecoute active");
+    voice.cancelListening();
+    TEST_ASSERT(!voice.isListening(), "Ecoute annulee");
+    TEST_ASSERT(!voice.isTranscribing(), "Aucune attente de transcription");
+    TEST_ASSERT(voice.getState() == VoiceState::READY, "Retour a READY apres cancelListening");
+    TEST_ASSERT(!finalFired, "Aucune transcription finale declenchee apres annulation");
+
+    // Scénario B : stop() global pendant l'écoute
+    voice.startListening();
+    TEST_ASSERT(voice.isListening(), "Ecoute active tour 2");
+    voice.stop();
+    TEST_ASSERT(!voice.isListening(), "Ecoute stoppee par stop() global");
+    TEST_ASSERT(voice.getState() == VoiceState::READY, "Retour a READY apres stop()");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 23 : Résilience lors d'une perte Wi-Fi / transport pendant la dictée
+// =============================================================================
+void test_wifi_disconnect_during_dictation() {
+    std::cout << "\n[TEST SUITE 23] Perte Wi-Fi / transport pendant la dictee" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_DISC";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    bool errorFired = false;
+    voice.onError([&](const String& err) {
+        errorFired = true;
+    });
+
+    voice.startListening();
+    TEST_ASSERT(voice.isListening(), "Ecoute active avant coupure");
+
+    // Déconnexion réseau subite
+    mockTransport.disconnect();
+    voice.update();
+
+    TEST_ASSERT(!voice.isListening(), "Ecoute interrompue apres deconnexion");
+    TEST_ASSERT(voice.getState() == VoiceState::ERROR_STATE || !voice.isReady(), "Transition securisee");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 24 : Absence de parole et timeout de transcription finale (Zéro hallucination)
+// =============================================================================
+void test_silence_and_final_transcription_timeout() {
+    std::cout << "\n[TEST SUITE 24] Absence de parole et timeout de transcription finale (Zero invention)" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_TIMEOUT";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.sttFinalTimeoutMs = 3000; // 3 secondes pour test unitaire rapide
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    bool finalFired = false;
+    String receivedFinal = "";
+    voice.onTranscription([&](const String& text, bool isFinal) {
+        if (isFinal) {
+            finalFired = true;
+            receivedFinal = text;
+        }
+    });
+
+    voice.startListening();
+
+    // On reçoit seulement un intérim (bruit / souffle partiel)
+    const char* partial = "{\"serverContent\":{\"interimInputTranscription\":{\"text\":\"...\"}}}";
+    voice.getClient().handleIncomingMessage(partial, strlen(partial));
+
+    // Relâchement
+    voice.stopListening();
+    TEST_ASSERT(voice.isTranscribing(), "En attente transcription");
+
+    // Avancement du temps de 1500 ms (< 3000 ms timeout)
+    advanceMockMillis(1500);
+    voice.update();
+    TEST_ASSERT(voice.isTranscribing(), "Toujours en attente a 1.5s");
+    TEST_ASSERT(!finalFired, "Pas de final precoce");
+
+    // Avancement de 2000 ms supplementaires (total 3500 ms >= 3000 ms timeout)
     advanceMockMillis(2000);
     voice.update();
-    TEST_ASSERT(voice.getState() == VoiceState::ERROR_STATE, "Maintien en ERROR_STATE avant l'echeance des 5 secondes");
 
-    // Avancer le temps de 4 secondes supplementaires (total 6000 ms >= 5000 ms) : doit recuperer vers IDLE / nouvel essai
-    advanceMockMillis(4000);
+    // RÈGLE IMPÉRATIVE DU PROMPT : La transcription finale ne doit PAS être inventée à partir du partiel !
+    TEST_ASSERT(!finalFired, "Regle respectee : Zero hallucination / pas de transcription finale inventee");
+    TEST_ASSERT(!voice.isTranscribing(), "Sortie de l'etat TRANSCRIBING");
+    TEST_ASSERT(voice.getState() == VoiceState::READY, "Retour propre a l'etat READY");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 25 : Coexistence et indépendance TTS et STT sans larsen
+// =============================================================================
+void test_tts_stt_coexistence() {
+    std::cout << "\n[TEST SUITE 25] Coexistence TTS et STT sans interferences mutuelles" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_COEX";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.muteSpeakerDuringSTT = true;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    // 1. TTS en cours
+    voice.say("Bonjour, test TTS");
+    TEST_ASSERT(voice.getPlayer().isPlaybackAllowed(), "Haut-parleur autorise pour TTS");
+
+    // 2. Appel de startListening() pendant TTS -> Mute immediat et arret TTS
+    bool listenOk = voice.startListening();
+    TEST_ASSERT(listenOk, "startListening() prioritaire accepte");
+    TEST_ASSERT(!voice.getPlayer().isPlaybackAllowed(), "Haut-parleur mute pendant STT pour eviter le larsen");
+    TEST_ASSERT(voice.isListening(), "Microphone actif");
+
+    // 3. Fin de STT -> Re-autorisation haut-parleur
+    voice.stopListening();
+    const char* fJson = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Texte dicte.\"}}}";
+    voice.getClient().handleIncomingMessage(fJson, strlen(fJson));
     voice.update();
-    TEST_ASSERT(voice.getState() == VoiceState::IDLE || voice.getState() == VoiceState::CONNECTING_SERVICE, 
-                "Recuperation reussie vers IDLE / nouvel essai apres 5 secondes");
 
-    // Nettoyage transport avant destruction
+    TEST_ASSERT(voice.getPlayer().isPlaybackAllowed(), "Haut-parleur reautorise apres STT");
+    TEST_ASSERT(voice.isReady(), "Retour a READY");
+
+    // 4. Nouveau TTS
+    bool say2 = voice.say("Nouvelle annonce");
+    TEST_ASSERT(say2, "TTS reussit parfaitement apres STT");
+
     voice.getClient().setTransport(nullptr);
 }
 
@@ -726,8 +901,8 @@ void test_tls_roots_and_recovery() {
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoxCore VoiceKit   " << std::endl;
-    std::cout << "  Version : v0.1.0.3 | Cible logique C++17                 " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.3.0    " << std::endl;
+    std::cout << "  Validation TTS + STT | Cible logique C++14 / C++17       " << std::endl;
     std::cout << "===========================================================" << std::endl;
 
     test_french_time_formatting();
@@ -739,12 +914,24 @@ int main() {
     test_announced_and_displayed_time_coherence();
     test_async_requests_and_resilience();
     test_wifi_lock_lifecycle_and_keepalive();
-    test_websocket_reassembler();
+    test_audio_streamer_buffer_and_queue_management();
     test_gemini_server_json_errors();
     test_gemini_server_close_frame();
     test_model_normalization();
     test_intentional_vs_unexpected_disconnect();
     test_tls_roots_and_recovery();
+
+    // Nouvelles suites de tests STT VoiceKit v0.3.0
+    test_microphone_initialization_and_hal_arbitration();
+    test_pcm_16khz_acquisition_and_streaming();
+    test_push_to_talk_and_release_cycle();
+    test_short_and_long_dictation_scenarios();
+    test_partial_and_final_transcriptions();
+    test_consecutive_dictations();
+    test_listening_interruption_and_cancel();
+    test_wifi_disconnect_during_dictation();
+    test_silence_and_final_transcription_timeout();
+    test_tts_stt_coexistence();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

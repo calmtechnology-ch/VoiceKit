@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include "hal/IAudioOutput.h"
+#include "hal/IAudioInput.h"
 
 /**
  * @brief Mode de gestion du reseau Wi-Fi.
@@ -33,6 +34,8 @@ enum class VoiceState : uint8_t {
     GENERATING,
     WAITING_RESPONSE = GENERATING,
     SPEAKING,
+    LISTENING,        ///< Acquisition microphone et streaming en cours (STT)
+    TRANSCRIBING,     ///< Acquisition terminée, attente de la transcription finale Gemini (STT)
     ERROR_STATE
 };
 
@@ -45,6 +48,8 @@ inline const char* voiceStateToString(VoiceState state) {
         case VoiceState::READY:              return "PRET";
         case VoiceState::GENERATING:         return "GENERATION_EN_COURS";
         case VoiceState::SPEAKING:           return "RESTITUTION_EN_COURS";
+        case VoiceState::LISTENING:          return "ECOUTE_EN_COURS";
+        case VoiceState::TRANSCRIBING:       return "TRANSCRIPTION_EN_COURS";
         case VoiceState::ERROR_STATE:        return "ERREUR";
         default:                             return "INCONNU";
     }
@@ -58,8 +63,21 @@ inline const char* voiceStateToString(VoiceState state) {
 #define VOICEKIT_DEFAULT_VOICE "Aoede" // Voix supportees : Aoede, Charon, Fenrir, Kore, Puck
 #endif
 
+#define VOICEKIT_DEFAULT_TTS_INSTRUCTION \
+    "Tu es un moteur de synthese vocale TTS pur en francais pour un banc d'essai audio. " \
+    "Ton unique role est de prononcer oralement et tres exactement le texte demande mot pour mot. " \
+    "Ne formule aucun commentaire, aucune reponse conversationnelle, aucun mot d'introduction ni de conclusion. " \
+    "Prononce uniquement et tres exactement le texte fourni par l'utilisateur."
+
+#define VOICEKIT_DEFAULT_STT_INSTRUCTION \
+    "Tu es un transcripteur vocal de haute precision en temps reel pour de longs textes et discours. " \
+    "Ton unique mission est de transcrire fidelement et mot a mot l'integralite des propos prononces par " \
+    "l'utilisateur en francais ou dans sa langue, sans jamais ajouter d'introduction ni de conclusion, " \
+    "sans commenter, sans repondre aux questions dictees, et sans generer de son audio superflu. " \
+    "Reste rigoureusement silencieux sur le plan sonore."
+
 /**
- * @brief Configuration d'initialisation de VoxCore VoiceKit v0.2.0.
+ * @brief Configuration d'initialisation de VoxCore VoiceKit v0.3.0.
  */
 struct VoiceKitConfig {
     // Cle d'API Google Gemini
@@ -70,13 +88,9 @@ struct VoiceKitConfig {
     String voice = VOICEKIT_DEFAULT_VOICE;
 
     // Instructions systeme strictes pour TTS mot a mot fidele
-    String systemInstruction =
-        "Tu es un moteur de synthese vocale TTS pur en francais pour un banc d'essai audio. "
-        "Ton unique role est de prononcer oralement et tres exactement le texte demande mot pour mot. "
-        "Ne formule aucun commentaire, aucune reponse conversationnelle, aucun mot d'introduction ni de conclusion. "
-        "Prononce uniquement et tres exactement le texte fourni par l'utilisateur.";
+    String systemInstruction = VOICEKIT_DEFAULT_TTS_INSTRUCTION;
 
-    // Prefixe de consigne pour reproduction mot a mot
+    // Prefixe de consigne pour reproduction mot a mot (TTS)
     String promptPrefix = "Prononce exactement et uniquement ce texte : ";
 
     // Mode Wi-Fi
@@ -93,6 +107,15 @@ struct VoiceKitConfig {
 
     // Sortie audio optionnelle (utilise M5AudioOutput par defaut)
     IAudioOutput* audioOutput = nullptr;
+
+    // Entree audio optionnelle (utilise M5AudioInput par defaut)
+    IAudioInput* audioInput = nullptr;
+
+    // Mute du haut-parleur pendant l'écoute STT (évite l'effet larsen acoustique)
+    bool muteSpeakerDuringSTT = true;
+
+    // Timeout maximal d'attente de la transcription finale Gemini (en ms)
+    uint32_t sttFinalTimeoutMs = 6000;
 
     // Champs de compatibilite ascendante pour applications hotes autonomes
     bool hardwareAlreadyInitialized = true;

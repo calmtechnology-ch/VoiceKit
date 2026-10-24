@@ -1,11 +1,11 @@
-# VoiceKit v0.2.1 — Bibliothèque Audio TTS pour M5Stack CoreS3
+# VoiceKit v0.3.0 — Bibliothèque Audio TTS + STT pour M5Stack CoreS3
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
 [![ESP32-S3](https://img.shields.io/badge/Target-M5Stack%20CoreS3%20(ESP32--S3)-blue.svg)](https://docs.m5stack.com/en/core/CoreS3)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)** haute fidélité pour **M5Stack CoreS3** (ESP32-S3), propulsée par l'API **Gemini Live** (protocole bidirectionnel BidiGenerateContent) et construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)**.
+Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)** et de **reconnaissance vocale (Speech-To-Text / STT)** haute fidélité pour **M5Stack CoreS3** (ESP32-S3), propulsée par l'API **Gemini Live** (protocole bidirectionnel BidiGenerateContent) et construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
 
 ---
 
@@ -18,6 +18,8 @@ Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TT
    - [Méthode B — Arduino IDE](#méthode-b--arduino-ide)
    - [Méthode C — Développement Local](#méthode-c--développement-local)
 4. [Référence de l'API Publique (`VoxCoreVoice`)](#4-référence-de-lapi-publique-voxcorevoice)
+   - [API Synthèse Vocale (TTS)](#api-synthèse-vocale-tts)
+   - [API Reconnaissance Vocale (STT)](#api-reconnaissance-vocale-stt)
 5. [Exemples Inclus](#5-exemples-inclus)
 6. [Garanties de Non-Régression & Sécurité](#6-garanties-de-non-régression--sécurité)
 
@@ -26,11 +28,18 @@ Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TT
 ## 1. Fonctionnalités Principales
 
 - **Zéro dépendance intrusive** : VoiceKit est headless. Il ne requiert ni LVGL, ni UIManager, et n'interfère pas avec l'écran ou les capteurs de l'hôte.
-- **Sanctuaire Audio Mode 2 (FreeRTOS)** : 
+- **Sanctuaire Audio TTS Mode 2 (FreeRTOS)** : 
   - Tâche audio dédiée sur le Core 1 (priorité 4).
   - Tampon circulaire en PSRAM de 120 000 échantillons 16 bits @ 24 kHz (~5 s de pré-tamponnage).
   - Quadruple buffer DMA (160 ms de marge acoustique).
   - Algorithme de vidage matériel exact : aucune coupure de syllabe en fin d'énonciation.
+- **Reconnaissance Vocale STT Haute Fidélité (PCM 16 kHz)** :
+  - Capture matérielle microphone CoreS3 (double micro ES7210).
+  - Double-buffering ping-pong DMA 512 échantillons @ 16 kHz.
+  - Streaming audio asynchrone découplé vers Gemini Live avec signalisation officielle `activityStart` / `activityEnd`.
+  - Transcriptions partielles (interim) et finales avec flag `isFinal`.
+  - Règle stricte anti-hallucination : aucune invention de transcription finale à partir de fragments partiels ; gestion d'un timeout de silence paramétrable.
+  - Arbitrage matériel automatique : coupure automatique du haut-parleur pendant l'écoute pour éliminer le larsen.
 - **Sécurité TLS & Google PKI** :
   - Connexion WebSocket native `esp_websocket_client`.
   - Bundle officiel de 21 certificats Google Trust Services (`GoogleRoots.h`).
@@ -43,31 +52,37 @@ Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TT
 
 ```text
 VoiceKit/
-├── library.json                 # Manifeste PlatformIO
-├── library.properties           # Manifeste Arduino IDE
+├── library.json                 # Manifeste PlatformIO (v0.3.0)
+├── library.properties           # Manifeste Arduino IDE (v0.3.0)
 ├── LICENSE                      # Licence MIT
 ├── README.md                    # Documentation complète
 ├── CHANGELOG.md                 # Historique des versions
 ├── src/                         # Sources et en-têtes (Standard Arduino 1.5)
-│   ├── VoxCoreVoice.h           # En-tête public principal
+│   ├── VoxCoreVoice.h           # En-tête public principal (TTS + STT)
 │   ├── VoxCoreVoice.cpp         # Implémentation de la façade publique
-│   ├── VoiceKitConfig.h         # Configuration du moteur
+│   ├── VoiceKitConfig.h         # Configuration du moteur (TTS & STT)
 │   ├── core/                    # Moteur interne VoxCore
-│   │   ├── GeminiLiveClient (.h/.cpp)
-│   │   ├── LiveSessionController (.h/.cpp)
-│   │   ├── LiveAudioPlayer (.h/.cpp)
-│   │   ├── WiFiManager (.h/.cpp)
-│   │   ├── AudioTraceLog (.h/.cpp)
-│   │   └── GoogleRoots.h
+│   │   ├── GeminiLiveClient (.h/.cpp)     # Client WebSocket BidiGenerateContent
+│   │   ├── LiveSessionController (.h/.cpp)# Automate de session Gemini Live
+│   │   ├── LiveAudioPlayer (.h/.cpp)      # Lecteur DMA PCM 24 kHz (TTS)
+│   │   ├── LiveAudioStreamer (.h/.cpp)    # Streamer micro PCM 16 kHz (STT)
+│   │   ├── WiFiManager (.h/.cpp)          # Gestionnaire Wi-Fi & SNTP
+│   │   ├── AudioTraceLog (.h/.cpp)        # Journaliseur d'événements audio
+│   │   └── GoogleRoots.h                  # Bundle certificats Google Trust Services
 │   └── hal/                     # Couche d'abstraction matérielle
-│       ├── IAudioOutput.h
-│       └── M5AudioOutput (.h/.cpp)
+│       ├── IAudioOutput.h                 # Interface de sortie audio
+│       ├── IAudioInput.h                  # Interface d'entrée microphone
+│       ├── M5AudioOutput (.h/.cpp)        # HAL haut-parleur M5.Speaker
+│       ├── M5AudioInput (.h/.cpp)         # HAL microphone M5.Mic (ES7210)
+│       └── HardwareManager.h              # Arbitrage I2S centralisé HP / Micro
 ├── examples/                    # Exemples d'application
-│   ├── MinimalTTS/              # Exemple PlatformIO sans LVGL
-│   ├── OrientationClockVoice/   # Exemple PlatformIO horloge LVGL 9
+│   ├── MinimalTTS/              # Exemple PlatformIO TTS sans LVGL
+│   ├── OrientationClockVoice/   # Exemple PlatformIO horloge LVGL 9 + TTS
+│   ├── MinimalSTT/              # Exemple PlatformIO dictée Push-to-Talk
 │   └── MinimalTTS_Arduino/      # Exemple autonome Arduino IDE (.ino)
 └── tests/
-    └── external-consumer/       # Projet de validation externe sans copie locale
+    ├── run_tests.bat            # Lanceur des tests automatisés MinGW
+    └── test_voicekit_all.cpp    # 25 suites de tests unitaires (165 validations)
 ```
 
 ---
@@ -221,32 +236,65 @@ Grâce à la structure `src/` de VoiceKit v0.2.1, **aucun paramètre `-I../../in
 
 ## 4. Référence de l'API Publique (`VoxCoreVoice`)
 
-### Méthodes Principales
+### API Synthèse Vocale (TTS)
 
 | Méthode | Rôle | Caractère |
 | :--- | :--- | :---: |
 | `bool begin(const VoiceKitConfig& config)` | Démarre les pilotes audio, le Wi-Fi, la synchronisation SNTP et la session Gemini Live. | Asynchrone / Non bloquant |
 | `bool say(const String& text)` | Met en file et transmet la phrase à synthétiser en streaming audio PCM 24 kHz. | **Non bloquant** |
-| `void update()` | Traite la machine d'état et le flux WebSocket. À appeler à chaque itération de `loop()`. | **Non bloquant** (< 1 ms) |
-| `void stop()` | Interrompt immédiatement l'audio en cours et purge le buffer PSRAM. | Immédiat |
-| `bool isReady() const` | Indique si le réseau et la session Gemini sont prêts pour une nouvelle synthèse. | Non bloquant |
-| `bool isBusy() const` | Indique si une requête ou une restitution audio est active. | Non bloquant |
+| `void update()` | Traite la machine d'état, le flux WebSocket et le streamer micro. À appeler à chaque `loop()`. | **Non bloquant** (< 1 ms) |
+| `void stop()` | Interrompt immédiatement l'audio en cours ou l'écoute micro et purge les tampons. | Immédiat |
+| `bool isReady() const` | Indique si le réseau et la session Gemini sont prêts pour une synthèse ou une dictée. | Non bloquant |
+| `bool isBusy() const` | Indique si une requête, restitution audio ou écoute microphone est active. | Non bloquant |
 | `bool isSpeaking() const` | Indique si des échantillons sont actuellement envoyés aux haut-parleurs via DMA. | Non bloquant |
-| `void setVolume(uint8_t volume)` | Règle le volume sonore de 0 à 255. | Immédiat |
+| `void setVolume(uint8_t volume)` | Règle le volume sonore de 0 à 100 %. | Immédiat |
+
+### API Reconnaissance Vocale (STT)
+
+| Méthode | Rôle | Caractère |
+| :--- | :--- | :---: |
+| `bool startListening()` | Démarre la capture micro PCM 16 kHz et le streaming vers Gemini Live. Interrompt tout TTS en cours. | **Non bloquant** |
+| `bool stopListening()` | Arrête l'acquisition micro, envoie `activityEnd` et attend la transcription finale. | **Non bloquant** |
+| `void cancelListening()` | Annule immédiatement l'acquisition microphone sans attendre de transcription. | Immédiat |
+| `bool isListening() const` | Indique si le microphone est activement en train de capturer la voix. | Non bloquant |
+| `bool isTranscribing() const` | Indique que l'acquisition est finie et que la transcription finale est en attente. | Non bloquant |
+| `void onTranscription(TranscriptionCallback cb)` | Enregistre le callback de réception des transcriptions : `void(const String& text, bool isFinal)`. | Immédiat |
+| `void onListeningStarted(VoidCallback cb)` | Déclenché dès que la capture microphone et le streaming sont effectifs. | Immédiat |
+| `void onListeningFinished(VoidCallback cb)` | Déclenché au relâchement du bouton microphone. | Immédiat |
+
+### États Opérationnels (`VoiceState`)
+
+L'état du moteur est accessible via `voice.getState()` :
+- `VoiceState::INITIALIZING` : Démarrage des composants matériels et réseau.
+- `VoiceState::CONNECTING_WIFI` : Négociation du lien Wi-Fi local.
+- `VoiceState::CONNECTING_SERVICE` : Poignée de main TLS et ouverture de la session Gemini Live.
+- `VoiceState::READY` : Moteur prêt pour une synthèse vocale `say()` ou une dictée `startListening()`.
+- `VoiceState::LISTENING` : Écoute active du microphone (Push-to-Talk enfoncé).
+- `VoiceState::TRANSCRIBING` : Microphone relâché, attente de la transcription textuelle.
+- `VoiceState::SPEAKING` : Restitution sonore du haut-parleur en cours.
+- `VoiceState::ERROR_STATE` : Anomalie réseau ou API (erreur récupérable via nouvel essai).
 
 ### Callbacks d'Événements
 
 ```cpp
-voice.onStateChanged([](VoiceState state) {
-    // Changement d'état (INITIALIZING, CONNECTING_WIFI, TIME_SYNC, READY, SPEAKING, ERROR)
+voice.onTranscription([](const String& text, bool isFinal) {
+    if (isFinal) {
+        Serial.printf("[STT FINAL] \"%s\"\n", text.c_str());
+    } else {
+        Serial.printf("[STT INTERIM] \"%s\"\n", text.c_str());
+    }
+});
+
+voice.onListeningStarted([]() {
+    // Microphone actif, le Push-to-Talk est enfoncé
+});
+
+voice.onListeningFinished([]() {
+    // Bouton relâché, attente du résultat
 });
 
 voice.onReady([]() {
-    // Prêt à recevoir une commande say()
-});
-
-voice.onSpeechStarted([]() {
-    // Le premier échantillon sonore franchit le DMA
+    // Prêt à recevoir une commande say() ou startListening()
 });
 
 voice.onSpeechFinished([]() {
@@ -263,20 +311,22 @@ voice.onError([](const String& message) {
 ## 5. Exemples Inclus
 
 1. **`examples/MinimalTTS/`** (PlatformIO) :  
-   Validation physique minimale sans LVGL. Démonstration de `voice.say()` au démarrage puis déclenchement tactile sur l'écran.
-2. **`examples/OrientationClockVoice/`** (PlatformIO) :  
+   Validation physique TTS minimale sans LVGL. Démonstration de `voice.say()` au démarrage puis déclenchement tactile sur l'écran.
+2. **`examples/MinimalSTT/`** (PlatformIO) :  
+   Démonstration de reconnaissance vocale Push-to-Talk STT pour M5Stack CoreS3. Bouton tactile « DICTER », affichage des états (PRÊT, ÉCOUTE, TRANSCRIPTION, TERMINÉ, ERREUR), affichage dynamique des résultats intérimaires et finaux à l'écran et sur le moniteur série.
+3. **`examples/OrientationClockVoice/`** (PlatformIO) :  
    Application complète d'horloge dynamique intégrant **LVGL 9**, accéléromètre **BMI270** (rotation 360°), horloge RTC **BM8563**, et annonce de l'heure en français sur appui tactile.
-3. **`examples/MinimalTTS_Arduino/`** (Arduino IDE) :  
+4. **`examples/MinimalTTS_Arduino/`** (Arduino IDE) :  
    Croquis autonome `.ino` prêt à l'emploi avec documentation pas-à-pas des menus Arduino IDE.
 
 ---
 
 ## 6. Garanties de Non-Régression & Sécurité
 
-La version **v0.2.1** préserve strictement la totalité du moteur vocal validé sur matériel en **v0.2.0** :
-- **WebSocket TLS & Poignée de main** : Identique (pile 14 Ko, `esp_websocket_client`).
-- **Certificats officiels Google Trust Services** : Intacts (empreinte SHA-256 de `GoogleRoots.h` inchangée).
-- **Lecteur Audio DMA & PSRAM** : Intact (`LiveAudioPlayer.cpp` et `M5AudioOutput.cpp` inchangés au bit près).
+La version **v0.3.0** garantit une non-régression absolue sur la parole (TTS v0.2.1) :
+- **Intégrité binaire vérifiée (SHA-256)** : Les composants critiques TTS (`LiveAudioPlayer.cpp`, `GeminiLiveClient.cpp`, `LiveSessionController.cpp`, `AudioTraceLog.cpp`, `M5AudioOutput.cpp` et `GoogleRoots.h`) présentent une empreinte SHA-256 rigoureusement identique à v0.2.1.
+- **Arbitrage matériel garanti** : Pas de conflit I2S ni de larsen grâce au `HardwareManager` qui coupe automatiquement le haut-parleur lors de la prise de son micro.
+- **Suite de tests automatisés** : 25 suites de tests unitaires et 165 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
 - **Zéro identifiant en clair** : Aucun secret, SSID Wi-Fi ni clé API n'est publié dans le dépôt.
 
-Consultez le [Rapport de Livraison v0.2.1](RAPPORT_LIVRAISON_v0.2.1.md) pour les empreintes SHA-256 et les preuves de compilation.
+Consultez le [Rapport de Livraison v0.3.0](RAPPORT_LIVRAISON_v0.3.0.md) pour les empreintes SHA-256 et les preuves de compilation.
