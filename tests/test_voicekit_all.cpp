@@ -897,12 +897,430 @@ void test_tts_stt_coexistence() {
 }
 
 // =============================================================================
+// SUITE 26 : Activation du mode conversationnel et instruction système (Mode B)
+// =============================================================================
+void test_conversation_activation_and_instructions() {
+    std::cout << "\n[TEST SUITE 26] Activation mode conversationnel et instructions systeme (Mode B)" << std::endl;
+
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_CONV_ACT";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.systemInstruction = VOICEKIT_DEFAULT_TTS_INSTRUCTION;
+    voice.begin(config);
+
+    TEST_ASSERT(!voice.isConversationEnabled(), "Mode conversation desactive par defaut (v0.3.0 compatible)");
+
+    voice.enableConversation(true);
+    TEST_ASSERT(voice.isConversationEnabled(), "Mode conversation active via enableConversation(true)");
+    TEST_ASSERT(voice.getClient().getSystemInstruction() == VOICEKIT_DEFAULT_CONVERSATION_INSTRUCTION,
+                "Instruction systeme mise a jour pour la conversation bienveillante et concise");
+
+    voice.enableConversation(false);
+    TEST_ASSERT(!voice.isConversationEnabled(), "Mode conversation desactive");
+    TEST_ASSERT(voice.getClient().getSystemInstruction() == VOICEKIT_DEFAULT_TTS_INSTRUCTION,
+                "Instruction systeme TTS d'origine restauree");
+}
+
+// =============================================================================
+// SUITE 27 : Cycle conversationnel complet READY -> LISTENING -> PROCESSING -> SPEAKING -> READY
+// =============================================================================
+void test_conversation_turn_lifecycle() {
+    std::cout << "\n[TEST SUITE 27] Cycle conversationnel complet (READY -> LISTENING -> PROCESSING -> SPEAKING -> READY)" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_LIFECYCLE";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableConversation = true;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    TEST_ASSERT(voice.getState() == VoiceState::READY, "Etat initial READY");
+    TEST_ASSERT(voice.getPlayer().isPlaybackAllowed(), "Haut-parleur initialement pret");
+
+    bool convFinished = false;
+    voice.onConversationFinished([&]() {
+        convFinished = true;
+    });
+
+    // 1. Début de parole utilisateur (Appui PARLER)
+    bool started = voice.startListening();
+    TEST_ASSERT(started, "startListening() en mode conversation accepte");
+    TEST_ASSERT(voice.isListening(), "isListening() true");
+    TEST_ASSERT(voice.getState() == VoiceState::LISTENING, "Etat = LISTENING");
+    TEST_ASSERT(!voice.getPlayer().isPlaybackAllowed(), "Anti-larsen strict : haut-parleur coupe pendant l'ecoute");
+
+    // 2. Simulation de parole (blocs PCM 16 kHz transmis)
+    std::vector<int16_t> sampleBlock(AUDIO_CHUNK_SAMPLES, 400);
+    voice.getStreamer().pushSimulatedChunk(sampleBlock.data(), sampleBlock.size());
+    voice.getStreamer().tick();
+    TEST_ASSERT(voice.getStreamer().getChunksSent() >= 1, "Blocs audio emis vers Gemini Live");
+
+    // 3. Relâchement du bouton PARLER
+    bool stopped = voice.stopListening();
+    TEST_ASSERT(stopped, "stopListening() en mode conversation accepte");
+    TEST_ASSERT(voice.getState() == VoiceState::WAITING_RESPONSE, "Etat = WAITING_RESPONSE (PROCESSING)");
+    TEST_ASSERT(voice.getPlayer().isPlaybackAllowed(), "Micro coupe : haut-parleur reautorise pour la reponse");
+
+    // 4. Réception de la transcription utilisateur
+    const char* userJson = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Quelle heure est-il ?\"}}}";
+    voice.getClient().handleIncomingMessage(userJson, strlen(userJson));
+    voice.update();
+
+    // 5. Réception du premier son audio Gemini (24 kHz)
+    voice.getSession().transitionTo(LiveSessionState::PLAYING, "Premier son recu");
+    voice.update();
+    TEST_ASSERT(voice.getState() == VoiceState::SPEAKING, "Etat = SPEAKING");
+
+    // 6. Fin de la restitution audio
+    voice.getSession().finishTurn();
+    voice.update();
+
+    TEST_ASSERT(voice.getState() == VoiceState::READY, "Retour a l'etat READY");
+    TEST_ASSERT(convFinished, "Callback onConversationFinished declenche");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 28 : Callbacks onUserText et onAssistantText
+// =============================================================================
+void test_conversation_callbacks_user_and_assistant() {
+    std::cout << "\n[TEST SUITE 28] Transcriptions utilisateur (interim + final) et transcription assistant" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_CB";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableConversation = true;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    String lastUserInterim = "";
+    String lastUserFinal = "";
+    String lastAssistant = "";
+
+    voice.onUserText([&](const String& text, bool isFinal) {
+        if (isFinal) lastUserFinal = text;
+        else lastUserInterim = text;
+    });
+
+    voice.onAssistantText([&](const String& text) {
+        lastAssistant = text;
+    });
+
+    voice.startListening();
+
+    // Interim user
+    const char* interim = "{\"serverContent\":{\"interimInputTranscription\":{\"text\":\"Bonjour\"}}}";
+    voice.getClient().handleIncomingMessage(interim, strlen(interim));
+    TEST_ASSERT(lastUserInterim == "Bonjour", "Transcription utilisateur interim recue");
+
+    // Final user
+    const char* finalU = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Bonjour Gemini\"}}}";
+    voice.getClient().handleIncomingMessage(finalU, strlen(finalU));
+    TEST_ASSERT(lastUserFinal == "Bonjour Gemini", "Transcription utilisateur finale recue");
+
+    // Assistant text
+    const char* asst = "{\"serverContent\":{\"modelTurn\":{\"parts\":[{\"text\":\"Bonjour ! Que puis-je faire pour vous ?\"}]}}}";
+    voice.getClient().handleIncomingMessage(asst, strlen(asst));
+    TEST_ASSERT(lastAssistant == "Bonjour ! Que puis-je faire pour vous ?", "Transcription assistant Gemini recue");
+
+    voice.stopListening();
+    voice.getSession().finishTurn();
+    voice.update();
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 29 : Restitution audio 24 kHz et préservation de la dernière syllabe
+// =============================================================================
+void test_conversation_audio_preservation_last_syllable() {
+    std::cout << "\n[TEST SUITE 29] Restitution audio native 24 kHz et preservation derniere syllabe" << std::endl;
+
+    LiveAudioPlayer player;
+    TEST_ASSERT(player.begin(120000), "Initialisation du buffer PSRAM (120 000 ech)");
+
+    // Remplir 2400 échantillons (100 ms)
+    std::vector<int16_t> samples(2400, 1500);
+    player.feedPcm(samples.data(), samples.size());
+
+    TEST_ASSERT(player.getBufferedSamples() == 2400, "2400 echantillons en tampon avant notification de fin");
+
+    // Arrivée de turnComplete
+    player.notifyTurnComplete();
+
+    // RÈGLE CRITIQUE : player NE DOIT PAS s'arrêter immédiatement, le tampon doit être vidé
+    TEST_ASSERT(player.isPlaying(), "La lecture continue apres turnComplete (protection derniere syllabe)");
+    TEST_ASSERT(player.isTurnComplete(), "Notification turnComplete enregistree");
+
+    // Simulation de vidage par tick audio et consommation speaker
+    int tickCount = 0;
+    while ((player.getBufferedSamples() > 0 || player.isPlaying()) && tickCount < 100) {
+        player.tick();
+        player.simFinishSpeakerChunk();
+        advanceMockMillis(20);
+        tickCount++;
+    }
+
+    TEST_ASSERT(!player.isPlaying(), "Arret seulement apres vidage complet");
+    TEST_ASSERT(player.getBufferedSamples() == 0, "Tampon integralement vide sans coupure");
+}
+
+// =============================================================================
+// SUITE 30 : Enchaînement de 10 tours conversationnels successifs dans la même session
+// =============================================================================
+void test_conversation_ten_consecutive_turns() {
+    std::cout << "\n[TEST SUITE 30] Enchainement de 10 tours conversationnels successifs" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_10TURNS";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableConversation = true;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    uint32_t turnsCompleted = 0;
+    voice.onConversationFinished([&]() {
+        turnsCompleted++;
+    });
+
+    for (int t = 1; t <= 10; ++t) {
+        TEST_ASSERT(voice.isReady(), "Moteur PRET avant le tour");
+        bool started = voice.startListening();
+        TEST_ASSERT(started, "startListening() reussi pour le tour");
+        TEST_ASSERT(voice.isListening(), "Etat LISTENING");
+
+        std::vector<int16_t> sampleBlock(AUDIO_CHUNK_SAMPLES, 200);
+        voice.getStreamer().pushSimulatedChunk(sampleBlock.data(), sampleBlock.size());
+        voice.getStreamer().tick();
+
+        voice.stopListening();
+        TEST_ASSERT(voice.getState() == VoiceState::WAITING_RESPONSE, "Etat WAITING_RESPONSE");
+
+        voice.getSession().transitionTo(LiveSessionState::PLAYING, "Reponse recue");
+        voice.update();
+        TEST_ASSERT(voice.getState() == VoiceState::SPEAKING, "Etat SPEAKING");
+
+        voice.getSession().finishTurn();
+        voice.getSession().transitionTo(LiveSessionState::CONNECTED, "Fin lecture audio");
+        voice.update();
+        TEST_ASSERT(voice.getState() == VoiceState::READY, "Retour a READY");
+    }
+
+    TEST_ASSERT(turnsCompleted == 10, "10 tours conversationnels acheves avec succes dans la meme session");
+    TEST_ASSERT(voice.getConversationMetrics().turnId >= 10, "Compteur de tours incremente correctement");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 31 : Interruption STOP prioritaire pendant l'écoute et pendant la réponse
+// =============================================================================
+void test_conversation_stop_priority_listening_and_speaking() {
+    std::cout << "\n[TEST SUITE 31] Interruption STOP prioritaire pendant l'ecoute et pendant la reponse" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_STOP";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableConversation = true;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    // 1. STOP pendant l'écoute
+    voice.startListening();
+    TEST_ASSERT(voice.isListening(), "Ecoute active avant STOP");
+    voice.stop();
+    TEST_ASSERT(!voice.isListening(), "Ecoute immediatement interrompue");
+    TEST_ASSERT(voice.getPlayer().isPlaybackAllowed(), "Haut-parleur reautorise apres STOP");
+    TEST_ASSERT(voice.isReady(), "Retour immediat a READY");
+
+    // 2. STOP pendant la réflexion / réponse
+    voice.startListening();
+    voice.stopListening();
+    voice.getSession().transitionTo(LiveSessionState::PLAYING, "Audio en cours");
+    voice.update();
+    TEST_ASSERT(voice.getState() == VoiceState::SPEAKING, "En cours de parole");
+
+    voice.stop();
+    TEST_ASSERT(voice.getState() == VoiceState::READY, "Arret immediat de la parole -> READY");
+    TEST_ASSERT(!voice.isSpeaking(), "Haut-parleur arrete");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 32 : Résilience : Déconnexion Wi-Fi pendant un tour et reprise propre
+// =============================================================================
+void test_conversation_wifi_disconnect_and_recovery() {
+    std::cout << "\n[TEST SUITE 32] Resilience : Deconnexion Wi-Fi pendant un tour et reprise propre" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_WIFI_DISC";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableConversation = true;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    voice.startListening();
+    TEST_ASSERT(voice.isListening(), "Ecoute active");
+
+    // Coupure réseau simulée
+    WiFi.setConnected(false);
+    mockTransport.disconnect();
+    voice.update();
+
+    TEST_ASSERT(voice.getState() == VoiceState::ERROR_STATE || voice.getState() == VoiceState::DISCONNECTED,
+                "Bascule en etat d'erreur ou deconnecte lors de la perte Wi-Fi");
+
+    // Rétablissement réseau
+    WiFi.setConnected(true);
+    prepareMockVoiceReady(voice, mockTransport);
+    TEST_ASSERT(voice.isReady(), "Retablissement complet de la session apres reconnexion");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 33 : Absence de parole et gestion du cycle à vide
+// =============================================================================
+void test_conversation_silence_handling() {
+    std::cout << "\n[TEST SUITE 33] Absence de parole et gestion du cycle a vide" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_SILENCE";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableConversation = true;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    // Appui et relâchement immédiat sans parole
+    voice.startListening();
+    voice.stopListening();
+    TEST_ASSERT(voice.getState() == VoiceState::WAITING_RESPONSE, "Bascule en WAITING_RESPONSE");
+
+    // Réception turnComplete direct du serveur sans audio
+    voice.getSession().finishTurn();
+    voice.update();
+
+    TEST_ASSERT(voice.getState() == VoiceState::READY, "Retour propre a READY apres silence");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 34 : Métriques de diagnostic d'un tour de conversation
+// =============================================================================
+void test_conversation_metrics_accuracy() {
+    std::cout << "\n[TEST SUITE 34] Metriques diagnostiques completes du tour de conversation" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_METRICS";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableConversation = true;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    ConversationMetrics capturedMetrics;
+    voice.onConversationTurnMetrics([&](const ConversationMetrics& m) {
+        capturedMetrics = m;
+    });
+
+    voice.startListening();
+
+    std::vector<int16_t> sampleBlock(AUDIO_CHUNK_SAMPLES, 350);
+    voice.getStreamer().pushSimulatedChunk(sampleBlock.data(), sampleBlock.size());
+    voice.getStreamer().tick();
+
+    voice.stopListening();
+
+    const char* userJson = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Bonjour\"}}}";
+    voice.getClient().handleIncomingMessage(userJson, strlen(userJson));
+
+    const char* asstJson = "{\"serverContent\":{\"modelTurn\":{\"parts\":[{\"text\":\"Bonjour !\"}]}}}";
+    voice.getClient().handleIncomingMessage(asstJson, strlen(asstJson));
+
+    voice.getSession().transitionTo(LiveSessionState::PLAYING, "Audio");
+    voice.getSession().finishTurn();
+    voice.update();
+
+    const ConversationMetrics& m = voice.getConversationMetrics();
+    TEST_ASSERT(m.turnId > 0, "turnId > 0");
+    TEST_ASSERT(m.audioBlocksSent >= 1, "audioBlocksSent >= 1");
+    TEST_ASSERT(m.userText == "Bonjour", "userText correctement renseigne dans les metriques");
+    TEST_ASSERT(m.assistantText == "Bonjour !", "assistantText correctement renseigne dans les metriques");
+    TEST_ASSERT(capturedMetrics.turnId == m.turnId, "Callback onConversationTurnMetrics identique");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 35 : Non-régression intégrale : TTS pur et STT pur non affectés
+// =============================================================================
+void test_v030_v040_complete_non_regression() {
+    std::cout << "\n[TEST SUITE 35] Non-regression integrale : TTS pur et STT pur preserves" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_NONREG";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableConversation = false; // Mode classique par défaut
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    // 1. TTS pur
+    bool sayOk = voice.say("Non-regression TTS");
+    TEST_ASSERT(sayOk, "TTS pur fonctionne exactement comme en v0.2.1");
+    voice.stop();
+    TEST_ASSERT(voice.isReady(), "Retour a READY apres TTS");
+
+    // 2. STT pur (mode silencieux avec restitution sur transcription finale)
+    bool sttOk = voice.startListening();
+    TEST_ASSERT(sttOk, "STT pur demarre comme en v0.3.0");
+    TEST_ASSERT(!voice.getPlayer().isPlaybackAllowed(), "Haut-parleur muet pour STT");
+
+    voice.stopListening();
+    TEST_ASSERT(voice.isTranscribing(), "En cours de transcription");
+
+    bool sttFinalFired = false;
+    voice.onTranscription([&](const String& text, bool isFinal) {
+        if (isFinal) sttFinalFired = true;
+    });
+
+    const char* finalJson = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Phrase transcrite\"}}}";
+    voice.getClient().handleIncomingMessage(finalJson, strlen(finalJson));
+    voice.update();
+
+    TEST_ASSERT(sttFinalFired, "Transcription finale STT pure recue");
+    TEST_ASSERT(voice.isReady(), "STT pur revient a READY sans jouer d'audio");
+    TEST_ASSERT(voice.getPlayer().isPlaybackAllowed(), "Haut-parleur reautorise apres STT");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.3.0    " << std::endl;
-    std::cout << "  Validation TTS + STT | Cible logique C++14 / C++17       " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.4.0    " << std::endl;
+    std::cout << "  Validation TTS + STT + Conversation (Mode B Native)     " << std::endl;
+    std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
     std::cout << "===========================================================" << std::endl;
 
     test_french_time_formatting();
@@ -921,7 +1339,7 @@ int main() {
     test_intentional_vs_unexpected_disconnect();
     test_tls_roots_and_recovery();
 
-    // Nouvelles suites de tests STT VoiceKit v0.3.0
+    // Suites de tests STT VoiceKit v0.3.0
     test_microphone_initialization_and_hal_arbitration();
     test_pcm_16khz_acquisition_and_streaming();
     test_push_to_talk_and_release_cycle();
@@ -933,9 +1351,22 @@ int main() {
     test_silence_and_final_transcription_timeout();
     test_tts_stt_coexistence();
 
+    // Nouvelles suites de tests conversation VoiceKit v0.4.0
+    test_conversation_activation_and_instructions();
+    test_conversation_turn_lifecycle();
+    test_conversation_callbacks_user_and_assistant();
+    test_conversation_audio_preservation_last_syllable();
+    test_conversation_ten_consecutive_turns();
+    test_conversation_stop_priority_listening_and_speaking();
+    test_conversation_wifi_disconnect_and_recovery();
+    test_conversation_silence_handling();
+    test_conversation_metrics_accuracy();
+    test_v030_v040_complete_non_regression();
+
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;
     std::cout << "===========================================================" << std::endl;
 
     return (s_testsFailed == 0) ? 0 : 1;
 }
+

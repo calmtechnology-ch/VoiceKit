@@ -97,6 +97,9 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
 
     // Enregistrement de l'écouteur de transcriptions entrantes utilisateur
     _client.setOnInputTranscription([this](const String& text, bool isFinal) {
+        if (_conversationEnabled) {
+            _conversationController.handleUserTranscription(text, isFinal);
+        }
         handleIncomingTranscription(text, isFinal);
     });
 
@@ -109,8 +112,55 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         return false;
     }
 
+    // Écouteur de transcription de sortie Gemini (Mode conversation)
+    _session.setOnOutputTranscription([this](const String& text) {
+        if (_conversationEnabled) {
+            _conversationController.handleAssistantTranscription(text);
+        }
+    });
+
+    _session.setOnTurnFinished([this](uint64_t turnId) {
+        if (_conversationEnabled) {
+            _conversationController.handleTurnFinished(turnId);
+        }
+    });
+
+    // Initialisation du contrôleur de conversation bidirectionnelle
+    _conversationController.begin(&_client, &_session, &_streamer, &_player, _config);
+
+    _conversationController.setOnStateChanged([this](VoiceState s) {
+        setState(s);
+    });
+
+    _conversationController.setOnUserText([this](const String& text, bool isFinal) {
+        if (_onUserText) _onUserText(text, isFinal);
+    });
+
+    _conversationController.setOnAssistantText([this](const String& text) {
+        if (_onAssistantText) _onAssistantText(text);
+    });
+
+    _conversationController.setOnConversationFinished([this]() {
+        if (_onConversationFinished) _onConversationFinished();
+    });
+
+    _conversationController.setOnTurnMetrics([this](const ConversationMetrics& m) {
+        if (_onConversationTurnMetrics) _onConversationTurnMetrics(m);
+    });
+
+    _conversationController.setOnError([this](const String& err) {
+        _lastError = err;
+        setState(VoiceState::ERROR_STATE);
+        if (_onError) _onError(err);
+    });
+
+    if (_config.enableConversation) {
+        enableConversation(true);
+    }
+
     // Callbacks du contrôleur de session
     _session.setOnStateChanged([this](LiveSessionState s) {
+
         switch (s) {
             case LiveSessionState::CONNECTED:
                 // Si on n'est pas déjà en train d'écouter ou de transcrire
@@ -174,6 +224,9 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _session.setOnError([this](const String& err) {
         _lastError = err;
         _pendingText = "";
+        if (_conversationEnabled) {
+            _conversationController.requestStop();
+        }
         setState(VoiceState::ERROR_STATE);
         if (_onError) {
             _onError(err);
@@ -241,12 +294,20 @@ void VoxCoreVoice::update() {
     _player.tick();
     _session.tick();
 
+    if (_conversationEnabled) {
+        _conversationController.tick();
+    }
+
+
     // 3. Traitement régulier du streamer audio STT
     if (_streamer.isStreaming()) {
         if (!_client.isConnected()) {
             _lastError = "Perte connexion Gemini Live pendant ecoute micro";
             Serial.printf("[VoiceKit] %s\n", _lastError.c_str());
             _streamer.cancel();
+            if (_conversationEnabled) {
+                _conversationController.requestStop();
+            }
             _player.setPlaybackAllowed(true);
             setState(VoiceState::ERROR_STATE);
             if (_onError) _onError(_lastError);
@@ -258,6 +319,9 @@ void VoxCoreVoice::update() {
             }
             Serial.printf("[VoiceKit] Erreur streaming micro : %s\n", _lastError.c_str());
             _streamer.cancel();
+            if (_conversationEnabled) {
+                _conversationController.requestStop();
+            }
             _player.setPlaybackAllowed(true);
             setState(VoiceState::ERROR_STATE);
             if (_onError) _onError(_lastError);
@@ -397,6 +461,9 @@ bool VoxCoreVoice::dispatchSpeech(const String& text) {
 
 void VoxCoreVoice::stop() {
     Serial.println("[VoiceKit] Arret demande (stop)");
+    if (_conversationEnabled && _conversationController.isTurnActive()) {
+        _conversationController.requestStop();
+    }
     _pendingText = "";
     while (!_textQueue.empty()) {
         _textQueue.pop();
@@ -420,6 +487,9 @@ bool VoxCoreVoice::isSpeaking() const {
 }
 
 bool VoxCoreVoice::isBusy() const {
+    if (_conversationEnabled && _conversationController.isTurnActive()) {
+        return true;
+    }
     return (isSpeaking() || 
             isListening() ||
             isTranscribing() ||
@@ -438,11 +508,32 @@ uint8_t VoxCoreVoice::getVolume() const {
 }
 
 // =============================================================================
-// Implémentation STT (Speech-to-Text)
+// Implémentation Conversation Bidirectionnelle (v0.4.0)
+// =============================================================================
+
+void VoxCoreVoice::enableConversation(bool enable) {
+    _conversationEnabled = enable;
+    _config.enableConversation = enable;
+    if (enable) {
+        _client.setSystemInstruction(_config.conversationInstruction);
+        Serial.println("[VoiceKit] Mode conversation bidirectionnelle native (Mode B) ACTIVE");
+    } else {
+        _client.setSystemInstruction(_config.systemInstruction);
+        Serial.println("[VoiceKit] Mode conversation DESACTIVE (retour mode unitaire)");
+    }
+}
+
+// =============================================================================
+// Implémentation STT (Speech-to-Text) & Déclenchement Conversation
 // =============================================================================
 
 bool VoxCoreVoice::startListening() {
     _lastError = "";
+
+    // 0. En mode conversationnel bidirectionnel (Mode B)
+    if (_conversationEnabled) {
+        return _conversationController.startTurn();
+    }
 
     // 1. Si une restitution sonore TTS ou attente de réponse est en cours, l'interrompre prioritairement
     if (_session.getState() == LiveSessionState::WAITING_RESPONSE || isSpeaking()) {
@@ -503,6 +594,10 @@ bool VoxCoreVoice::startListening() {
 }
 
 bool VoxCoreVoice::stopListening() {
+    if (_conversationEnabled) {
+        return _conversationController.finishTurnAudio();
+    }
+
     if (!isListening() && !_streamer.isStreaming()) {
         return false;
     }
@@ -526,6 +621,11 @@ bool VoxCoreVoice::stopListening() {
 }
 
 void VoxCoreVoice::cancelListening() {
+    if (_conversationEnabled) {
+        _conversationController.requestStop();
+        return;
+    }
+
     Serial.println("[VoiceKit] cancelListening() : Annulation ecoute sans transcription");
     _streamer.cancel();
     _transcriptionPending = false;
@@ -537,10 +637,16 @@ void VoxCoreVoice::cancelListening() {
 }
 
 bool VoxCoreVoice::isListening() const {
+    if (_conversationEnabled) {
+        return _conversationController.getState() == VoiceState::LISTENING;
+    }
     return (_state == VoiceState::LISTENING || _streamer.isStreaming());
 }
 
 bool VoxCoreVoice::isTranscribing() const {
+    if (_conversationEnabled) {
+        return _conversationController.getState() == VoiceState::WAITING_RESPONSE;
+    }
     return (_state == VoiceState::TRANSCRIBING || _transcriptionPending);
 }
 
@@ -552,8 +658,10 @@ void VoxCoreVoice::handleIncomingTranscription(const String& text, bool isFinal)
         _lastFinalText = text;
         _player.setPlaybackAllowed(true);
 
-        if (_state == VoiceState::TRANSCRIBING || _state == VoiceState::LISTENING) {
-            setState(VoiceState::READY);
+        if (!_conversationEnabled) {
+            if (_state == VoiceState::TRANSCRIBING || _state == VoiceState::LISTENING) {
+                setState(VoiceState::READY);
+            }
         }
 
         if (_onTranscription) {
@@ -566,3 +674,4 @@ void VoxCoreVoice::handleIncomingTranscription(const String& text, bool isFinal)
         }
     }
 }
+

@@ -52,6 +52,10 @@ public:
     // Envoi d'un message texte (mode TTS)
     bool sendTextMessage(const String& text);
 
+    // Gestion des tours audio en mode conversationnel (v0.4.0)
+    bool beginAudioTurn();
+    void finishAudioCapture();
+
     // Interruption prioritaire STOP
     void requestStop();
 
@@ -63,6 +67,8 @@ public:
     bool isActive() const { return _state != LiveSessionState::DISCONNECTED; }
     uint32_t getChunksReceived() const;
     uint32_t getFirstAudioLatencyMs() const { return _firstAudioLatencyMs; }
+
+
     uint32_t getDisconnectCount() const { return _disconnectCount; }
     const char* getLastError() const { return _lastError; }
     const String& getLastAssistantText() const { return _lastAssistantText; }

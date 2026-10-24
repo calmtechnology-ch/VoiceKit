@@ -13,17 +13,20 @@
 #include "core/GeminiLiveClient.h"
 #include "core/LiveSessionController.h"
 #include "core/LiveAudioStreamer.h"
+#include "core/ConversationController.h"
 #include "WiFiManager.h"
 
 /**
  * @class VoxCoreVoice
- * @brief Bibliothèque autonome TTS (Synthèse vocale) et STT (Reconnaissance vocale)
+ * @brief Bibliothèque autonome TTS, STT et Conversation vocale bidirectionnelle
  *        pour M5Stack CoreS3 avec Google Gemini Live.
  * 
  * Construit directement sur le moteur stabilisé de VoxCore :
  * - TTS : WebSocket TLS, PCM 24 kHz haute fluidité, buffer DMA, zéro coupure.
  * - STT : Microphone ES7210 16 kHz mono, double-buffering DMA, tâches FreeRTOS découplées,
  *         transcriptions partielles et finales Gemini Live, arbitrage matériel strict.
+ * - Conversation (v0.4.0) : Conversation bidirectionnelle native (Mode B), gestion des tours,
+ *         coordination anti-larsen, restitution de la réponse complète sans troncature.
  * - Zéro couplage avec LVGL ni UIManager.
  */
 class VoxCoreVoice {
@@ -32,6 +35,9 @@ public:
     using ErrorCallback = std::function<void(const String& error)>;
     using StateCallback = std::function<void(VoiceState state)>;
     using TranscriptionCallback = std::function<void(const String& text, bool isFinal)>;
+    using AssistantTextCallback = std::function<void(const String& text)>;
+    using TurnFinishedCallback = std::function<void(const ConversationMetrics& metrics)>;
+
 
     VoxCoreVoice();
     ~VoxCoreVoice();
@@ -155,6 +161,52 @@ public:
      */
     void onListeningFinished(VoidCallback cb) { _onListeningFinished = std::move(cb); }
 
+    // =========================================================================
+    // API Conversation Bidirectionnelle (v0.4.0)
+    // =========================================================================
+
+    /**
+     * @brief Active ou désactive le mode conversationnel bidirectionnel natif (Mode B).
+     * @param enable true pour activer la conversation native Gemini Live, false pour le mode unitaire TTS/STT.
+     */
+    void enableConversation(bool enable = true);
+
+    /**
+     * @brief Indique si le mode conversationnel est actif.
+     */
+    bool isConversationEnabled() const { return _conversationEnabled; }
+
+    /**
+     * @brief Définit le callback recevant la transcription de ce que l'utilisateur dit (partielle ou finale).
+     */
+    void onUserText(TranscriptionCallback cb) { _onUserText = std::move(cb); }
+
+    /**
+     * @brief Définit le callback recevant la transcription de la réponse de l'assistant Gemini.
+     */
+    void onAssistantText(AssistantTextCallback cb) { _onAssistantText = std::move(cb); }
+
+    /**
+     * @brief Callback déclenché à la fin complète d'un tour de conversation (restitution audio achevée).
+     */
+    void onConversationFinished(VoidCallback cb) { _onConversationFinished = std::move(cb); }
+
+    /**
+     * @brief Callback avec métriques complètes du tour de conversation.
+     */
+    void onConversationTurnMetrics(TurnFinishedCallback cb) { _onConversationTurnMetrics = std::move(cb); }
+
+    /**
+     * @brief Retourne les métriques détaillées du dernier tour conversationnel.
+     */
+    const ConversationMetrics& getConversationMetrics() const { return _conversationController.getMetrics(); }
+
+    /**
+     * @brief Accès direct au ConversationController sous-jacent.
+     */
+    ConversationController& getConversationController() { return _conversationController; }
+    const ConversationController& getConversationController() const { return _conversationController; }
+
     // Accès directs aux composants VoxCore sous-jacents (diagnostics / instrumentation)
     LiveAudioPlayer& getPlayer() { return _player; }
     const LiveAudioPlayer& getPlayer() const { return _player; }
@@ -192,6 +244,8 @@ private:
     GeminiLiveClient _client;
     LiveSessionController _session;
     WiFiManager _wifi;
+    ConversationController _conversationController;
+    bool _conversationEnabled = false;
 
     std::queue<String> _textQueue;
     String _pendingText = "";
@@ -215,4 +269,9 @@ private:
     TranscriptionCallback _onTranscription;
     VoidCallback _onListeningStarted;
     VoidCallback _onListeningFinished;
+    TranscriptionCallback _onUserText;
+    AssistantTextCallback _onAssistantText;
+    VoidCallback _onConversationFinished;
+    TurnFinishedCallback _onConversationTurnMetrics;
 };
+

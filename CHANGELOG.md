@@ -7,6 +7,58 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.4.0] - 2026-10-24 (Conversation Vocale Bidirectionnelle — Mode B Native Gemini Live)
+
+### Conversation Vocale Bidirectionnelle (Mode B Native Gemini Live)
+- **Architecture Native Gemini Live (Mode B)** :
+  - Flux direct continu : Microphone CoreS3 (PCM 16 kHz) $\rightarrow$ Gemini Live $\rightarrow$ Réponse audio native (PCM 24 kHz) $\rightarrow$ Haut-parleur CoreS3.
+  - Élimine tout aller-retour textuel intermédiaire superflu (pas de second appel Gemini).
+  - Préservation des flux de transcription temps réel : l'application reçoit à la fois le texte transcrit de l'utilisateur (`inputTranscription`) et le texte de réponse du modèle (`modelTurn` / `parts`).
+- **Nouveau Composant Léger `ConversationController`** :
+  - `src/core/ConversationController.h`, `src/core/ConversationController.cpp` (avec en-têtes relais `include/ConversationController.h` et `include/core/ConversationController.h`).
+  - Gestion unifiée et synchronisée du cycle de vie des tours : `READY` $\rightarrow$ `LISTENING` $\rightarrow$ `PROCESSING` (WAITING_RESPONSE) $\rightarrow$ `SPEAKING` $\rightarrow$ `READY`.
+  - Intégration transparente avec `LiveSessionController`, `LiveAudioStreamer` et `LiveAudioPlayer` sans introduire de second WebSocket ni de tâche FreeRTOS superflue.
+- **Protection Anti-Larsen & Préservation Dernière Syllabe** :
+  - Désactivation automatique du haut-parleur pendant la capture microphone (`setPlaybackAllowed(false)`).
+  - Réarmement automatique et immédiat dès le relâchement du bouton (« PARLER ») pour restituer la réponse audio native.
+  - Préservation intégrale de la dernière syllabe : drainage complet des tampons DMA et PSRAM avant de déclarer la fin du tour.
+- **Métriques Diagnostiques de Tour (`ConversationMetrics`)** :
+  - Collecte précise de la durée de capture micro (`micCaptureDurationMs`), nombre de blocs audio émis (`audioBlocksSent`), latence jusqu'au premier son (`firstAudioLatencyMs`), nombre de blocs PCM reçus (`pcmBlocksReceived`), échantillons perdus (`droppedSamples`), durée totale du tour (`totalTurnDurationMs`), texte utilisateur et texte assistant.
+
+### Extension de l'API Publique `VoxCoreVoice`
+- **Méthodes Conversationnelles Dédiées** :
+  - `void enableConversation(bool enable)` : Active ou désactive le mode conversationnel bidirectionnel (bascule automatiquement le prompt système vers `VOICEKIT_DEFAULT_CONVERSATION_INSTRUCTION`).
+  - `bool isConversationEnabled() const` : Indique si le mode conversationnel est actif.
+  - `void onUserText(TranscriptionCallback cb)` : Callback pour la transcription utilisateur (partielle et finale).
+  - `void onAssistantText(AssistantTextCallback cb)` : Callback pour le texte de réponse de l'assistant Gemini.
+  - `void onConversationFinished(VoidCallback cb)` : Callback déclenché à la fin complète d'un tour (après vidage audio).
+  - `void onConversationTurnMetrics(TurnMetricsCallback cb)` : Callback notifiant les métriques diagnostiques du tour.
+  - `const ConversationMetrics& getConversationMetrics() const` : Accès direct aux métriques du dernier tour.
+- **Nouveaux États Opérationnels (`VoiceState`)** :
+  - `VoiceState::PROCESSING` : Traitement de la demande par Gemini après relâchement du micro.
+  - `VoiceState::STOPPED` : Tour interrompu par appui sur STOP.
+  - `VoiceState::DISCONNECTED` : Session déconnectée.
+
+### Nouvelle Application Exemple (`examples/MinimalConversation/`)
+- **Démonstrateur Conversationnel Push-to-Talk pour M5Stack CoreS3** :
+  - Interface visuelle claire sur écran LCD 320x240 M5Unified (sans dépendance LVGL requise).
+  - En-tête : Badge d'état réseau et moteur vocal (`PRÊT`, `ÉCOUTE`, `RÉFLEXION`, `RÉPONSE`, `ERREUR`).
+  - Centre : Carte transcription utilisateur (« Vous : ... ») et carte réponse Gemini (« Gemini : ... »).
+  - Bas : Grand bouton tactile dynamique « PARLER » (vert) / « STOP » (orange/rouge).
+  - Contrôle parallèle via port série (commandes `P` pour parler, `R` pour relâcher, `S` pour stop).
+  - Projet autonome PlatformIO avec modèle de partition `no_ota.csv` et gestion des identifiants `secrets.example.h`.
+
+### Non-Régression Intégrale v0.3.0 / v0.2.1
+- Les 3 applications validées conservent un fonctionnement rigoureusement inchangé :
+  - `examples/MinimalTTS` : SUCCESS (Flash 55.7%, RAM 20.7%).
+  - `examples/MinimalSTT` : SUCCESS (Flash 56.2%, RAM 20.7%).
+  - `examples/OrientationClockVoice` : SUCCESS (Flash 76.0%, RAM 48.7%).
+  - `examples/MinimalConversation` : SUCCESS (Flash 56.2%, RAM 20.7%).
+- **Validation Automatisée Native** :
+  - 35 suites de tests automatisés (279 assertions passées avec succès, 0 échec).
+
+---
+
 ## [0.3.0] - 2026-10-24 (Ajout Reconnaissance Vocale STT & Push-to-Talk)
 
 ### Reconnaissance Vocale STT (Speech-to-Text)

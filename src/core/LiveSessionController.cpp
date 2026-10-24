@@ -432,6 +432,45 @@ bool LiveSessionController::sendTextMessage(const String& text) {
     return _client->sendTextMessage(text);
 }
 
+bool LiveSessionController::beginAudioTurn() {
+    if (!_client || !_client->isConnected() || !_client->isSetupComplete()) {
+        return false;
+    }
+
+    _turnActive.store(true, std::memory_order_release);
+    _turnCancelled.store(false, std::memory_order_release);
+    _currentTurnId++;
+    _turnCompleteReceived = false;
+    _turnCompletedLogged = false;
+    _audioStartedForTurn = false;
+    _hasAudioResponse = false;
+    _hasOutputTranscription = false;
+    _hasModelTurnText = false;
+    _lastAssistantText = "";
+    _waitingStartTimeMs = millis();
+    _lastActivityMs = _waitingStartTimeMs;
+
+    if (_player) {
+        _player->reset();
+        if (_player->getAudioOutput()) {
+            _player->getAudioOutput()->resetTurnMetrics();
+        }
+    }
+    if (_client) {
+        _client->resetTurnRxMetrics();
+    }
+
+    transitionTo(LiveSessionState::LISTENING, "Debut tour vocal audio conversation");
+    return true;
+}
+
+void LiveSessionController::finishAudioCapture() {
+    _waitingStartTimeMs = millis();
+    _lastActivityMs = _waitingStartTimeMs;
+    transitionTo(LiveSessionState::WAITING_RESPONSE, "Attente reponse serveur (fin parole)");
+}
+
+
 void LiveSessionController::requestStop() {
     Serial.println("\n[LiveSession] >>> DEMANDE INTERRUPTION STOP PRIORITAIRE <<<");
     _turnCancelled.store(true, std::memory_order_release);

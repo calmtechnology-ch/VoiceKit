@@ -33,10 +33,13 @@ enum class VoiceState : uint8_t {
     READY,
     GENERATING,
     WAITING_RESPONSE = GENERATING,
+    PROCESSING = GENERATING,  ///< Traitement / réflexion Gemini Live en cours (mode conversation v0.4.0)
     SPEAKING,
-    LISTENING,        ///< Acquisition microphone et streaming en cours (STT)
+    LISTENING,        ///< Acquisition microphone et streaming en cours (STT / Conversation)
     TRANSCRIBING,     ///< Acquisition terminée, attente de la transcription finale Gemini (STT)
-    ERROR_STATE
+    ERROR_STATE,
+    STOPPED,          ///< Interruption volontaire (STOP)
+    DISCONNECTED      ///< Déconnexion réseau / service
 };
 
 inline const char* voiceStateToString(VoiceState state) {
@@ -46,11 +49,13 @@ inline const char* voiceStateToString(VoiceState state) {
         case VoiceState::CONNECTING_WIFI:    return "CONNEXION_WIFI";
         case VoiceState::CONNECTING_SERVICE: return "CONNEXION_SERVICE";
         case VoiceState::READY:              return "PRET";
-        case VoiceState::GENERATING:         return "GENERATION_EN_COURS";
+        case VoiceState::GENERATING:         return "REFLEXION_EN_COURS";
         case VoiceState::SPEAKING:           return "RESTITUTION_EN_COURS";
         case VoiceState::LISTENING:          return "ECOUTE_EN_COURS";
         case VoiceState::TRANSCRIBING:       return "TRANSCRIPTION_EN_COURS";
         case VoiceState::ERROR_STATE:        return "ERREUR";
+        case VoiceState::STOPPED:            return "STOPPE";
+        case VoiceState::DISCONNECTED:       return "DECONNECTE";
         default:                             return "INCONNU";
     }
 }
@@ -76,8 +81,27 @@ inline const char* voiceStateToString(VoiceState state) {
     "sans commenter, sans repondre aux questions dictees, et sans generer de son audio superflu. " \
     "Reste rigoureusement silencieux sur le plan sonore."
 
+#define VOICEKIT_DEFAULT_CONVERSATION_INSTRUCTION \
+    "Tu es un assistant vocal bienveillant, intelligent et concis. " \
+    "Reponds toujours en francais direct et naturel en une ou deux phrases maximum."
+
 /**
- * @brief Configuration d'initialisation de VoxCore VoiceKit v0.3.0.
+ * @brief Métriques diagnostiques d'un tour conversationnel (v0.4.0).
+ */
+struct ConversationMetrics {
+    uint64_t turnId = 0;
+    uint32_t micCaptureDurationMs = 0;
+    uint32_t audioBlocksSent = 0;
+    uint32_t firstAudioLatencyMs = 0;
+    uint32_t pcmBlocksReceived = 0;
+    uint32_t droppedSamples = 0;
+    uint32_t totalTurnDurationMs = 0;
+    String userText = "";
+    String assistantText = "";
+};
+
+/**
+ * @brief Configuration d'initialisation de VoxCore VoiceKit v0.4.0.
  */
 struct VoiceKitConfig {
     // Cle d'API Google Gemini
@@ -117,8 +141,13 @@ struct VoiceKitConfig {
     // Timeout maximal d'attente de la transcription finale Gemini (en ms)
     uint32_t sttFinalTimeoutMs = 6000;
 
+    // Mode conversationnel bidirectionnel natif (Mode B v0.4.0)
+    bool enableConversation = false;
+    String conversationInstruction = VOICEKIT_DEFAULT_CONVERSATION_INSTRUCTION;
+
     // Champs de compatibilite ascendante pour applications hotes autonomes
     bool hardwareAlreadyInitialized = true;
     bool connectOnDemand = false;
     uint32_t autoDisconnectIdleMs = 0;
 };
+
