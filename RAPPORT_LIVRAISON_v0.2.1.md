@@ -5,8 +5,8 @@
 > **Type de version** : Conditionnement, installation et compatibilité bibliothèque Arduino / PlatformIO  
 > **Dépôt** : `https://github.com/Philippe-AD/VoiceKit`  
 > **Commit de référence v0.2.0 (gel)** : `4670a27527d01064ffcacfb4d7f34638445438b7`  
-> **Commit de livraison v0.2.1** : `713525fe2b78586c071d0e513813c015b6d91f24`  
-> **Cible matérielle** : M5Stack CoreS3 (ESP32-S3FN8 / 8 MB PSRAM / Port COM4)  
+> **Commit de livraison v0.2.1** : `7711f10884dbe8a57eb54d3ca24d8583fb22f468`  
+> **Commit de test external-consumer** : `7711f10`  
 
 ---
 
