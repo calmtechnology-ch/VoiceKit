@@ -13,3 +13,7 @@ pio device monitor -d examples/MinimalTTS -b 115200
 - pio run -d examples/MinimalConversation -t upload
 
 - pio run -d examples\VoiceSettingsDemo -t upload
+
+- pio run -d examples\ContinuousSTT -t upload
+
+
