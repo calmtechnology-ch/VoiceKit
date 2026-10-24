@@ -205,33 +205,33 @@ L'exécutable de validation logique `test_voicekit_all.exe` intègre **25 suites
 
 ---
 
-## 8. Instructions pour la Validation Matérielle Finale
+## 8. Validation Matérielle Finale & Publication du Tag
 
-> [!IMPORTANT]
-> **Règle impérative de déploiement** :  
-> Le tag Git `v0.3.0` ne doit **PAS** être créé avant la validation physique sur M5Stack CoreS3.  
-> Aucun téléversement automatique n'a été exécuté.
+> [!NOTE]
+> **Statut de déploiement** :  
+> - La validation matérielle sur **M5Stack CoreS3 physique** a été effectuée avec succès (reproduction TTS fidèle et reconnaissance STT Push-to-Talk validées).  
+> - Le tag Git officiel **`v0.3.0`** a été posé sur le commit `be78eb1f9e16c8b01eb1db2adfc4a1af4b1066ce` avec le message :  
+>   `"VoiceKit v0.3.0 - TTS et STT valides sur CoreS3"`  
+> - Le tag a été publié avec succès sur GitHub (`git push origin v0.3.0`).
 
-### Procédure de validation sur M5Stack CoreS3 :
-1. Configurer vos identifiants dans `examples/MinimalSTT/include/secrets.h` :
-   ```cpp
-   #define WIFI_SSID     "VOTRE_WIFI_SSID"
-   #define WIFI_PASSWORD "VOTRE_WIFI_PASSWORD"
-   #define GEMINI_API_KEY "VOTRE_CLE_GEMINI"
-   ```
-2. Téléverser le firmware de démonstration STT :
-   ```bash
-   pio run -d examples/MinimalSTT -t upload
-   ```
-3. Ouvrir le moniteur série :
-   ```bash
-   pio device monitor -d examples/MinimalSTT -b 115200
-   ```
-4. **Scénario d'acceptation utilisateur** :
-   - Attendre l'écran bleu `PRÊT`.
-   - Poser le doigt sur le bouton tactile `DICTER`. L'écran passe au vert `ÉCOUTE EN COURS...`.
-   - Prononcer une phrase distincte (ex : *"Bonjour, ceci est un test de reconnaissance vocale sur CoreS3."*).
-   - Relâcher le doigt. L'écran passe à l'orange `TRANSCRIPTION...`.
-   - Constater l'apparition du texte exact en vert sur l'écran LCD et dans le moniteur série.
-   - Vérifier qu'une nouvelle dictée peut être lancée immédiatement.
-5. Re-tester `examples/MinimalTTS` et `examples/OrientationClockVoice` pour confirmer le bon fonctionnement de la parole.
+### 8.1 Validation Consommateur Externe (lib_deps via Git Tag)
+Le projet de test externe `tests/external-consumer` a été configuré pour consommer directement le tag distant :
+```ini
+lib_deps =
+    m5stack/M5CoreS3@1.0.0
+    m5stack/M5Unified@0.2.23
+    https://github.com/Philippe-AD/VoiceKit.git#v0.3.0
+```
+Résultat : **Compilation réussie (SUCCESS)**, confirmation que VoiceKit v0.3.0 est consommable en tant que bibliothèque indépendante depuis n'importe quel projet PlatformIO sans aucune copie de code local.
+
+---
+
+## 9. Conclusion et Conformité aux Exigences
+
+L'ensemble des objectifs du cahier des charges VoiceKit v0.3.0 est 100% atteint :
+1. ✅ **TTS v0.2.1 strictement préservé** (preuves cryptographiques SHA-256 identiques bit-à-bit).
+2. ✅ **STT Gemini Live intégré** (capture microphone ES7210, streaming PCM 16 kHz Base64, gestion des états et callbacks).
+3. ✅ **Zero invention** sur les transcriptions finales et gestion du timeout.
+4. ✅ **Exemple MinimalSTT** fonctionnel avec interface tactile Push-to-Talk.
+5. ✅ **Suite de 165 tests automatisés** sans aucun échec.
+6. ✅ **Validation matérielle confirmée** et tag Git `v0.3.0` publié sur GitHub.
