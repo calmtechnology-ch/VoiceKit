@@ -7,6 +7,52 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.4.1.1] - 2026-10-24 (Corrective de Stabilisation)
+
+### Sécurisation des Profils Vocaux & Reconnexions Gemini Live
+- **Validation Différée après `setupComplete`** :
+  - Les méthodes de modification de profil (`setVoiceProfile`, `setVoice`, `setLanguage`, `setStyle`, `setTone`, `setAccent`) conservent intact le profil précédent dans `_config` jusqu'à la confirmation de prise en compte par le serveur Google via l'événement `setupComplete`.
+  - Les accesseurs (`getVoice()`, `getLanguage()`, `getStyle()`, `getTone()`, `getAccent()`) reflètent le profil réellement actif et validé à tout instant.
+  - Le callback `onReady()` est garanti de correspondre au profil définitivement négocié et prêt.
+- **Restauration Cohérente en Cas d'Échec** :
+  - En cas d'erreur de négociation TLS/WebSocket ou de timeout lors d'une reconnexion de profil, le profil précédent est automatiquement restauré dans `GeminiLiveClient` et maintenu dans `_config`.
+- **Refus Strict et Déterminisme d'Accès** :
+  - Refus immédiat (`false`) si le moteur est en cours d'activité vocale (`isBusy()` : émission audio, acquisition micro, attente transcription ou tour conversationnel actif).
+  - Refus immédiat (`false`) si une connexion ou reconnexion est déjà en cours (`isConnecting()`), interdisant formellement toute double connexion WebSocket ou enchaînement incontrôlé de reconnexions successives.
+- **Nouvelles Méthodes Utilitaires Publiques** :
+  - `bool isConnecting() const` : Indique si une connexion ou reconnexion WebSocket vers Gemini Live est en cours.
+  - `bool isProfileChangePending() const` : Indique si un changement de profil vocal est en cours de négociation.
+  - `bool isModeSwitchPending() const` : Indique si un basculement TTS <-> Conversation est en cours de négociation.
+
+### Fiabilisation de la Transition TTS / Conversation
+- **Reconnexion Maîtrisée au Repos** :
+  - `enableConversation(bool)` applique le nouveau mode (Mode B conversationnel vs mode unitaire TTS/STT) via une reconnexion propre et maîtrisée lorsque la session est connectée au repos.
+  - L'instruction système spécifique (`conversationInstruction` vs `systemInstruction`) est injectée de manière garantie dans la nouvelle trame de setup WebSocket.
+  - Préservation absolue des directives vocales (`buildVoiceDirectives()`) : la langue, le style, la tonalité et l'accent sont strictement conservés et transmis dans le nouveau mode.
+  - Préservation intégrale des callbacks existants (`onReady`, `onTranscription`, `onUserText`, `onAssistantText`, etc.).
+- **Verrouillage Pendant Tour Actif** :
+  - Refus strict (`false`) de tout basculement de mode pendant qu'un tour est en cours (écoute micro, attente réponse, élocution).
+  - En cas d'échec de la reconnexion de transition, restauration automatique du mode précédent.
+
+### Clarification de la Compatibilité Linguistique
+- **Documentation et Déterminisme dans `GeminiLiveClient`** :
+  - Clarification explicite que le modèle Gemini Live actif oriente la langue d'élocution principalement au moyen des consignes textuelles système.
+  - `isModelSpeechLanguageCodeSupported()` retourne systématiquement `false` afin de ne pas annoncer une détection automatique non implémentée et de garantir qu'aucun champ `speechConfig.languageCode` non validé pour le modèle actif ne soit transmis au serveur.
+  - Conservation du schéma protocolaire éprouvé et compatible.
+
+### Tests & Validation
+- **Suites de Tests Automatisés Déterministes (MinGW C++14/C++17)** :
+  - Ajout des suites 40, 41 et 42 dans `tests/test_voicekit_all.cpp` (485 tests réussis, 0 échec).
+  - Validation exhaustive : changement de voix à froid/au repos, refus pendant parole, refus pendant transcription, refus pendant connexion active, échec simulé et rollback, passage TTS $\rightarrow$ Conversation, passage Conversation $\rightarrow$ TTS, refus pendant tour actif, préservation des directives vocales, et validation intégrale de la phrase française accentuée.
+- **Compilations PlatformIO des 5 Applications Exemples** :
+  - `examples/MinimalTTS` : SUCCESS
+  - `examples/MinimalSTT` : SUCCESS
+  - `examples/MinimalConversation` : SUCCESS
+  - `examples/VoiceSettingsDemo` : SUCCESS
+  - `examples/OrientationClockVoice` : SUCCESS
+
+---
+
 ## [0.4.1] - 2026-10-24 (Configuration Vocale & Support Français UTF-8)
 
 ### Configuration Vocale Étendue (`VoiceKitConfig`)

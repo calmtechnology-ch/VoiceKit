@@ -33,7 +33,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _lastError = "";
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.4.1 — TTS + STT + Conversation    ");
+    Serial.println("  VoxCore VoiceKit v0.4.1.1 — TTS + STT + Conversation  ");
     Serial.printf("  Mode Audio : %s\n",
                   (LiveAudioPlayer::getCompiledAudioMode() == 1) ? "MODE 1 (REACTIVE_CALLBACK)" : "MODE 2 (DEDICATED_AUDIO_TASK)");
     Serial.println("========================================================");
@@ -171,6 +171,23 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
 
         switch (s) {
             case LiveSessionState::CONNECTED:
+                // Validation définitive du nouveau profil vocal après setupComplete (v0.4.1.1)
+                if (_profileChangePending) {
+                    _config.voice = _pendingVoice;
+                    _config.language = _pendingLanguage;
+                    _config.style = _pendingStyle;
+                    _config.tone = _pendingTone;
+                    _config.accent = _pendingAccent;
+                    _profileChangePending = false;
+                    Serial.printf("[VoiceKit] Profil vocal confirme par setupComplete : Voix=%s | Langue=%s\n",
+                                  _config.voice.c_str(), _config.language.c_str());
+                }
+                // Confirmation de la transition de mode après setupComplete (v0.4.1.1)
+                if (_modeSwitchPending) {
+                    _modeSwitchPending = false;
+                    Serial.printf("[VoiceKit] Transition de mode confirmee par setupComplete : Mode=%s\n",
+                                  _conversationEnabled ? "CONVERSATION" : "TTS/STT");
+                }
                 // Si on n'est pas déjà en train d'écouter ou de transcrire
                 if (_state != VoiceState::LISTENING && _state != VoiceState::TRANSCRIBING) {
                     setState(VoiceState::READY);
@@ -190,6 +207,22 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
                 }
                 break;
             case LiveSessionState::ERROR:
+                // Restauration cohérente en cas d'erreur de reconnexion (v0.4.1.1)
+                if (_profileChangePending) {
+                    _client.setVoice(_config.voice);
+                    _client.setLanguage(_config.language);
+                    _client.setVoiceDirectives(_config.buildVoiceDirectives());
+                    _profileChangePending = false;
+                    Serial.println("[VoiceKit] Echec reconnexion profil : profil precedent restaure");
+                }
+                if (_modeSwitchPending) {
+                    _conversationEnabled = _previousConversationMode;
+                    _config.enableConversation = _previousConversationMode;
+                    _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+                    _client.setVoiceDirectives(_config.buildVoiceDirectives());
+                    _modeSwitchPending = false;
+                    Serial.println("[VoiceKit] Echec reconnexion mode : mode precedent restaure");
+                }
                 _lastError = _session.getLastError();
                 setState(VoiceState::ERROR_STATE);
                 if (_onError) {
@@ -230,6 +263,21 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     });
 
     _session.setOnError([this](const String& err) {
+        if (_profileChangePending) {
+            _client.setVoice(_config.voice);
+            _client.setLanguage(_config.language);
+            _client.setVoiceDirectives(_config.buildVoiceDirectives());
+            _profileChangePending = false;
+            Serial.println("[VoiceKit] Erreur session : profil vocal precedent restaure");
+        }
+        if (_modeSwitchPending) {
+            _conversationEnabled = _previousConversationMode;
+            _config.enableConversation = _previousConversationMode;
+            _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+            _client.setVoiceDirectives(_config.buildVoiceDirectives());
+            _modeSwitchPending = false;
+            Serial.println("[VoiceKit] Erreur session : mode precedent restaure");
+        }
         _lastError = err;
         _pendingText = "";
         if (_conversationEnabled) {
@@ -362,6 +410,21 @@ void VoxCoreVoice::update() {
         // Read the clock again to avoid unsigned underflow and an immediate timeout.
         if (_connectingStartTimeMs > 0 && (millis() - _connectingStartTimeMs > GEMINI_LIVE_CONNECT_TIMEOUT_MS + 2000)) {
             Serial.println("[VoiceKit] ERREUR : Delai de connexion depasse vers Gemini Live");
+            if (_profileChangePending) {
+                _client.setVoice(_config.voice);
+                _client.setLanguage(_config.language);
+                _client.setVoiceDirectives(_config.buildVoiceDirectives());
+                _profileChangePending = false;
+                Serial.println("[VoiceKit] Timeout reconnexion profil : profil vocal precedent restaure");
+            }
+            if (_modeSwitchPending) {
+                _conversationEnabled = _previousConversationMode;
+                _config.enableConversation = _previousConversationMode;
+                _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+                _client.setVoiceDirectives(_config.buildVoiceDirectives());
+                _modeSwitchPending = false;
+                Serial.println("[VoiceKit] Timeout reconnexion mode : mode precedent restaure");
+            }
             _lastError = "Timeout connexion Gemini Live";
             _connectingStartTimeMs = 0;
             _pendingText = "";
@@ -441,8 +504,8 @@ bool VoxCoreVoice::say(const String& text) {
         return dispatchSpeech(text);
     }
 
-    // Si la session est en cours de connexion
-    if (_session.getState() == LiveSessionState::CONNECTING) {
+    // Si la session est en cours de connexion ou de reconnexion
+    if (_session.getState() == LiveSessionState::CONNECTING || _state == VoiceState::CONNECTING_SERVICE) {
         Serial.println("[VoiceKit] Connexion en cours -> requete mise en attente");
         _pendingText = text;
         return true;
@@ -483,13 +546,28 @@ void VoxCoreVoice::stop() {
         _transcriptionPending = false;
         _finalTranscriptionReceived = false;
     }
+    if (_profileChangePending) {
+        _client.setVoice(_config.voice);
+        _client.setLanguage(_config.language);
+        _client.setVoiceDirectives(_config.buildVoiceDirectives());
+        _profileChangePending = false;
+        Serial.println("[VoiceKit] stop() : profil vocal precedent restaure");
+    }
+    if (_modeSwitchPending) {
+        _conversationEnabled = _previousConversationMode;
+        _config.enableConversation = _previousConversationMode;
+        _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+        _client.setVoiceDirectives(_config.buildVoiceDirectives());
+        _modeSwitchPending = false;
+        Serial.println("[VoiceKit] stop() : mode conversationnel precedent restaure");
+    }
     _session.requestStop();
     _player.setPlaybackAllowed(true);
     setState(VoiceState::READY);
 }
 
 bool VoxCoreVoice::isReady() const {
-    return (_session.getState() == LiveSessionState::CONNECTED && !isBusy());
+    return (_session.getState() == LiveSessionState::CONNECTED && !isBusy() && !isConnecting());
 }
 
 bool VoxCoreVoice::isSpeaking() const {
@@ -508,6 +586,14 @@ bool VoxCoreVoice::isBusy() const {
             !_textQueue.empty());
 }
 
+bool VoxCoreVoice::isConnecting() const {
+    return (_state == VoiceState::CONNECTING_SERVICE ||
+            _session.getState() == LiveSessionState::CONNECTING ||
+            _session.getState() == LiveSessionState::RECONNECTING ||
+            _profileChangePending ||
+            _modeSwitchPending);
+}
+
 void VoxCoreVoice::setVolume(uint8_t percent) {
     _config.volume = percent;
     _player.setVolume(percent);
@@ -518,40 +604,93 @@ uint8_t VoxCoreVoice::getVolume() const {
 }
 
 // =============================================================================
-// Implémentation Configuration Vocale & Profils (v0.4.1)
+// Implémentation Configuration Vocale & Profils (v0.4.1 / v0.4.1.1)
 // =============================================================================
 
 bool VoxCoreVoice::setVoiceProfile(const String& voice, const String& language,
                                    VoiceStyle style, VoiceTone tone,
                                    const String& accent) {
+    if (voice.isEmpty()) {
+        _lastError = "Nom de voix invalide (vide)";
+        Serial.printf("[VoiceKit] %s\n", _lastError.c_str());
+        return false;
+    }
+
+    // 1. Refus strict si le moteur est occupé
     if (isBusy()) {
         _lastError = "Impossible de modifier le profil vocal pendant une activite vocale active";
         Serial.printf("[VoiceKit] %s\n", _lastError.c_str());
         return false;
     }
 
-    _config.voice = voice;
-    _config.language = language;
-    _config.style = style;
-    _config.tone = tone;
-    _config.accent = accent;
+    // 2. Refus strict si une connexion ou reconnexion est déjà en cours
+    if (isConnecting()) {
+        _lastError = "Connexion ou reconnexion deja en cours, modification de profil refusee";
+        Serial.printf("[VoiceKit] %s\n", _lastError.c_str());
+        return false;
+    }
+
+    // 3. Cas hors-ligne / session non-connectée : application directe pour la future session
+    if (!_client.isConnected() || _session.getState() == LiveSessionState::DISCONNECTED) {
+        _config.voice = voice;
+        _config.language = language;
+        _config.style = style;
+        _config.tone = tone;
+        _config.accent = accent;
+
+        _client.setVoice(voice);
+        _client.setLanguage(language);
+        _client.setVoiceDirectives(_config.buildVoiceDirectives());
+        _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+
+        Serial.printf("[VoiceKit] Profil vocal configure (hors ligne) : Voix=%s | Langue=%s | Style=%s | Ton=%s%s%s\n",
+                      voice.c_str(), language.c_str(), voiceStyleToString(style), voiceToneToString(tone),
+                      accent.isEmpty() ? "" : " | Accent=", accent.isEmpty() ? "" : accent.c_str());
+        return true;
+    }
+
+    // 4. Session connectée et au repos : reconnexion sécurisée maîtrisée
+    // Conserver le profil précédent intact dans _config jusqu'à validation setupComplete
+    _profileChangePending = true;
+    _pendingVoice = voice;
+    _pendingLanguage = language;
+    _pendingStyle = style;
+    _pendingTone = tone;
+    _pendingAccent = accent;
+
+    // Prépare le client Gemini pour la nouvelle trame de setup
+    VoiceKitConfig tempCfg = _config;
+    tempCfg.voice = voice;
+    tempCfg.language = language;
+    tempCfg.style = style;
+    tempCfg.tone = tone;
+    tempCfg.accent = accent;
 
     _client.setVoice(voice);
     _client.setLanguage(language);
-    _client.setVoiceDirectives(_config.buildVoiceDirectives());
+    _client.setVoiceDirectives(tempCfg.buildVoiceDirectives());
     _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
 
-    Serial.printf("[VoiceKit] Nouveau profil vocal : Voix=%s | Langue=%s | Style=%s | Ton=%s%s%s\n",
+    Serial.printf("[VoiceKit] Demande de nouveau profil vocal : Voix=%s | Langue=%s | Style=%s | Ton=%s%s%s\n",
                   voice.c_str(), language.c_str(), voiceStyleToString(style), voiceToneToString(tone),
                   accent.isEmpty() ? "" : " | Accent=", accent.isEmpty() ? "" : accent.c_str());
+    Serial.println("[VoiceKit] Reconnexion securisee pour prise en compte du nouveau profil vocal...");
 
-    // Si la session est actuellement connectée, reconnexion propre pour négocier le nouveau profil
-    if (_client.isConnected()) {
-        Serial.println("[VoiceKit] Reconnexion securisee pour prise en compte du nouveau profil vocal...");
-        _session.deactivate();
-        setState(VoiceState::CONNECTING_SERVICE);
-        _connectingStartTimeMs = millis();
-        return _session.activate();
+    _session.deactivate();
+    setState(VoiceState::CONNECTING_SERVICE);
+    _connectingStartTimeMs = millis();
+
+    bool ok = _session.activate();
+    if (!ok) {
+        // En cas d'échec immédiat d'activation, restaurer immédiatement le profil actif dans le client
+        _client.setVoice(_config.voice);
+        _client.setLanguage(_config.language);
+        _client.setVoiceDirectives(_config.buildVoiceDirectives());
+        _profileChangePending = false;
+        _lastError = "Echec activation session pour reconnexion profil";
+        setState(VoiceState::ERROR_STATE);
+        if (_onError) _onError(_lastError);
+        return false;
     }
 
     return true;
@@ -578,20 +717,70 @@ bool VoxCoreVoice::setAccent(const String& accent) {
 }
 
 // =============================================================================
-// Implémentation Conversation Bidirectionnelle (v0.4.0)
+// Implémentation Conversation Bidirectionnelle (v0.4.0 / v0.4.1.1)
 // =============================================================================
 
-void VoxCoreVoice::enableConversation(bool enable) {
+bool VoxCoreVoice::enableConversation(bool enable) {
+    // Si déjà dans le mode demandé et aucune transition en cours
+    if (enable == _conversationEnabled && !_modeSwitchPending) {
+        return true;
+    }
+
+    // 1. Refus strict si le moteur est actif ou en cours de tour
+    if (isBusy()) {
+        _lastError = "Impossible de changer de mode pendant un tour actif ou une activite vocale";
+        Serial.printf("[VoiceKit] %s\n", _lastError.c_str());
+        return false;
+    }
+
+    // 2. Refus strict si une connexion ou reconnexion est déjà en cours
+    if (isConnecting()) {
+        _lastError = "Connexion ou reconnexion en cours, basculement de mode refuse";
+        Serial.printf("[VoiceKit] %s\n", _lastError.c_str());
+        return false;
+    }
+
+    // 3. Cas hors-ligne / session non-connectée : application directe sans reconnexion
+    if (!_client.isConnected() || _session.getState() == LiveSessionState::DISCONNECTED) {
+        _conversationEnabled = enable;
+        _config.enableConversation = enable;
+        _client.setSystemInstruction(enable ? _config.conversationInstruction : _config.systemInstruction);
+        _client.setVoiceDirectives(_config.buildVoiceDirectives());
+        Serial.printf("[VoiceKit] Mode conversation %s (hors ligne)\n", enable ? "ACTIVE" : "DESACTIVE");
+        return true;
+    }
+
+    // 4. Session connectée et au repos : transition maîtrisée via reconnexion
+    _modeSwitchPending = true;
+    _previousConversationMode = _conversationEnabled;
+
     _conversationEnabled = enable;
     _config.enableConversation = enable;
+    _client.setSystemInstruction(enable ? _config.conversationInstruction : _config.systemInstruction);
     _client.setVoiceDirectives(_config.buildVoiceDirectives());
-    if (enable) {
-        _client.setSystemInstruction(_config.conversationInstruction);
-        Serial.println("[VoiceKit] Mode conversation bidirectionnelle native (Mode B) ACTIVE");
-    } else {
-        _client.setSystemInstruction(_config.systemInstruction);
-        Serial.println("[VoiceKit] Mode conversation DESACTIVE (retour mode unitaire)");
+
+    Serial.printf("[VoiceKit] Transition vers mode %s -> reconnexion securisee pour injection instructions...\n",
+                  enable ? "CONVERSATION" : "TTS/STT");
+
+    _session.deactivate();
+    setState(VoiceState::CONNECTING_SERVICE);
+    _connectingStartTimeMs = millis();
+
+    bool ok = _session.activate();
+    if (!ok) {
+        // En cas d'échec immédiat d'activation, restaurer le mode précédent
+        _conversationEnabled = _previousConversationMode;
+        _config.enableConversation = _previousConversationMode;
+        _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+        _client.setVoiceDirectives(_config.buildVoiceDirectives());
+        _modeSwitchPending = false;
+        _lastError = "Echec activation session pour transition de mode";
+        setState(VoiceState::ERROR_STATE);
+        if (_onError) _onError(_lastError);
+        return false;
     }
+
+    return true;
 }
 
 // =============================================================================

@@ -52,6 +52,18 @@ public:
     void setLanguage(const String& language) { _language = language; }
     const String& getVoiceDirectives() const { return _voiceDirectives; }
     void setVoiceDirectives(const String& directives) { _voiceDirectives = directives; }
+
+    /**
+     * @brief Indique si le modèle spécifié prend en charge speechConfig.languageCode.
+     * 
+     * NOTE IMPORTANTE (VoiceKit v0.4.1.1 - Clarification linguistique) :
+     * Les modèles Gemini Live actuels (notamment gemini-2.0-flash et modèles bidirectionnels)
+     * n'acceptent pas le champ speechConfig.languageCode dans le handshake BidiGenerateContent
+     * (rejeté par l'API avec INVALID_ARGUMENT ou code 400).
+     * L'orientation linguistique est donc transmise via les instructions système et directives vocales.
+     * Cette fonction retourne false pour les modèles actuels afin de garantir une compatibilité
+     * absolue et d'éviter l'envoi d'un paramètre non validé pour le modèle actif.
+     */
     static bool isModelSpeechLanguageCodeSupported(const String& model);
     void setTools(const std::vector<ToolDeclaration>& tools) { _tools = tools; }
     const std::vector<ToolDeclaration>& getTools() const { return _tools; }

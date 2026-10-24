@@ -1568,20 +1568,24 @@ void test_voice_profile_switching_and_safety() {
     TEST_ASSERT(voice.isReady(), "VoiceKit pret au depart");
     TEST_ASSERT(voice.getVoice() == "Aoede", "Voix initiale Aoede");
 
-    // 1. Changement de profil au repos (IDLE/READY) -> autorise
+    // 1. Changement de profil au repos (READY) -> accepte avec reconnexion
     bool profOk = voice.setVoiceProfile("Fenrir", "en-US", VoiceStyle::EXPRESSIVE, VoiceTone::CHEERFUL, "british");
-    TEST_ASSERT(profOk, "Changement de profil accepte a froid/au repos");
-    TEST_ASSERT(voice.getVoice() == "Fenrir", "Nouvelle voix Fenrir");
-    TEST_ASSERT(voice.getLanguage() == "en-US", "Nouvelle langue en-US");
-    TEST_ASSERT(voice.getStyle() == VoiceStyle::EXPRESSIVE, "Nouveau style EXPRESSIVE");
-    TEST_ASSERT(voice.getTone() == VoiceTone::CHEERFUL, "Nouveau ton CHEERFUL");
-    TEST_ASSERT(voice.getAccent() == "british", "Nouvel accent british");
+    TEST_ASSERT(profOk, "Changement de profil accepte au repos");
+    TEST_ASSERT(voice.isConnecting(), "Reconnexion en cours");
+    TEST_ASSERT(!voice.isReady(), "isReady false pendant la reconnexion");
+    // REGLE CRITIQUE v0.4.1.1 : Le profil précédent est strictement conservé tant que setupComplete n'a pas confirmé le nouveau profil
+    TEST_ASSERT(voice.getVoice() == "Aoede", "Voix precedente Aoede conservee tant que setupComplete n'est pas confirme");
 
     // Reconnexion confirmée via simulateIncoming setupComplete
     const char* setupCompJson = "{\"setupComplete\":{}}";
     voice.getClient().handleIncomingMessage(setupCompJson, strlen(setupCompJson));
     voice.update();
     TEST_ASSERT(voice.isReady(), "Nouvelle session securisee prete");
+    TEST_ASSERT(voice.getVoice() == "Fenrir", "Nouvelle voix Fenrir validee apres setupComplete");
+    TEST_ASSERT(voice.getLanguage() == "en-US", "Nouvelle langue en-US validee apres setupComplete");
+    TEST_ASSERT(voice.getStyle() == VoiceStyle::EXPRESSIVE, "Nouveau style EXPRESSIVE valide apres setupComplete");
+    TEST_ASSERT(voice.getTone() == VoiceTone::CHEERFUL, "Nouveau ton CHEERFUL valide apres setupComplete");
+    TEST_ASSERT(voice.getAccent() == "british", "Nouvel accent british valide apres setupComplete");
 
     // 2. Vérification de la nouvelle trame de setup emise
     std::string newSetup = mockTransport.getLastSent();
@@ -1600,18 +1604,304 @@ void test_voice_profile_switching_and_safety() {
     voice.stop();
     TEST_ASSERT(!voice.isBusy(), "Moteur au repos apres stop()");
 
-    // 4. Modificateurs individuels
+    // 4. Modificateurs individuels avec confirmation setupComplete
     bool changeTone = voice.setTone(VoiceTone::SERIOUS);
-    TEST_ASSERT(changeTone, "setTone reussi a froid");
-    TEST_ASSERT(voice.getTone() == VoiceTone::SERIOUS, "Ton serieux enregistre");
+    TEST_ASSERT(changeTone, "setTone accepte au repos");
+    TEST_ASSERT(voice.getTone() == VoiceTone::CHEERFUL, "Ton precedent conserve tant que non confirme");
+    voice.getClient().handleIncomingMessage(setupCompJson, strlen(setupCompJson));
+    voice.update();
+    TEST_ASSERT(voice.getTone() == VoiceTone::SERIOUS, "Ton serieux valide apres setupComplete");
 
     bool changeStyle = voice.setStyle(VoiceStyle::NARRATIVE);
-    TEST_ASSERT(changeStyle, "setStyle reussi a froid");
-    TEST_ASSERT(voice.getStyle() == VoiceStyle::NARRATIVE, "Style narrative enregistre");
+    TEST_ASSERT(changeStyle, "setStyle accepte au repos");
+    voice.getClient().handleIncomingMessage(setupCompJson, strlen(setupCompJson));
+    voice.update();
+    TEST_ASSERT(voice.getStyle() == VoiceStyle::NARRATIVE, "Style narrative valide apres setupComplete");
 
     bool changeLang = voice.setLanguage("de-DE");
-    TEST_ASSERT(changeLang, "setLanguage reussi a froid");
-    TEST_ASSERT(voice.getLanguage() == "de-DE", "Langue de-DE enregistree");
+    TEST_ASSERT(changeLang, "setLanguage accepte au repos");
+    voice.getClient().handleIncomingMessage(setupCompJson, strlen(setupCompJson));
+    voice.update();
+    TEST_ASSERT(voice.getLanguage() == "de-DE", "Langue de-DE validee apres setupComplete");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 40 : Sécurisation avancée des profils vocaux et reconnexions (v0.4.1.1)
+// =============================================================================
+void test_voice_profile_safety_stabilization() {
+    std::cout << "\n[TEST SUITE 40] Securisation des profils vocaux, reconnexions et refus stricts" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_SAFETY_KEY";
+    config.voice = "Aoede";
+    config.language = "fr-FR";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    TEST_ASSERT(voice.isReady(), "VoiceKit pret au demarrage");
+    TEST_ASSERT(voice.getVoice() == "Aoede", "Voix initiale Aoede");
+
+    // 1. Changement de voix lorsque le moteur est prêt
+    String readyReportedVoice = "";
+    voice.onReady([&]() {
+        readyReportedVoice = voice.getVoice();
+    });
+
+    bool changeOk = voice.setVoice("Fenrir");
+    TEST_ASSERT(changeOk, "setVoice('Fenrir') accepte a froid/au repos");
+    TEST_ASSERT(voice.isConnecting(), "Reconnexion active");
+    TEST_ASSERT(voice.isProfileChangePending(), "isProfileChangePending() true");
+    // Le profil précédent est conservé tant que setupComplete n'est pas reçu
+    TEST_ASSERT(voice.getVoice() == "Aoede", "Profil precedent Aoede conserve avant setupComplete");
+
+    // Vérification que la nouvelle trame de setup contient la voix Fenrir
+    std::string setupSent = mockTransport.getLastSent();
+    TEST_ASSERT(setupSent.find("\"voiceName\":\"Fenrir\"") != std::string::npos, "Trame setup contient la voix Fenrir");
+
+    // Réception du setupComplete
+    const char* setupCompJson = "{\"setupComplete\":{}}";
+    voice.getClient().handleIncomingMessage(setupCompJson, strlen(setupCompJson));
+    voice.update();
+
+    TEST_ASSERT(voice.isReady(), "Moteur PRET apres setupComplete");
+    TEST_ASSERT(!voice.isProfileChangePending(), "isProfileChangePending() false apres setupComplete");
+    TEST_ASSERT(voice.getVoice() == "Fenrir", "Nouvelle voix Fenrir validee apres setupComplete");
+    TEST_ASSERT(readyReportedVoice == "Fenrir", "onReady() rapporte bien le profil valide et actif (Fenrir)");
+
+    // 2. Refus strict du changement pendant la parole
+    voice.say("Test de parole en cours");
+    TEST_ASSERT(voice.isBusy(), "isBusy() true pendant elocution");
+    bool rejectDuringSpeaking = voice.setVoice("Puck");
+    TEST_ASSERT(!rejectDuringSpeaking, "Changement de voix STRICTEMENT REFUSE pendant la parole");
+    TEST_ASSERT(voice.getVoice() == "Fenrir", "Voix inchangee apres tentative pendant la parole");
+    voice.stop();
+    TEST_ASSERT(!voice.isBusy(), "Moteur libere apres stop()");
+
+    // 3. Refus strict pendant une transcription STT
+    bool listenOk = voice.startListening();
+    TEST_ASSERT(listenOk, "startListening() demarre");
+    voice.stopListening();
+    TEST_ASSERT(voice.isTranscribing(), "isTranscribing() true en attente de transcription finale");
+    bool rejectDuringTranscription = voice.setVoice("Charon");
+    TEST_ASSERT(!rejectDuringTranscription, "Changement de voix STRICTEMENT REFUSE pendant transcription");
+    TEST_ASSERT(voice.getVoice() == "Fenrir", "Voix inchangee apres tentative pendant transcription");
+    voice.cancelListening();
+    TEST_ASSERT(voice.isReady(), "Moteur PRET apres cancelListening()");
+
+    // 4. Refus strict pendant une connexion ou reconnexion déjà active
+    bool firstRequest = voice.setVoice("Charon");
+    TEST_ASSERT(firstRequest, "Premiere demande de profil acceptee");
+    TEST_ASSERT(voice.isConnecting(), "Reconnexion en cours");
+
+    // Tentative immédiate d'un second changement alors que la reconnexion est en cours
+    bool rejectSecondRequest = voice.setVoice("Puck");
+    TEST_ASSERT(!rejectSecondRequest, "Deuxieme demande successive de profil STRICTEMENT REFUSEE pendant reconnexion");
+    TEST_ASSERT(voice.getVoice() == "Fenrir", "Voix active reste Fenrir pendant la tentative");
+
+    // Validation du premier changement via setupComplete
+    voice.getClient().handleIncomingMessage(setupCompJson, strlen(setupCompJson));
+    voice.update();
+    TEST_ASSERT(voice.isReady(), "Moteur PRET apres validation de Charon");
+    TEST_ASSERT(voice.getVoice() == "Charon", "Voix validee est Charon, et non Puck");
+
+    // 5. Échec simulé de reconnexion et restauration cohérente
+    bool changeToFenrir = voice.setVoice("Fenrir");
+    TEST_ASSERT(changeToFenrir, "Demande vers Fenrir acceptee pour le test d'echec");
+    TEST_ASSERT(voice.isProfileChangePending(), "Profil pending actif");
+    TEST_ASSERT(voice.getVoice() == "Charon", "Profil precedent reste Charon");
+
+    // Simulation d'une erreur fatale de session/transport
+    voice.getSession().transitionTo(LiveSessionState::ERROR, "Erreur simulee TLS");
+    voice.update();
+
+    TEST_ASSERT(voice.getState() == VoiceState::ERROR_STATE, "Etat bascule a ERROR_STATE");
+    TEST_ASSERT(!voice.isProfileChangePending(), "isProfileChangePending() reinitialise a false");
+    // Restauration cohérente : _config et _client ont retrouve Charon
+    TEST_ASSERT(voice.getVoice() == "Charon", "Profil precedent Charon preserve dans _config");
+    TEST_ASSERT(voice.getClient().getVoice() == "Charon", "Voix Charon restauree dans GeminiLiveClient");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 41 : Transitions fiabilisées TTS <-> Conversation et non-interférence (v0.4.1.1)
+// =============================================================================
+void test_mode_transition_stabilization() {
+    std::cout << "\n[TEST SUITE 41] Transitions fiabilisees TTS <-> Conversation et non-interference" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_MODE_KEY";
+    config.voice = "Aoede";
+    config.language = "fr-FR";
+    config.style = VoiceStyle::NATURAL;
+    config.tone = VoiceTone::CALM;
+    config.accent = "parisien";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableConversation = false; // Mode TTS initial
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    TEST_ASSERT(voice.isReady(), "VoiceKit pret en mode TTS");
+    TEST_ASSERT(!voice.isConversationEnabled(), "Mode conversation desactive initialement");
+
+    // Enregistrement de callbacks pour vérifier leur persistance
+    bool readyCallbackFired = false;
+    voice.onReady([&]() { readyCallbackFired = true; });
+
+    bool userTextCallbackFired = false;
+    voice.onUserText([&](const String&, bool) { userTextCallbackFired = true; });
+
+    // 1. Passage TTS -> Conversation avec reconnexion maîtrisée
+    readyCallbackFired = false;
+    bool switchConvOk = voice.enableConversation(true);
+    TEST_ASSERT(switchConvOk, "enableConversation(true) accepte au repos");
+    TEST_ASSERT(voice.isConnecting(), "Reconnexion en cours pour application du mode conversation");
+    TEST_ASSERT(voice.isConversationEnabled(), "Mode conversation marque active");
+
+    // Vérification de la nouvelle trame de setup émise
+    std::string convSetup = mockTransport.getLastSent();
+    TEST_ASSERT(convSetup.find(Utf8Utils::escapeJson(VOICEKIT_DEFAULT_CONVERSATION_INSTRUCTION).c_str()) != std::string::npos ||
+                convSetup.find("conversation bienveillante") != std::string::npos,
+                "Nouvelle trame setup contient l'instruction systeme conversation");
+    TEST_ASSERT(convSetup.find("[Directives vocales]") != std::string::npos,
+                "Directives vocales preservees dans la trame setup de conversation");
+    TEST_ASSERT(convSetup.find("parisien") != std::string::npos,
+                "Accent parisien preserve dans la trame setup de conversation");
+
+    // Confirmation setupComplete
+    const char* setupCompJson = "{\"setupComplete\":{}}";
+    voice.getClient().handleIncomingMessage(setupCompJson, strlen(setupCompJson));
+    voice.update();
+
+    TEST_ASSERT(voice.isReady(), "Session conversationnelle confirmee et prete");
+    TEST_ASSERT(!voice.isModeSwitchPending(), "isModeSwitchPending() false apres setupComplete");
+    TEST_ASSERT(readyCallbackFired, "Callback onReady declenche apres transition vers Conversation");
+
+    // 2. Tentative de basculement de mode pendant un tour actif
+    bool turnStarted = voice.startListening();
+    TEST_ASSERT(turnStarted, "Tour conversationnel demarre");
+    TEST_ASSERT(voice.isListening(), "isListening() true");
+
+    bool rejectSwitchDuringTurn = voice.enableConversation(false);
+    TEST_ASSERT(!rejectSwitchDuringTurn, "enableConversation(false) STRICTEMENT REFUSE pendant tour actif");
+    TEST_ASSERT(voice.isConversationEnabled(), "Mode reste conversationnel apres tentative refusee");
+
+    // Fin du tour
+    voice.stop();
+    TEST_ASSERT(!voice.isBusy(), "Moteur au repos apres stop()");
+    TEST_ASSERT(voice.isReady(), "Moteur PRET");
+
+    // 3. Passage Conversation -> TTS avec reconnexion maîtrisée
+    readyCallbackFired = false;
+    bool switchTtsOk = voice.enableConversation(false);
+    TEST_ASSERT(switchTtsOk, "enableConversation(false) accepte au repos");
+    TEST_ASSERT(voice.isConnecting(), "Reconnexion en cours pour retour TTS");
+    TEST_ASSERT(!voice.isConversationEnabled(), "Mode conversation marque desactive");
+
+    // Vérification de la trame setup pour TTS
+    std::string ttsSetup = mockTransport.getLastSent();
+    TEST_ASSERT(ttsSetup.find(Utf8Utils::escapeJson(VOICEKIT_DEFAULT_TTS_INSTRUCTION).c_str()) != std::string::npos ||
+                ttsSetup.find("synthese vocale TTS pur") != std::string::npos,
+                "Nouvelle trame setup contient l'instruction systeme TTS");
+    TEST_ASSERT(ttsSetup.find("[Directives vocales]") != std::string::npos,
+                "Directives vocales preservees dans la trame setup TTS");
+
+    voice.getClient().handleIncomingMessage(setupCompJson, strlen(setupCompJson));
+    voice.update();
+
+    TEST_ASSERT(voice.isReady(), "Session TTS confirmee et prete");
+    TEST_ASSERT(readyCallbackFired, "Callback onReady declenche apres retour a TTS");
+
+    // 4. Tentative de passage Conversation pendant une élocution TTS
+    voice.say("Synthese en cours de test");
+    TEST_ASSERT(voice.isBusy(), "isBusy() true pendant TTS");
+    bool rejectSwitchDuringTts = voice.enableConversation(true);
+    TEST_ASSERT(!rejectSwitchDuringTts, "enableConversation(true) STRICTEMENT REFUSE pendant elocution TTS");
+    TEST_ASSERT(!voice.isConversationEnabled(), "Mode reste TTS");
+    voice.stop();
+
+    // 5. Vérification de la préservation des directives vocales après toutes les transitions
+    TEST_ASSERT(voice.getVoice() == "Aoede", "Voix inchangee (Aoede)");
+    TEST_ASSERT(voice.getLanguage() == "fr-FR", "Langue inchangee (fr-FR)");
+    TEST_ASSERT(voice.getStyle() == VoiceStyle::NATURAL, "Style inchange (NATURAL)");
+    TEST_ASSERT(voice.getTone() == VoiceTone::CALM, "Ton inchange (CALM)");
+    TEST_ASSERT(voice.getAccent() == "parisien", "Accent inchange (parisien)");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 42 : Préservation intégrale UTF-8 et compatibilité linguistique (v0.4.1.1)
+// =============================================================================
+void test_utf8_and_language_compatibility_stabilization() {
+    std::cout << "\n[TEST SUITE 42] Chaine UTF-8 integrale, accents francais et compatibilite linguistique" << std::endl;
+
+    // 1. Phrase de référence obligatoire prescrite dans le cahier des charges
+    const char* obligatoryPhrase =
+        "« À Noël, Élise prépare un café crème. L'été à Genève est agréable. François préfère un cœur léger. »";
+
+    TEST_ASSERT(Utf8Utils::isValidUtf8(obligatoryPhrase), "Phrase obligatoire est un UTF-8 RFC 3629 valide");
+
+    // Échappement JSON RFC 8259 : préserve les octets bruts Unicode et les chevrons français « »
+    String escaped = Utf8Utils::escapeJson(obligatoryPhrase);
+    TEST_ASSERT(escaped.indexOf("«") >= 0 && escaped.indexOf("»") >= 0, "Guillemets francais chevrons « » strictement preserves");
+    TEST_ASSERT(escaped.indexOf("À") >= 0, "Caractere À majuscule accentue strictement preserve");
+    TEST_ASSERT(escaped.indexOf("É") >= 0, "Caractere É majuscule accentue strictement preserve");
+    TEST_ASSERT(escaped.indexOf("é") >= 0, "Caractere é minuscule accentue strictement preserve");
+    TEST_ASSERT(escaped.indexOf("è") >= 0, "Caractere è minuscule accentue strictement preserve");
+    TEST_ASSERT(escaped.indexOf("ç") >= 0, "Caractere ç cedille strictement preserve");
+    TEST_ASSERT(escaped.indexOf("œ") >= 0, "Ligature œ strictement preservee");
+
+    // Échappement des guillemets doubles ASCII "
+    String withAsciiQuotes = "Texte avec \"citation\" et « chevrons »";
+    String escAscii = Utf8Utils::escapeJson(withAsciiQuotes);
+    TEST_ASSERT(escAscii.indexOf("\\\"citation\\\"") >= 0, "Guillemets ASCII doubles correctement echappes en \\\"");
+    TEST_ASSERT(escAscii.indexOf("« chevrons »") >= 0, "Chevrons francais non alteres");
+
+    // Vérification exhaustive des glyphes français demandés : é è ê ë à â ù û î ï ô ö ç œ æ É À Ç ’ « »
+    const char* allFrenchGlyphs = "é è ê ë à â ù û î ï ô ö ç œ æ É À Ç ’ « »";
+    TEST_ASSERT(Utf8Utils::isValidUtf8(allFrenchGlyphs), "Tous les glyphes francais obligatoires sont UTF-8 valides");
+    String escapedGlyphs = Utf8Utils::escapeJson(allFrenchGlyphs);
+    TEST_ASSERT(escapedGlyphs.indexOf("œ") >= 0 && escapedGlyphs.indexOf("æ") >= 0, "Ligatures œ et æ preservees");
+    TEST_ASSERT(escapedGlyphs.indexOf("Ç") >= 0 && escapedGlyphs.indexOf("É") >= 0, "Majuscules Ç et É preservees");
+
+    // 2. Clarification formelle de isModelSpeechLanguageCodeSupported() (Section 4)
+    TEST_ASSERT(!GeminiLiveClient::isModelSpeechLanguageCodeSupported("models/gemini-2.0-flash-exp"),
+                "gemini-2.0-flash-exp -> false (pas de speechConfig.languageCode)");
+    TEST_ASSERT(!GeminiLiveClient::isModelSpeechLanguageCodeSupported("models/gemini-3.8-live"),
+                "gemini-3.8-live -> false (pas de speechConfig.languageCode)");
+    TEST_ASSERT(!GeminiLiveClient::isModelSpeechLanguageCodeSupported("gemini-2.5-flash"),
+                "gemini-2.5-flash -> false (pas de speechConfig.languageCode)");
+    TEST_ASSERT(!GeminiLiveClient::isModelSpeechLanguageCodeSupported("any-model"),
+                "Modele quelconque -> false (garantie pas de champ speechConfig.languageCode non valide)");
+
+    // 3. Vérification de la transmission dans la trame de setup avec MockLiveTransport
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_UTF8_KEY";
+    config.voice = "Charon";
+    config.language = "fr-FR";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    // Envoi de la phrase obligatoire via say()
+    bool sayOk = voice.say(obligatoryPhrase);
+    TEST_ASSERT(sayOk, "say() avec phrase francaise accentuee accepte");
+
+    std::string sentMsg = mockTransport.getLastSent();
+    TEST_ASSERT(sentMsg.find("À Noël, Élise prépare un café crème") != std::string::npos,
+                "Phrase francaise accentuee transmise mot pour mot dans le message JSON Gemini Live");
+    TEST_ASSERT(sentMsg.find("François préfère un cœur léger") != std::string::npos,
+                "Ligature et cédille transmises mot pour mot sans altération");
 
     voice.getClient().setTransport(nullptr);
 }
@@ -1621,8 +1911,8 @@ void test_voice_profile_switching_and_safety() {
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.4.1    " << std::endl;
-    std::cout << "  Validation TTS + STT + Conversation + Profils Vocaux    " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.4.1.1  " << std::endl;
+    std::cout << "  Validation Stabilisation Profils + Transitions + Langues " << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
     std::cout << "===========================================================" << std::endl;
 
@@ -1671,6 +1961,11 @@ int main() {
     test_voice_configuration_parameters();
     test_gemini_setup_json_validation();
     test_voice_profile_switching_and_safety();
+
+    // Nouvelles suites de stabilisation VoiceKit v0.4.1.1
+    test_voice_profile_safety_stabilization();
+    test_mode_transition_stabilization();
+    test_utf8_and_language_compatibility_stabilization();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

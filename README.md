@@ -1,4 +1,4 @@
-# VoiceKit v0.4.1 — Bibliothèque Audio TTS + STT + Conversation Vocale pour M5Stack CoreS3
+# VoiceKit v0.4.1.1 — Bibliothèque Audio TTS + STT + Conversation Vocale pour M5Stack CoreS3
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -7,7 +7,10 @@
 
 Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)** et de **conversation vocale bidirectionnelle native (Mode B)** haute fidélité pour **M5Stack CoreS3** (ESP32-S3), propulsée par l'API **Gemini Live** (protocole bidirectionnel BidiGenerateContent) et construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
 
-La version **v0.4.1** introduit la **configuration vocale avancée** (choix de la voix, langue BCP-47, style, ton, accent) et une **chaîne UTF-8 native de bout en bout** préservant l'intégralité des accents français, ligatures et signes typographiques.
+La version **v0.4.1.1** apporte une **corrective stricte de stabilisation** :
+- Sécurisation robuste des changements de profil vocal et reconnexions Gemini Live (validation différée après `setupComplete`, conservation du profil actif précédent jusqu'à confirmation, restauration cohérente en cas d'échec).
+- Fiabilisation totale de la transition bidirectionnelle entre TTS unitaire et conversation (reconnexion maîtrisée au repos, verrouillage pendant les tours actifs, préservation absolue des instructions système et directives vocales).
+- Clarification explicite de la compatibilité des paramètres linguistiques avec Gemini Live (orientation par consignes textuelles, zéro champ non supporté).
 
 ---
 
@@ -288,31 +291,38 @@ Grâce à la structure `src/` de VoiceKit v0.2.1, **aucun paramètre `-I../../in
 | `void onListeningStarted(VoidCallback cb)` | Déclenché dès que la capture microphone et le streaming sont effectifs. | Immédiat |
 | `void onListeningFinished(VoidCallback cb)` | Déclenché au relâchement du bouton microphone. | Immédiat |
 
-### API Conversation Vocale Bidirectionnelle (v0.4.0)
+### API Conversation Vocale Bidirectionnelle (v0.4.0 / v0.4.1.1)
 
 | Méthode | Rôle | Caractère |
 | :--- | :--- | :---: |
-| `void enableConversation(bool enable)` | Active/désactive le mode conversationnel bidirectionnel natif (Mode B). Bascule l'instruction système. | Immédiat |
+| `bool enableConversation(bool enable)` | Active/désactive le mode conversationnel bidirectionnel natif (Mode B). Reconnexion maîtrisée au repos ; refus strict si tour actif. | Sécurisé / Non bloquant |
 | `bool isConversationEnabled() const` | Indique si le mode conversationnel bidirectionnel est actif. | Non bloquant |
+| `bool isModeSwitchPending() const` | Indique si un basculement de mode est en cours de négociation avec Gemini Live. | Non bloquant |
 | `void onUserText(TranscriptionCallback cb)` | Callback de transcription pour la voix de l'utilisateur : `void(const String& text, bool isFinal)`. | Immédiat |
 | `void onAssistantText(AssistantTextCallback cb)` | Callback textuel de la réponse générée par Gemini : `void(const String& text)`. | Immédiat |
 | `void onConversationFinished(VoidCallback cb)` | Notifié à la fin complète d'un tour de conversation (vidage audio achevé). | Immédiat |
 | `void onConversationTurnMetrics(TurnMetricsCallback cb)` | Notifie les métriques diagnostiques complètes du tour : `void(const ConversationMetrics& m)`. | Immédiat |
 | `const ConversationMetrics& getConversationMetrics() const` | Retourne la structure des métriques détaillées du dernier tour. | Non bloquant |
 
-### API Profil Vocal & Langue (v0.4.1)
+### API Profil Vocal & Langue (v0.4.1 / v0.4.1.1)
 
 | Méthode | Rôle | Caractère |
 | :--- | :--- | :---: |
-| `bool setVoiceProfile(voice, lang, style, tone, accent)` | Configure l'ensemble du profil vocal (voix, langue BCP-47, style, ton, accent). Réapplique la session en toute sécurité si au repos. | Sécurisé / Non bloquant |
+| `bool setVoiceProfile(voice, lang, style, tone, accent)` | Configure le profil vocal complet. Reconnexion maîtrisée au repos avec validation différée après `setupComplete`. | Sécurisé / Non bloquant |
 | `bool setVoice(const String& voice)` | Règle la voix Gemini (ex. `"Aoede"`, `"Puck"`, `"Charon"`). | Sécurisé |
 | `bool setLanguage(const String& lang)` | Règle le code de langue BCP-47 (défaut `"fr-FR"`). | Sécurisé |
 | `bool setStyle(VoiceStyle / const String&)` | Définit le style : `natural`, `professional`, `expressive`, `narrative`. | Sécurisé |
 | `bool setTone(VoiceTone / const String&)` | Définit la tonalité : `neutral`, `calm`, `warm`, `cheerful`, `serious`. | Sécurisé |
 | `bool setAccent(const String& accent)` | Spécifie des consignes de prononciation d'accent optionnelles. | Sécurisé |
-| `getVoice()`, `getLanguage()`, etc. | Accesseurs de lecture des paramètres courants. | Immédiat |
+| `bool isConnecting() const` | Indique si une connexion ou reconnexion vers Gemini Live est en cours. | Non bloquant |
+| `bool isProfileChangePending() const` | Indique si un profil vocal est en cours de négociation avec le serveur. | Non bloquant |
+| `getVoice()`, `getLanguage()`, etc. | Accesseurs de lecture du profil actif confirmé. | Immédiat |
 
-> **Règle absolue de reconnexion** : La modification d'un profil vocal nécessite l'ouverture d'une nouvelle session Gemini sécurisée. Ces méthodes vérifient strictement `!isBusy()`. Si une restitution audio, une capture micro ou un tour conversationnel est en cours, la modification est **refusée** (retourne `false`) pour ne jamais couper l'utilisateur.
+> **Règles absolues de sécurité et de session (v0.4.1.1)** :
+> 1. **Refus strict pendant l'activité vocale** : Tout changement de profil ou de mode est immédiatement rejeté (`false`) si le moteur émet du son (`isSpeaking()`), écoute le microphone (`isListening()`), attend une transcription (`isTranscribing()`) ou si un tour de conversation est actif.
+> 2. **Refus strict pendant une connexion** : Aucune nouvelle demande n'est acceptée pendant qu'une connexion ou reconnexion est en cours (`isConnecting()`), empêchant toute double connexion WebSocket ou enchaînement incontrôlé.
+> 3. **Validation différée (`setupComplete`)** : Lors d'un changement à chaud, le profil actif précédent est strictement conservé dans la configuration jusqu'à la confirmation de prise en compte par le serveur distant (`setupComplete`). En cas d'erreur de reconnexion, les paramètres précédents sont automatiquement restaurés.
+> 4. **Garantie d'état `onReady()`** : Le callback `onReady()` n'est invoqué qu'une fois la session reconnectée et prête, avec les accesseurs (`getVoice()`, `getLanguage()`, etc.) reflétant le profil réellement validé.
 
 ### Utilitaires UTF-8 (`Utf8Utils`)
 

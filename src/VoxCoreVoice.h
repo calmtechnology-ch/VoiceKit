@@ -114,14 +114,23 @@ public:
     void onStateChanged(StateCallback cb) { _onStateChanged = std::move(cb); }
 
     // =========================================================================
-    // API Configuration Vocale & Profils (v0.4.1)
+    // API Configuration Vocale & Profils (v0.4.1 / v0.4.1.1)
     // =========================================================================
 
     /**
      * @brief Modifie le profil vocal complet (voix, langue, style, ton, accent).
-     *        Sécurité stricte : la modification n'est appliquée que si le moteur est au repos (non occupé).
-     *        Si la session est connectée, elle est reconnectée proprement pour négocier le nouveau setup.
-     * @return true si le profil a été appliqué avec succès, false si le moteur est occupé.
+     * 
+     * Sémantique des valeurs de retour (v0.4.1.1) :
+     * - true  : Demande acceptée. Si la session est connectée au repos, une reconnexion
+     *           maîtrisée est initiée ; le profil actif précédent est conservé intact
+     *           jusqu'à confirmation du nouveau profil par le serveur (setupComplete).
+     *           Si la session n'est pas connectée, le profil est directement appliqué
+     *           pour la prochaine connexion.
+     * - false : Demande refusée. Le moteur est actif (parole, écoute, transcription,
+     *           tour de conversation) ou une connexion/reconnexion est déjà en cours.
+     *           Le profil actif précédent est strictement préservé sans altération.
+     * 
+     * @return true si la modification a été acceptée / appliquée, false si refusée ou échec.
      */
     bool setVoiceProfile(const String& voice, const String& language = "fr-FR",
                          VoiceStyle style = VoiceStyle::NATURAL,
@@ -130,28 +139,48 @@ public:
 
     /**
      * @brief Modifie la voix Gemini Live (Aoede, Charon, Fenrir, Kore, Puck).
+     * @return true si accepté / appliqué, false si le moteur est actif ou en connexion.
      */
     bool setVoice(const String& voice);
 
     /**
      * @brief Modifie la langue d'expression (code BCP-47, ex: fr-FR, en-US, de-DE).
+     * @return true si accepté / appliqué, false si le moteur est actif ou en connexion.
      */
     bool setLanguage(const String& language);
 
     /**
      * @brief Modifie le style d'élocution (natural, professional, expressive, narrative).
+     * @return true si accepté / appliqué, false si le moteur est actif ou en connexion.
      */
     bool setStyle(VoiceStyle style);
 
     /**
      * @brief Modifie la tonalité vocale (neutral, calm, warm, cheerful, serious).
+     * @return true si accepté / appliqué, false si le moteur est actif ou en connexion.
      */
     bool setTone(VoiceTone tone);
 
     /**
      * @brief Définit une consigne de prononciation ou accentuation optionnelle.
+     * @return true si accepté / appliqué, false si le moteur est actif ou en connexion.
      */
     bool setAccent(const String& accent);
+
+    /**
+     * @brief Indique si une connexion ou reconnexion vers Gemini Live est en cours.
+     */
+    bool isConnecting() const;
+
+    /**
+     * @brief Indique si un changement de profil vocal est en cours de négociation avec Gemini Live.
+     */
+    bool isProfileChangePending() const { return _profileChangePending; }
+
+    /**
+     * @brief Indique si un basculement de mode TTS <-> Conversation est en cours de négociation.
+     */
+    bool isModeSwitchPending() const { return _modeSwitchPending; }
 
     /**
      * @brief Retourne la configuration actuelle de VoiceKit.
@@ -213,14 +242,24 @@ public:
     void onListeningFinished(VoidCallback cb) { _onListeningFinished = std::move(cb); }
 
     // =========================================================================
-    // API Conversation Bidirectionnelle (v0.4.0)
+    // API Conversation Bidirectionnelle (v0.4.0 / v0.4.1.1)
     // =========================================================================
 
     /**
      * @brief Active ou désactive le mode conversationnel bidirectionnel natif (Mode B).
+     * 
+     * Sémantique (v0.4.1.1) :
+     * - Refuse tout basculement de mode pendant un tour actif (écoute micro, transcription,
+     *   restitution sonore) ou pendant une connexion en cours.
+     * - Si la session est connectée et au repos, applique le nouveau mode via une reconnexion
+     *   maîtrisée pour négocier la nouvelle instruction système auprès de Gemini Live.
+     * - Si la session est hors-ligne, configure le mode pour la future connexion.
+     * - Préserve strictement les directives vocales (langue, style, ton, accent) et les callbacks.
+     * 
      * @param enable true pour activer la conversation native Gemini Live, false pour le mode unitaire TTS/STT.
+     * @return true si la demande est acceptée / appliquée, false si refusée.
      */
-    void enableConversation(bool enable = true);
+    bool enableConversation(bool enable = true);
 
     /**
      * @brief Indique si le mode conversationnel est actif.
@@ -310,6 +349,18 @@ private:
     uint32_t _stopListeningTimeMs = 0;
     String _lastInterimText = "";
     String _lastFinalText = "";
+
+    // Suivi sécurisé des changements de profil vocal (v0.4.1.1)
+    bool _profileChangePending = false;
+    String _pendingVoice;
+    String _pendingLanguage;
+    VoiceStyle _pendingStyle = VoiceStyle::NATURAL;
+    VoiceTone _pendingTone = VoiceTone::NEUTRAL;
+    String _pendingAccent;
+
+    // Suivi sécurisé des transitions de mode TTS <-> Conversation (v0.4.1.1)
+    bool _modeSwitchPending = false;
+    bool _previousConversationMode = false;
 
     // Callbacks utilisateurs
     VoidCallback _onReady;

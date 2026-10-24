@@ -315,14 +315,15 @@ String GeminiLiveClient::escapeJsonString(const String& s) {
     return Utf8Utils::escapeJson(s);
 }
 
-bool GeminiLiveClient::isModelSpeechLanguageCodeSupported(const String& model) {
-    // Les modèles natifs Gemini Live (ex: gemini-2.0-flash, gemini-3.8-live)
-    // ne prennent pas en charge speechConfig.languageCode dans le protocole Bidi.
-    // L'orientation linguistique s'effectue via les instructions système.
-    if (model.indexOf("gemini-2") >= 0 || model.indexOf("gemini-3") >= 0 ||
-        model.indexOf("live") >= 0 || model.indexOf("flash") >= 0) {
-        return false;
-    }
+bool GeminiLiveClient::isModelSpeechLanguageCodeSupported(const String& /*model*/) {
+    // Clarification formelle VoiceKit v0.4.1.1 :
+    // Les modèles Gemini Multimodal Live actuellement configurés (ex: gemini-2.0-flash, gemini-3.8-live,
+    // modèles bidirectionnels natifs) utilisent principalement les instructions système pour orienter
+    // la langue et rejettent le champ speechConfig.languageCode dans le handshake Bidi (INVALID_ARGUMENT).
+    // Afin de ne pas annoncer une détection automatique de compatibilité non implémentée,
+    // de ne pas introduire de champ speechConfig.languageCode non validé pour le modèle actif,
+    // et de conserver une compatibilité absolue avec les modèles déjà utilisés, cette fonction
+    // retourne systématiquement false.
     return false;
 }
 
