@@ -54,10 +54,7 @@ void M5AudioInput::stop() {
     while (M5.Mic.isRecording() && (millis() - t0 < 100)) {
         delay(2);
     }
-    if (M5.Mic.isRunning()) {
-        M5.Mic.end();
-        delay(5);
-    }
+    end();
 }
 
 #else

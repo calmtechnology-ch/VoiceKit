@@ -44,6 +44,9 @@ public:
                 _lastAudioStatus = AudioHardwareStatus::DEVICE_BUSY;
                 return false;
             }
+            if (_audioOutput->isRunning()) {
+                _audioOutput->end(AudioStopReason::NEW_TURN);
+            }
         }
         _micCaptureReserved = true;
         _lastAudioStatus = AudioHardwareStatus::SUCCESS;
@@ -67,15 +70,13 @@ public:
                 _lastAudioStatus = AudioHardwareStatus::DEVICE_BUSY;
                 return false;
             }
+            if (_audioInput->isRunning()) {
+                _audioInput->end();
+            }
         }
         _micCaptureReserved = false;
 
-        if (!_audioOutput) {
-            _lastAudioStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
-            return false;
-        }
-
-        if (!_audioOutput->isRunning()) {
+        if (_audioOutput && !_audioOutput->isRunning()) {
             if (!_audioOutput->begin()) {
                 _lastAudioStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
                 return false;

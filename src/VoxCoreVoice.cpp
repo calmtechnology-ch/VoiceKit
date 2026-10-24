@@ -6,6 +6,12 @@ VoxCoreVoice::VoxCoreVoice() = default;
 
 VoxCoreVoice::~VoxCoreVoice() {
     stop();
+    if (HardwareManager::getInstance().getAudioOutput() == _audioOutput) {
+        HardwareManager::getInstance().setAudioOutput(nullptr);
+    }
+    if (HardwareManager::getInstance().getAudioInput() == _audioInput) {
+        HardwareManager::getInstance().setAudioInput(nullptr);
+    }
 }
 
 bool VoxCoreVoice::isSystemTimeValid() {
