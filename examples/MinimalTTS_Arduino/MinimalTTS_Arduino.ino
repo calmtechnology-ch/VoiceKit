@@ -57,17 +57,17 @@ void setup() {
     // Configuration de VoiceKit
     VoiceKitConfig config;
     config.apiKey = GEMINI_KEY;
+    config.wifiMode = WiFiMode::MANAGED_WIFI;
     config.wifiSSID = WIFI_SSID;
     config.wifiPassword = WIFI_PASSWORD;
     config.voice = "Aoede";    // Voix : Aoede, Charon, Fenrir, Kore, Puck
-    config.volume = 180;       // Volume (0 - 255)
-    config.enableTraceLog = true;
+    config.volume = 70;        // Volume (0 - 100 %)
 
     // Callbacks d'état pour information visuelle / console
     voice.onStateChanged([](VoiceState state) {
-        Serial.printf("[VoiceKit] Nouvel etat : %s\n", VoxCoreVoice::stateToString(state));
+        Serial.printf("[VoiceKit] Nouvel etat : %s\n", voiceStateToString(state));
         M5.Display.fillRect(10, 80, 300, 30, TFT_BLACK);
-        M5.Display.drawString(VoxCoreVoice::stateToString(state), 10, 80);
+        M5.Display.drawString(voiceStateToString(state), 10, 80);
     });
 
     voice.onError([](const String& errorMsg) {

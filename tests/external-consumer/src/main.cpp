@@ -27,14 +27,14 @@ void setup() {
 
     VoiceKitConfig config;
     config.apiKey = "TEST_API_KEY_MOCK";
+    config.wifiMode = WiFiMode::MANAGED_WIFI;
     config.wifiSSID = "TEST_SSID";
     config.wifiPassword = "TEST_PASSWORD";
     config.voice = "Aoede";
-    config.volume = 180;
-    config.enableTraceLog = true;
+    config.volume = 70;
 
     voice.onStateChanged([](VoiceState state) {
-        Serial.printf("[ExternalConsumer] Etat : %s\n", VoxCoreVoice::stateToString(state));
+        Serial.printf("[ExternalConsumer] Etat : %s\n", voiceStateToString(state));
     });
 
     voice.onError([](const String& errorMsg) {
