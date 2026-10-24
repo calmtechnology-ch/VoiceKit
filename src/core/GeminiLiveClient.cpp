@@ -1,5 +1,6 @@
 #include "core/GeminiLiveClient.h"
 #include "core/AudioTraceLog.h"
+#include "core/Utf8Utils.h"
 #include "GoogleRoots.h"
 #include <cstring>
 #include <vector>
@@ -311,30 +312,18 @@ void GeminiLiveClient::buildWebSocketUrl(char* buf, size_t bufSize) const {
 }
 
 String GeminiLiveClient::escapeJsonString(const String& s) {
-    String out;
-    out.reserve(s.length() + 16);
-    for (size_t i = 0; i < s.length(); ++i) {
-        char c = s[i];
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\b': out += "\\b"; break;
-            case '\f': out += "\\f"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if (static_cast<uint8_t>(c) < 32) {
-                    char hexBuf[8];
-                    snprintf(hexBuf, sizeof(hexBuf), "\\u%04x", static_cast<uint8_t>(c));
-                    out += hexBuf;
-                } else {
-                    out += c;
-                }
-                break;
-        }
+    return Utf8Utils::escapeJson(s);
+}
+
+bool GeminiLiveClient::isModelSpeechLanguageCodeSupported(const String& model) {
+    // Les modèles natifs Gemini Live (ex: gemini-2.0-flash, gemini-3.8-live)
+    // ne prennent pas en charge speechConfig.languageCode dans le protocole Bidi.
+    // L'orientation linguistique s'effectue via les instructions système.
+    if (model.indexOf("gemini-2") >= 0 || model.indexOf("gemini-3") >= 0 ||
+        model.indexOf("live") >= 0 || model.indexOf("flash") >= 0) {
+        return false;
     }
-    return out;
+    return false;
 }
 
 void GeminiLiveClient::sendSetupMessage() {
@@ -342,13 +331,16 @@ void GeminiLiveClient::sendSetupMessage() {
     // VAD manuelle + transcriptions + instructions et outils configurables
     String setupJson = "{";
     setupJson += "\"setup\":{";
-    setupJson += "\"model\":\"" + _model + "\",";
+    setupJson += "\"model\":\"" + escapeJsonString(_model) + "\",";
     setupJson += "\"generationConfig\":{";
     setupJson += "\"responseModalities\":[\"AUDIO\"],";
     setupJson += "\"speechConfig\":{";
     setupJson += "\"voiceConfig\":{";
-    setupJson += "\"prebuiltVoiceConfig\":{\"voiceName\":\"" + _voice + "\"}";
+    setupJson += "\"prebuiltVoiceConfig\":{\"voiceName\":\"" + escapeJsonString(_voice) + "\"}";
     setupJson += "}";
+    if (!_language.isEmpty() && isModelSpeechLanguageCodeSupported(_model)) {
+        setupJson += ",\"languageCode\":\"" + escapeJsonString(_language) + "\"";
+    }
     setupJson += "}";
     setupJson += "},";
 
@@ -357,9 +349,13 @@ void GeminiLiveClient::sendSetupMessage() {
     if (sysInst.isEmpty()) {
         sysInst = "Tu es VoxCore, un assistant vocal bienveillant et concis. Reponds toujours en francais direct (1 ou 2 phrases max).";
     }
+    String effectiveInst = sysInst;
+    if (!_voiceDirectives.isEmpty() && sysInst.indexOf("[Directives vocales]") < 0) {
+        effectiveInst += " [Directives vocales] " + _voiceDirectives;
+    }
     setupJson += "\"systemInstruction\":{";
     setupJson += "\"parts\":[{";
-    setupJson += "\"text\":\"" + escapeJsonString(sysInst) + "\"";
+    setupJson += "\"text\":\"" + escapeJsonString(effectiveInst) + "\"";
     setupJson += "}]";
     setupJson += "},";
 

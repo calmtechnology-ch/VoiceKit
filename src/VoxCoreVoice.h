@@ -114,6 +114,57 @@ public:
     void onStateChanged(StateCallback cb) { _onStateChanged = std::move(cb); }
 
     // =========================================================================
+    // API Configuration Vocale & Profils (v0.4.1)
+    // =========================================================================
+
+    /**
+     * @brief Modifie le profil vocal complet (voix, langue, style, ton, accent).
+     *        Sécurité stricte : la modification n'est appliquée que si le moteur est au repos (non occupé).
+     *        Si la session est connectée, elle est reconnectée proprement pour négocier le nouveau setup.
+     * @return true si le profil a été appliqué avec succès, false si le moteur est occupé.
+     */
+    bool setVoiceProfile(const String& voice, const String& language = "fr-FR",
+                         VoiceStyle style = VoiceStyle::NATURAL,
+                         VoiceTone tone = VoiceTone::NEUTRAL,
+                         const String& accent = "");
+
+    /**
+     * @brief Modifie la voix Gemini Live (Aoede, Charon, Fenrir, Kore, Puck).
+     */
+    bool setVoice(const String& voice);
+
+    /**
+     * @brief Modifie la langue d'expression (code BCP-47, ex: fr-FR, en-US, de-DE).
+     */
+    bool setLanguage(const String& language);
+
+    /**
+     * @brief Modifie le style d'élocution (natural, professional, expressive, narrative).
+     */
+    bool setStyle(VoiceStyle style);
+
+    /**
+     * @brief Modifie la tonalité vocale (neutral, calm, warm, cheerful, serious).
+     */
+    bool setTone(VoiceTone tone);
+
+    /**
+     * @brief Définit une consigne de prononciation ou accentuation optionnelle.
+     */
+    bool setAccent(const String& accent);
+
+    /**
+     * @brief Retourne la configuration actuelle de VoiceKit.
+     */
+    const VoiceKitConfig& getConfig() const { return _config; }
+
+    String getVoice() const { return _config.voice; }
+    String getLanguage() const { return _config.language; }
+    VoiceStyle getStyle() const { return _config.style; }
+    VoiceTone getTone() const { return _config.tone; }
+    String getAccent() const { return _config.accent; }
+
+    // =========================================================================
     // API STT (Speech-to-Text)
     // =========================================================================
 

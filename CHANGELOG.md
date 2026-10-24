@@ -7,6 +7,65 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.4.1] - 2026-10-24 (Configuration Vocale & Support Français UTF-8)
+
+### Configuration Vocale Étendue (`VoiceKitConfig`)
+- **Paramètres Vocaux Complets** :
+  - `voice` : Voix pré-construite Gemini Live conservée (`Aoede`, `Charon`, `Fenrir`, `Kore`, `Puck`, défaut : `Aoede`).
+  - `language` : Code de langue BCP-47 conforme aux standards internationaux (défaut : `fr-FR`).
+  - `style` : Style d'élocution (`VoiceStyle` : `NATURAL`, `PROFESSIONAL`, `EXPRESSIVE`, `NARRATIVE` ; acceptation indifférenciée des énumérateurs ou des chaînes littérales).
+  - `tone` : Tonalité vocale (`VoiceTone` : `NEUTRAL`, `CALM`, `WARM`, `CHEERFUL`, `SERIOUS`).
+  - `accent` : Orientation de prononciation et accentuation régionale optionnelle (ex: `"parisien"`, `"méridional"`, `"québécois"`, `"british"`).
+- **Rétrocompatibilité Totale** :
+  - Préservation intégrale de tous les champs et valeurs par défaut antérieurs.
+  - Wrappers transparents `VoiceStyleWrapper` et `VoiceToneWrapper` autorisant indifféremment l'assignation par énumérateur (`VoiceStyle::EXPRESSIVE`) ou par chaîne de caractères (`"expressive"`).
+
+### Intégration Gemini Live & Protocole Setup
+- **Préservation Strict du Schéma Protocolaire** :
+  - Configuration `voiceConfig.prebuiltVoiceConfig.voiceName` préservée mot à mot.
+  - Vérification de compatibilité de modèle (`isModelSpeechLanguageCodeSupported`) : exclusion de `speechConfig.languageCode` pour les modèles natifs Bidi (`gemini-3.8-live`, `gemini-2.0-flash`), évitant tout rejet de trame par le serveur Google.
+  - Pour les modèles natifs, l'orientation de langue est transmise de manière déterministe via les consignes système.
+- **Conversion Déterministe en Directives Vocales** :
+  - Méthodes `buildVoiceDirectives()` et `buildEffectiveInstruction()` dans `VoiceKitConfig`.
+  - Préservation stricte des instructions métier (`VOICEKIT_DEFAULT_TTS_INSTRUCTION`, `VOICEKIT_DEFAULT_STT_INSTRUCTION`, `VOICEKIT_DEFAULT_CONVERSATION_INSTRUCTION`).
+  - Ajout des consignes d'élocution et de tonalité sous forme de directives structurées transmises lors du setup WebSocket.
+- **Sécurité et Dynamique des Profils** :
+  - Nouvelles méthodes dans `VoxCoreVoice` : `setVoiceProfile()`, `setVoice()`, `setLanguage()`, `setStyle()`, `setTone()`, `setAccent()`.
+  - Protection absolue : toute modification demandée pendant une élocution, une transcription ou un tour conversationnel actif (`isBusy()`) est strictement refusée sans interrompre l'activité en cours.
+  - Au repos, la modification entraîne une reconnexion propre et transparente négociant la nouvelle trame de setup avec Gemini Live.
+
+### Chaîne UTF-8 Intégrale de Bout en Bout
+- **Nouveau Module Centralisé `Utf8Utils` (`src/core/Utf8Utils.h`)** :
+  - Validation stricte de conformité UTF-8 selon RFC 3629 (`isValidUtf8`).
+  - Assainissement sans corruption : les textes valides sont préservés à 100% sans la moindre altération ; les octets mal formés sont remplacés de manière contrôlée par le caractère de substitution officiel Unicode `U+FFFD`.
+  - Échappement JSON centralisé et conforme RFC 8259 (`escapeJson`) pour tous les flux textuels sortants (`setup`, `clientContent`, `toolResponse`, etc.).
+  - Comptage des points de code Unicode réels (`unicodeLength`).
+- **Support des Caractères Français, Ligatures et Ponctuations Typographiques** :
+  - Tests unitaires et validation pour tous les caractères prescrits : `é`, `è`, `ê`, `ë`, `à`, `â`, `ù`, `û`, `î`, `ï`, `ô`, `ö`, `ç`, `œ`, `æ`, `É`, `À`, `Ç`, `’`, `«`, `»`.
+  - Validation de bout en bout de la phrase obligatoire :
+    *« À Noël, Élise prépare un café crème. L'été à Genève est agréable. François préfère un cœur léger. »*
+- **Découplage Architecturel Display vs Transport** :
+  - Retrait de la translittération ASCII intempestive dans `LiveSessionController` pour préserver le texte UTF-8 original.
+  - Délimitation explicite du rôle de `DisplayTextNormalizer`, réservé uniquement aux écrans LCD/TFT à polices restreintes en 7-bits ASCII.
+
+### Nouvelle Application Exemple (`examples/VoiceSettingsDemo/`)
+- **Projet PlatformIO Autonome pour M5Stack CoreS3** :
+  - Test successif de 5 profils vocaux combinant différentes voix (`Aoede`, `Charon`, `Fenrir`, `Kore`, `Puck`), langues (`fr-FR`, `de-DE`, `en-US`), styles et tons.
+  - Affichage sur écran LCD CoreS3 : statut réseau, profil courant, phrase prononcée et bouton tactile « PROFIL SUIVANT ».
+  - Pilotage parallèle possible via le moniteur série (touches `N`, `R`, `S`).
+
+### Validation et Non-Régression
+- **Compilation PlatformIO Validée pour les 5 Exemples** :
+  - `examples/MinimalTTS` : SUCCESS
+  - `examples/MinimalSTT` : SUCCESS
+  - `examples/OrientationClockVoice` : SUCCESS
+  - `examples/MinimalConversation` : SUCCESS
+  - `examples/VoiceSettingsDemo` : SUCCESS
+- **Suite de Tests Automatisés Natifs** :
+  - 39 suites de tests automatisés (396 tests réussis, 0 échec).
+
+---
+
 ## [0.4.0] - 2026-10-24 (Conversation Vocale Bidirectionnelle — Mode B Native Gemini Live)
 
 ### Conversation Vocale Bidirectionnelle (Mode B Native Gemini Live)

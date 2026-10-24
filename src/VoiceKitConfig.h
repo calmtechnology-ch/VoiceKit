@@ -60,6 +60,111 @@ inline const char* voiceStateToString(VoiceState state) {
     }
 }
 
+/**
+ * @brief Style d'élocution vocale (v0.4.1).
+ */
+enum class VoiceStyle : uint8_t {
+    NATURAL = 0,       ///< Style naturel, fluide et spontané (défaut)
+    PROFESSIONAL,      ///< Style professionnel, posé et clair
+    EXPRESSIVE,        ///< Style expressif, vivant et nuancé
+    NARRATIVE          ///< Style narratif, immersif et conteur
+};
+
+/**
+ * @brief Tonalité vocale (v0.4.1).
+ */
+enum class VoiceTone : uint8_t {
+    NEUTRAL = 0,       ///< Tonalité neutre et sobre (défaut)
+    CALM,              ///< Tonalité calme, douce et apaisante
+    WARM,              ///< Tonalité chaleureuse, accueillante et bienveillante
+    CHEERFUL,          ///< Tonalité enjouée, dynamique et souriante
+    SERIOUS            ///< Tonalité sérieuse, formelle et rigoureuse
+};
+
+inline const char* voiceStyleToString(VoiceStyle style) {
+    switch (style) {
+        case VoiceStyle::NATURAL:      return "natural";
+        case VoiceStyle::PROFESSIONAL: return "professional";
+        case VoiceStyle::EXPRESSIVE:   return "expressive";
+        case VoiceStyle::NARRATIVE:    return "narrative";
+        default:                       return "natural";
+    }
+}
+
+inline VoiceStyle stringToVoiceStyle(const String& str) {
+    String s = str;
+    s.toLowerCase();
+    s.trim();
+    if (s == "professional") return VoiceStyle::PROFESSIONAL;
+    if (s == "expressive")   return VoiceStyle::EXPRESSIVE;
+    if (s == "narrative")    return VoiceStyle::NARRATIVE;
+    return VoiceStyle::NATURAL;
+}
+
+inline const char* voiceToneToString(VoiceTone tone) {
+    switch (tone) {
+        case VoiceTone::NEUTRAL:  return "neutral";
+        case VoiceTone::CALM:     return "calm";
+        case VoiceTone::WARM:     return "warm";
+        case VoiceTone::CHEERFUL: return "cheerful";
+        case VoiceTone::SERIOUS:  return "serious";
+        default:                  return "neutral";
+    }
+}
+
+inline VoiceTone stringToVoiceTone(const String& str) {
+    String s = str;
+    s.toLowerCase();
+    s.trim();
+    if (s == "calm")     return VoiceTone::CALM;
+    if (s == "warm")     return VoiceTone::WARM;
+    if (s == "cheerful") return VoiceTone::CHEERFUL;
+    if (s == "serious")  return VoiceTone::SERIOUS;
+    return VoiceTone::NEUTRAL;
+}
+
+/**
+ * @brief Wrapper transparent acceptant aussi bien l'énumérateur VoiceStyle qu'une chaîne C-string ou String.
+ */
+struct VoiceStyleWrapper {
+    VoiceStyle val = VoiceStyle::NATURAL;
+    VoiceStyleWrapper() = default;
+    VoiceStyleWrapper(VoiceStyle s) : val(s) {}
+    VoiceStyleWrapper(const char* s) : val(stringToVoiceStyle(s ? s : "")) {}
+    VoiceStyleWrapper(const String& s) : val(stringToVoiceStyle(s)) {}
+    VoiceStyleWrapper& operator=(VoiceStyle s) { val = s; return *this; }
+    VoiceStyleWrapper& operator=(const char* s) { val = stringToVoiceStyle(s ? s : ""); return *this; }
+    VoiceStyleWrapper& operator=(const String& s) { val = stringToVoiceStyle(s); return *this; }
+    operator VoiceStyle() const { return val; }
+    bool operator==(VoiceStyle other) const { return val == other; }
+    bool operator!=(VoiceStyle other) const { return val != other; }
+    bool operator==(const char* other) const { return val == stringToVoiceStyle(other ? other : ""); }
+    bool operator!=(const char* other) const { return !(*this == other); }
+    const char* c_str() const { return voiceStyleToString(val); }
+    String toString() const { return String(voiceStyleToString(val)); }
+};
+
+/**
+ * @brief Wrapper transparent acceptant aussi bien l'énumérateur VoiceTone qu'une chaîne C-string ou String.
+ */
+struct VoiceToneWrapper {
+    VoiceTone val = VoiceTone::NEUTRAL;
+    VoiceToneWrapper() = default;
+    VoiceToneWrapper(VoiceTone t) : val(t) {}
+    VoiceToneWrapper(const char* t) : val(stringToVoiceTone(t ? t : "")) {}
+    VoiceToneWrapper(const String& t) : val(stringToVoiceTone(t)) {}
+    VoiceToneWrapper& operator=(VoiceTone t) { val = t; return *this; }
+    VoiceToneWrapper& operator=(const char* t) { val = stringToVoiceTone(t ? t : ""); return *this; }
+    VoiceToneWrapper& operator=(const String& t) { val = stringToVoiceTone(t); return *this; }
+    operator VoiceTone() const { return val; }
+    bool operator==(VoiceTone other) const { return val == other; }
+    bool operator!=(VoiceTone other) const { return val != other; }
+    bool operator==(const char* other) const { return val == stringToVoiceTone(other ? other : ""); }
+    bool operator!=(const char* other) const { return !(*this == other); }
+    const char* c_str() const { return voiceToneToString(val); }
+    String toString() const { return String(voiceToneToString(val)); }
+};
+
 #ifndef VOICEKIT_DEFAULT_MODEL
 #define VOICEKIT_DEFAULT_MODEL "models/gemini-3.8-live"
 #endif
@@ -101,7 +206,7 @@ struct ConversationMetrics {
 };
 
 /**
- * @brief Configuration d'initialisation de VoxCore VoiceKit v0.4.0.
+ * @brief Configuration d'initialisation de VoxCore VoiceKit v0.4.1.
  */
 struct VoiceKitConfig {
     // Cle d'API Google Gemini
@@ -110,6 +215,12 @@ struct VoiceKitConfig {
     // Modele et voix Gemini Live centralises
     String model = VOICEKIT_DEFAULT_MODEL;
     String voice = VOICEKIT_DEFAULT_VOICE;
+
+    // Configuration vocale et linguistique (v0.4.1)
+    String language = "fr-FR";                 ///< Code de langue BCP-47 (défaut : fr-FR)
+    VoiceStyleWrapper style = VoiceStyle::NATURAL;   ///< Style d'élocution (natural, professional, expressive, narrative)
+    VoiceToneWrapper tone = VoiceTone::NEUTRAL;      ///< Tonalité vocale (neutral, calm, warm, cheerful, serious)
+    String accent = "";                        ///< Orientation de prononciation / accent optionnel
 
     // Instructions systeme strictes pour TTS mot a mot fidele
     String systemInstruction = VOICEKIT_DEFAULT_TTS_INSTRUCTION;
@@ -149,5 +260,81 @@ struct VoiceKitConfig {
     bool hardwareAlreadyInitialized = true;
     bool connectOnDemand = false;
     uint32_t autoDisconnectIdleMs = 0;
+
+    /**
+     * @brief Formate les directives vocales (langue, style, ton, accent) en consignes textuelles.
+     */
+    String buildVoiceDirectives() const {
+        String directives;
+        // 1. Langue d'expression
+        String lang = language;
+        lang.trim();
+        if (!lang.isEmpty()) {
+            directives += "Langue d'expression : ";
+            if (lang.equalsIgnoreCase("fr-FR") || lang.equalsIgnoreCase("fr")) {
+                directives += "francais (fr-FR).";
+            } else if (lang.equalsIgnoreCase("en-US") || lang.equalsIgnoreCase("en-GB") || lang.equalsIgnoreCase("en")) {
+                directives += "anglais (" + lang + ").";
+            } else if (lang.equalsIgnoreCase("de-DE") || lang.equalsIgnoreCase("de")) {
+                directives += "allemand (de-DE).";
+            } else if (lang.equalsIgnoreCase("es-ES") || lang.equalsIgnoreCase("es")) {
+                directives += "espagnol (es-ES).";
+            } else if (lang.equalsIgnoreCase("it-IT") || lang.equalsIgnoreCase("it")) {
+                directives += "italien (it-IT).";
+            } else {
+                directives += lang + ".";
+            }
+        }
+
+        // 2. Style d'élocution
+        if (!directives.isEmpty()) directives += " ";
+        directives += "Style d'elocution : ";
+        switch (static_cast<VoiceStyle>(style)) {
+            case VoiceStyle::PROFESSIONAL: directives += "professionnel, pose et clair."; break;
+            case VoiceStyle::EXPRESSIVE:   directives += "expressif, vivant et nuance."; break;
+            case VoiceStyle::NARRATIVE:    directives += "narratif, immersif et conteur."; break;
+            case VoiceStyle::NATURAL:
+            default:                       directives += "naturel, fluide et spontane."; break;
+        }
+
+        // 3. Tonalité vocale
+        directives += " Tonalite vocale : ";
+        switch (static_cast<VoiceTone>(tone)) {
+            case VoiceTone::CALM:     directives += "calme, douce et posee."; break;
+            case VoiceTone::WARM:     directives += "chaleureuse, accueillante et bienveillante."; break;
+            case VoiceTone::CHEERFUL: directives += "enjouee, joyeuse et souriante."; break;
+            case VoiceTone::SERIOUS:  directives += "serieuse, formelle et rigoureuse."; break;
+            case VoiceTone::NEUTRAL:
+            default:                  directives += "neutre et sobre."; break;
+        }
+
+        // 4. Accent optionnel
+        String acc = accent;
+        acc.trim();
+        if (!acc.isEmpty()) {
+            directives += " Prononciation et accentuation souhaitee : " + acc + " (a reproduire selon les capacites du modele).";
+        }
+
+        directives.trim();
+        return directives;
+    }
+
+    /**
+     * @brief Construit l'instruction système effective en combinant strictement l'instruction métier
+     *        (TTS, STT ou conversation) avec les consignes vocales (langue, style, ton, accent).
+     */
+    String buildEffectiveInstruction(const String& baseInstruction) const {
+        String effective = baseInstruction;
+        effective.trim();
+        String dir = buildVoiceDirectives();
+        if (!dir.isEmpty() && effective.indexOf("[Directives vocales]") < 0) {
+            if (!effective.isEmpty()) {
+                effective += " [Directives vocales] " + dir;
+            } else {
+                effective = dir;
+            }
+        }
+        return effective;
+    }
 };
 

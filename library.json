@@ -1,7 +1,7 @@
 {
   "name": "VoiceKit",
-  "version": "0.4.0",
-  "description": "Bibliothèque C++/Arduino de synthèse vocale (TTS), reconnaissance vocale (STT) et conversation bidirectionnelle pour M5Stack CoreS3 via Gemini Live (moteur VoxCore)",
+  "version": "0.4.1",
+  "description": "Bibliothèque C++/Arduino de synthèse vocale (TTS), reconnaissance vocale (STT), conversation bidirectionnelle, configuration vocale et support UTF-8 pour M5Stack CoreS3 via Gemini Live (moteur VoxCore)",
   "keywords": [
     "voicekit",
     "voxcore",

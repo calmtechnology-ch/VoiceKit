@@ -16,13 +16,15 @@
 #endif
 
 // =============================================================================
-// DisplayTextNormalizer : Normalisation UTF-8 des textes de presentation
-// VoiceHub v0.4.1.2
-// - Remplace les caracteres accentues et ligatures par leurs equivalents ASCII
-// - Preserve strictement les sequences UTF-8 completes non mappees
-// - Ne supprime jamais arbitrairement d'octets UTF-8
-// - Conserve les caracteres ASCII ordinaires, chiffres et ponctuation
-// - Utilise pour l'affichage LCD, le moniteur serie et VoiceHub Monitor
+// DisplayTextNormalizer : Normalisation pour écrans matériels à polices ASCII
+// VoiceKit v0.4.1
+// 
+// IMPORTANT ARCHITECTURE :
+// Cet utilitaire est STRICTEMENT dédié aux afficheurs graphiques (ex: LCD, TFT, LVGL)
+// ne disposant que d'une table de caractères ASCII standard 7-bits (0..127).
+// Il ne doit JAMAIS être inséré dans le pipeline audio, le transport WebSocket,
+// les requêtes Gemini Live ni les transcriptions vocales de VoiceKit, qui opèrent
+// en UTF-8 pur intégral de bout en bout pour garantir la prononciation correcte.
 // =============================================================================
 
 class DisplayTextNormalizer {

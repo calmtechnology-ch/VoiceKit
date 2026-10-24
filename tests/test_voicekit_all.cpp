@@ -6,6 +6,8 @@
 #include <cmath>
 
 #include "VoxCoreVoice.h"
+#include "Utf8Utils.h"
+#include "cJSON.h"
 #include "native_mock/MockLiveTransport.h"
 #include "../examples/OrientationClockVoice/include/FrenchTimeFormatter.h"
 #include "../examples/OrientationClockVoice/src/FrenchTimeFormatter.cpp"
@@ -1314,12 +1316,313 @@ void test_v030_v040_complete_non_regression() {
 }
 
 // =============================================================================
+// SUITE 36 : Chaîne UTF-8 de bout en bout, accents français et ponctuations
+// =============================================================================
+void test_utf8_end_to_end_and_french_accents() {
+    std::cout << "\n[TEST SUITE 36] Chaine UTF-8 integrale : accents francais, ligatures et ponctuation" << std::endl;
+
+    // 1. Validation de chaque caractère prescrit
+    const char* frenchChars[] = {
+        "é", "è", "ê", "ë", "à", "â", "ù", "û", "î", "ï", "ô", "ö", "ç", "œ", "æ", "É", "À", "Ç", "’", "«", "»"
+    };
+    for (size_t i = 0; i < sizeof(frenchChars) / sizeof(frenchChars[0]); ++i) {
+        String ch(frenchChars[i]);
+        TEST_ASSERT(Utf8Utils::isValidUtf8(ch), String("Caractere UTF-8 valide : ") + ch);
+        TEST_ASSERT(Utf8Utils::sanitizeUtf8(ch) == ch, String("Preservation absolue caractere : ") + ch);
+    }
+
+    // 2. Phrase obligatoire
+    const String mandatoryPhrase = "« À Noël, Élise prépare un café crème. L'été à Genève est agréable. François préfère un cœur léger. »";
+    TEST_ASSERT(Utf8Utils::isValidUtf8(mandatoryPhrase), "Phrase obligatoire est un UTF-8 strictement valide");
+    TEST_ASSERT(Utf8Utils::sanitizeUtf8(mandatoryPhrase) == mandatoryPhrase, "Sanitize n'altere nullement la phrase obligatoire");
+
+    // 3. Robustesse UTF-8 : rejet de séquences mal formées et remplacement sélectif U+FFFD
+    const char invalidOverlong[] = { (char)0xC0, (char)0xAF, '\0' }; // Overlong 2 octets invalide RFC 3629
+    TEST_ASSERT(!Utf8Utils::isValidUtf8(invalidOverlong, 2), "Rejet sequence overlong 0xC0");
+    String sanitizedOverlong = Utf8Utils::sanitizeUtf8(String(invalidOverlong));
+    TEST_ASSERT(sanitizedOverlong.indexOf("\xEF\xBF\xBD") >= 0, "Remplacement de l'octet invalide par U+FFFD");
+
+    const char truncatedUtf8[] = { 'A', (char)0xC3, '\0' }; // 0xC3 sans octet de continuation
+    TEST_ASSERT(!Utf8Utils::isValidUtf8(truncatedUtf8, 2), "Rejet sequence tronquee en fin de chaine");
+
+    // 4. Centralisation de l'échappement JSON (RFC 8259)
+    String jsonEsc = Utf8Utils::escapeJson(mandatoryPhrase);
+    TEST_ASSERT(jsonEsc.indexOf("crème") >= 0, "Accents intacts dans JSON");
+    TEST_ASSERT(jsonEsc.indexOf("cœur") >= 0, "Ligature coeur intacte dans JSON");
+    TEST_ASSERT(jsonEsc.indexOf("Élise") >= 0, "Majuscule accentuee intacte");
+    TEST_ASSERT(jsonEsc.indexOf("Genève") >= 0, "Accent grave intact");
+
+    // Échappement des caractères de contrôle ASCII (< 32), guillemets et backslashes
+    String testControls = "Ligne 1\nLigne 2\t\"Citation\"\\Fin\b\r";
+    String escControls = Utf8Utils::escapeJson(testControls);
+    TEST_ASSERT(escControls.indexOf("\\n") >= 0, "Saut de ligne echappe");
+    TEST_ASSERT(escControls.indexOf("\\t") >= 0, "Tabulation echappee");
+    TEST_ASSERT(escControls.indexOf("\\\"") >= 0, "Guillemet echappe");
+    TEST_ASSERT(escControls.indexOf("\\\\") >= 0, "Backslash echappe");
+
+    // 5. Transmission say() avec MockLiveTransport
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_UTF8_KEY";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    voice.say(mandatoryPhrase);
+    std::string sentPayload = mockTransport.getLastSent();
+    TEST_ASSERT(sentPayload.find("« À Noël, Élise prépare un café crème.") != std::string::npos,
+                "La trame clientContent contient la phrase francaise accentuee sans aucune translitteration");
+    TEST_ASSERT(sentPayload.find("François préfère un cœur léger. »") != std::string::npos,
+                "Ligature et cedille transmises integralement a Gemini Live");
+
+    // 6. Réception de transcriptions avec caractères accentués
+    String receivedTrans = "";
+    voice.onTranscription([&](const String& t, bool isFinal) {
+        if (isFinal) receivedTrans = t;
+    });
+
+    const char* incomingJson = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Élise a adoré l’été à Genève !\"}}}";
+    voice.getClient().handleIncomingMessage(incomingJson, strlen(incomingJson));
+    voice.update();
+
+    TEST_ASSERT(receivedTrans == "Élise a adoré l’été à Genève !",
+                "Transcription entrante avec apostrophe typographique et accents preservee mot a mot");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 37 : Configuration vocale VoiceKitConfig (voix, langues, styles, tons, accents)
+// =============================================================================
+void test_voice_configuration_parameters() {
+    std::cout << "\n[TEST SUITE 37] Parametres VoiceKitConfig : voix, langue, style, ton et accent" << std::endl;
+
+    VoiceKitConfig cfg;
+    TEST_ASSERT(cfg.voice == "Aoede", "Voix par defaut conservee (Aoede)");
+    TEST_ASSERT(cfg.language == "fr-FR", "Langue par defaut conforme fr-FR");
+    TEST_ASSERT(cfg.style == VoiceStyle::NATURAL, "Style par defaut conforme NATURAL");
+    TEST_ASSERT(cfg.tone == VoiceTone::NEUTRAL, "Ton par defaut conforme NEUTRAL");
+    TEST_ASSERT(cfg.accent.isEmpty(), "Accent par defaut vide");
+
+    // Conversion et affectation flexible style (enum et string)
+    cfg.style = VoiceStyle::EXPRESSIVE;
+    TEST_ASSERT(cfg.style == VoiceStyle::EXPRESSIVE, "Affectation enum EXPRESSIVE");
+    TEST_ASSERT(String(cfg.style.c_str()) == "expressive", "Conversion string expressive");
+
+    cfg.style = "professional";
+    TEST_ASSERT(cfg.style == VoiceStyle::PROFESSIONAL, "Affectation chaine 'professional'");
+
+    cfg.style = "narrative";
+    TEST_ASSERT(cfg.style == VoiceStyle::NARRATIVE, "Affectation chaine 'narrative'");
+
+    // Conversion et affectation flexible ton (enum et string)
+    cfg.tone = VoiceTone::CALM;
+    TEST_ASSERT(cfg.tone == VoiceTone::CALM, "Affectation enum CALM");
+
+    cfg.tone = "warm";
+    TEST_ASSERT(cfg.tone == VoiceTone::WARM, "Affectation chaine 'warm'");
+
+    cfg.tone = "cheerful";
+    TEST_ASSERT(cfg.tone == VoiceTone::CHEERFUL, "Affectation chaine 'cheerful'");
+
+    cfg.tone = "serious";
+    TEST_ASSERT(cfg.tone == VoiceTone::SERIOUS, "Affectation chaine 'serious'");
+
+    // Formatage des directives vocales
+    cfg.language = "fr-FR";
+    cfg.style = VoiceStyle::EXPRESSIVE;
+    cfg.tone = VoiceTone::WARM;
+    cfg.accent = "parisien";
+    String directives = cfg.buildVoiceDirectives();
+    TEST_ASSERT(directives.indexOf("francais (fr-FR)") >= 0, "Directives : langue francaise");
+    TEST_ASSERT(directives.indexOf("expressif, vivant et nuance") >= 0, "Directives : style expressif");
+    TEST_ASSERT(directives.indexOf("chaleureuse, accueillante et bienveillante") >= 0, "Directives : ton chaleureux");
+    TEST_ASSERT(directives.indexOf("parisien") >= 0, "Directives : accent parisien");
+
+    // Langues étrangères
+    cfg.language = "de-DE";
+    String dirDe = cfg.buildVoiceDirectives();
+    TEST_ASSERT(dirDe.indexOf("allemand (de-DE)") >= 0, "Directives : langue allemande");
+
+    cfg.language = "en-US";
+    String dirEn = cfg.buildVoiceDirectives();
+    TEST_ASSERT(dirEn.indexOf("anglais (en-US)") >= 0, "Directives : langue anglaise");
+
+    // Construction de l'instruction système effective
+    String effectiveTTS = cfg.buildEffectiveInstruction(VOICEKIT_DEFAULT_TTS_INSTRUCTION);
+    TEST_ASSERT(effectiveTTS.startsWith(VOICEKIT_DEFAULT_TTS_INSTRUCTION), "Instruction metier TTS strictement preservee au debut");
+    TEST_ASSERT(effectiveTTS.indexOf("[Directives vocales]") >= 0, "Balise [Directives vocales] presente");
+}
+
+// =============================================================================
+// SUITE 38 : Protocole Gemini Live Setup : speechConfig et systemInstruction
+// =============================================================================
+void test_gemini_setup_json_validation() {
+    std::cout << "\n[TEST SUITE 38] Trame de setup Gemini Live : speechConfig, voix et directives" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_SETUP_KEY";
+    config.voice = "Charon";
+    config.language = "fr-FR";
+    config.style = VoiceStyle::PROFESSIONAL;
+    config.tone = VoiceTone::SERIOUS;
+    config.accent = "meridional";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+
+    voice.begin(config);
+    voice.getClient().setTransport(&mockTransport);
+    voice.getClient().connect();
+
+    std::string setupSent = mockTransport.getLastSent();
+    TEST_ASSERT(!setupSent.empty(), "Trame de setup emise a la connexion");
+
+    cJSON* root = cJSON_Parse(setupSent.c_str());
+    TEST_ASSERT(root != nullptr, "Setup est un JSON valide RFC 8259");
+
+    if (root) {
+        cJSON* setup = cJSON_GetObjectItemCaseSensitive(root, "setup");
+        TEST_ASSERT(setup != nullptr, "Objet racine 'setup' present");
+
+        if (setup) {
+            // Modèle
+            cJSON* model = cJSON_GetObjectItemCaseSensitive(setup, "model");
+            TEST_ASSERT(model && cJSON_IsString(model), "Champ model present");
+
+            // generationConfig
+            cJSON* genConfig = cJSON_GetObjectItemCaseSensitive(setup, "generationConfig");
+            TEST_ASSERT(genConfig != nullptr, "Objet generationConfig present");
+
+            if (genConfig) {
+                cJSON* speechConfig = cJSON_GetObjectItemCaseSensitive(genConfig, "speechConfig");
+                TEST_ASSERT(speechConfig != nullptr, "Objet speechConfig present");
+
+                if (speechConfig) {
+                    // voiceConfig.prebuiltVoiceConfig.voiceName
+                    cJSON* voiceConfig = cJSON_GetObjectItemCaseSensitive(speechConfig, "voiceConfig");
+                    TEST_ASSERT(voiceConfig != nullptr, "voiceConfig present");
+                    if (voiceConfig) {
+                        cJSON* prebuilt = cJSON_GetObjectItemCaseSensitive(voiceConfig, "prebuiltVoiceConfig");
+                        TEST_ASSERT(prebuilt != nullptr, "prebuiltVoiceConfig present");
+                        if (prebuilt) {
+                            cJSON* vName = cJSON_GetObjectItemCaseSensitive(prebuilt, "voiceName");
+                            TEST_ASSERT(vName && cJSON_IsString(vName) && String(vName->valuestring) == "Charon",
+                                        "voiceName est conforme ('Charon')");
+                        }
+                    }
+
+                    // Règle formelle : pour modèles natifs (gemini-3.8-live), languageCode est ABSENT de speechConfig
+                    cJSON* langCode = cJSON_GetObjectItemCaseSensitive(speechConfig, "languageCode");
+                    TEST_ASSERT(langCode == nullptr, "languageCode absent de speechConfig pour modele natif (compatibilite Bidi)");
+                }
+            }
+
+            // systemInstruction
+            cJSON* sysInst = cJSON_GetObjectItemCaseSensitive(setup, "systemInstruction");
+            TEST_ASSERT(sysInst != nullptr, "systemInstruction present");
+            if (sysInst) {
+                cJSON* parts = cJSON_GetObjectItemCaseSensitive(sysInst, "parts");
+                if (parts && cJSON_GetArraySize(parts) > 0) {
+                    cJSON* p0 = cJSON_GetArrayItem(parts, 0);
+                    cJSON* txt = cJSON_GetObjectItemCaseSensitive(p0, "text");
+                    TEST_ASSERT(txt && cJSON_IsString(txt), "Texte instruction present");
+                    if (txt && txt->valuestring) {
+                        String sTxt(txt->valuestring);
+                        TEST_ASSERT(sTxt.indexOf("Tu es un moteur de synthese vocale TTS pur") >= 0,
+                                    "Instruction metier TTS d'origine strictement preservee");
+                        TEST_ASSERT(sTxt.indexOf("[Directives vocales]") >= 0,
+                                    "Directives vocales presentes dans les instructions systeme");
+                        TEST_ASSERT(sTxt.indexOf("professionnel, pose et clair") >= 0,
+                                    "Style professionnel present dans le setup");
+                        TEST_ASSERT(sTxt.indexOf("serieuse, formelle et rigoureuse") >= 0,
+                                    "Ton serieux present dans le setup");
+                        TEST_ASSERT(sTxt.indexOf("meridional") >= 0,
+                                    "Accent meridional present dans le setup");
+                    }
+                }
+            }
+        }
+        cJSON_Delete(root);
+    }
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 39 : Dynamique de profil vocal et reconnexion sécurisée
+// =============================================================================
+void test_voice_profile_switching_and_safety() {
+    std::cout << "\n[TEST SUITE 39] Changement dynamique de profil vocal et securite d'interruption" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_DYN_KEY";
+    config.voice = "Aoede";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    TEST_ASSERT(voice.isReady(), "VoiceKit pret au depart");
+    TEST_ASSERT(voice.getVoice() == "Aoede", "Voix initiale Aoede");
+
+    // 1. Changement de profil au repos (IDLE/READY) -> autorise
+    bool profOk = voice.setVoiceProfile("Fenrir", "en-US", VoiceStyle::EXPRESSIVE, VoiceTone::CHEERFUL, "british");
+    TEST_ASSERT(profOk, "Changement de profil accepte a froid/au repos");
+    TEST_ASSERT(voice.getVoice() == "Fenrir", "Nouvelle voix Fenrir");
+    TEST_ASSERT(voice.getLanguage() == "en-US", "Nouvelle langue en-US");
+    TEST_ASSERT(voice.getStyle() == VoiceStyle::EXPRESSIVE, "Nouveau style EXPRESSIVE");
+    TEST_ASSERT(voice.getTone() == VoiceTone::CHEERFUL, "Nouveau ton CHEERFUL");
+    TEST_ASSERT(voice.getAccent() == "british", "Nouvel accent british");
+
+    // Reconnexion confirmée via simulateIncoming setupComplete
+    const char* setupCompJson = "{\"setupComplete\":{}}";
+    voice.getClient().handleIncomingMessage(setupCompJson, strlen(setupCompJson));
+    voice.update();
+    TEST_ASSERT(voice.isReady(), "Nouvelle session securisee prete");
+
+    // 2. Vérification de la nouvelle trame de setup emise
+    std::string newSetup = mockTransport.getLastSent();
+    TEST_ASSERT(newSetup.find("Fenrir") != std::string::npos, "Nouveau setup avec voix Fenrir emise");
+    TEST_ASSERT(newSetup.find("anglais (en-US)") != std::string::npos, "Nouveau setup avec langue anglaise");
+
+    // 3. Sécurité absolue : interdiction de reconnexion pendant une génération vocale ou écoute active
+    voice.say("Phrase en cours d'elocution");
+    // Le moteur est occupé
+    TEST_ASSERT(voice.isBusy(), "Moteur occupe en cours de parole");
+
+    bool rejectDuringBusy = voice.setVoiceProfile("Puck", "fr-FR", VoiceStyle::NATURAL, VoiceTone::CALM);
+    TEST_ASSERT(!rejectDuringBusy, "Changement de profil STRICTEMENT REFUSE pendant activite vocale active");
+    TEST_ASSERT(voice.getVoice() == "Fenrir", "Voix inchangee apres tentative pendant activite");
+
+    voice.stop();
+    TEST_ASSERT(!voice.isBusy(), "Moteur au repos apres stop()");
+
+    // 4. Modificateurs individuels
+    bool changeTone = voice.setTone(VoiceTone::SERIOUS);
+    TEST_ASSERT(changeTone, "setTone reussi a froid");
+    TEST_ASSERT(voice.getTone() == VoiceTone::SERIOUS, "Ton serieux enregistre");
+
+    bool changeStyle = voice.setStyle(VoiceStyle::NARRATIVE);
+    TEST_ASSERT(changeStyle, "setStyle reussi a froid");
+    TEST_ASSERT(voice.getStyle() == VoiceStyle::NARRATIVE, "Style narrative enregistre");
+
+    bool changeLang = voice.setLanguage("de-DE");
+    TEST_ASSERT(changeLang, "setLanguage reussi a froid");
+    TEST_ASSERT(voice.getLanguage() == "de-DE", "Langue de-DE enregistree");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.4.0    " << std::endl;
-    std::cout << "  Validation TTS + STT + Conversation (Mode B Native)     " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.4.1    " << std::endl;
+    std::cout << "  Validation TTS + STT + Conversation + Profils Vocaux    " << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
     std::cout << "===========================================================" << std::endl;
 
@@ -1362,6 +1665,12 @@ int main() {
     test_conversation_silence_handling();
     test_conversation_metrics_accuracy();
     test_v030_v040_complete_non_regression();
+
+    // Nouvelles suites de tests VoiceKit v0.4.1 (UTF-8, Configuration vocale, Gemini Setup, Profils)
+    test_utf8_end_to_end_and_french_accents();
+    test_voice_configuration_parameters();
+    test_gemini_setup_json_validation();
+    test_voice_profile_switching_and_safety();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

@@ -41,11 +41,18 @@ public:
     // Initialisation des identifiants et modèles
     bool begin(const char* apiKey, const char* model = nullptr, const char* voice = nullptr);
 
-    // Configuration applicative de la session (VoxCore v0.2.0)
+    // Configuration applicative de la session (VoxCore v0.2.0 / VoiceKit v0.4.1)
     void setSystemInstruction(const String& instruction) { _systemInstruction = instruction; }
     const String& getSystemInstruction() const { return _systemInstruction; }
     const String& getModel() const { return _model; }
+    void setModel(const String& model) { _model = model; }
     const String& getVoice() const { return _voice; }
+    void setVoice(const String& voice) { _voice = voice; }
+    const String& getLanguage() const { return _language; }
+    void setLanguage(const String& language) { _language = language; }
+    const String& getVoiceDirectives() const { return _voiceDirectives; }
+    void setVoiceDirectives(const String& directives) { _voiceDirectives = directives; }
+    static bool isModelSpeechLanguageCodeSupported(const String& model);
     void setTools(const std::vector<ToolDeclaration>& tools) { _tools = tools; }
     const std::vector<ToolDeclaration>& getTools() const { return _tools; }
 
@@ -151,10 +158,12 @@ private:
     String _apiKey;
     String _model = GEMINI_LIVE_MODEL;
     String _voice = GEMINI_LIVE_VOICE;
+    String _language = "fr-FR";
     String _lastError;
 
     // Configuration dynamique applicative
     String _systemInstruction;
+    String _voiceDirectives;
     std::vector<ToolDeclaration> _tools;
 
     ILiveTransport* _transport = nullptr;

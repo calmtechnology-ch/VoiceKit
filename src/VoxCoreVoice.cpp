@@ -33,7 +33,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _lastError = "";
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.3.0 — TTS + STT (Gemini Live)    ");
+    Serial.println("  VoxCore VoiceKit v0.4.1 — TTS + STT + Conversation    ");
     Serial.printf("  Mode Audio : %s\n",
                   (LiveAudioPlayer::getCompiledAudioMode() == 1) ? "MODE 1 (REACTIVE_CALLBACK)" : "MODE 2 (DEDICATED_AUDIO_TASK)");
     Serial.println("========================================================");
@@ -99,7 +99,9 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         return false;
     }
 
-    _client.setSystemInstruction(_config.systemInstruction);
+    _client.setLanguage(_config.language);
+    _client.setVoiceDirectives(_config.buildVoiceDirectives());
+    _client.setSystemInstruction(_config.enableConversation ? _config.conversationInstruction : _config.systemInstruction);
 
     // Enregistrement de l'écouteur de transcriptions entrantes utilisateur
     _client.setOnInputTranscription([this](const String& text, bool isFinal) {
@@ -356,7 +358,9 @@ void VoxCoreVoice::update() {
 
     // 6. Surveillance des timeouts de connexion initiale
     if (_state == VoiceState::CONNECTING_SERVICE) {
-        if (_connectingStartTimeMs > 0 && (now - _connectingStartTimeMs > GEMINI_LIVE_CONNECT_TIMEOUT_MS + 2000)) {
+        // Connection can start during this update, after the initial now snapshot.
+        // Read the clock again to avoid unsigned underflow and an immediate timeout.
+        if (_connectingStartTimeMs > 0 && (millis() - _connectingStartTimeMs > GEMINI_LIVE_CONNECT_TIMEOUT_MS + 2000)) {
             Serial.println("[VoiceKit] ERREUR : Delai de connexion depasse vers Gemini Live");
             _lastError = "Timeout connexion Gemini Live";
             _connectingStartTimeMs = 0;
@@ -514,12 +518,73 @@ uint8_t VoxCoreVoice::getVolume() const {
 }
 
 // =============================================================================
+// Implémentation Configuration Vocale & Profils (v0.4.1)
+// =============================================================================
+
+bool VoxCoreVoice::setVoiceProfile(const String& voice, const String& language,
+                                   VoiceStyle style, VoiceTone tone,
+                                   const String& accent) {
+    if (isBusy()) {
+        _lastError = "Impossible de modifier le profil vocal pendant une activite vocale active";
+        Serial.printf("[VoiceKit] %s\n", _lastError.c_str());
+        return false;
+    }
+
+    _config.voice = voice;
+    _config.language = language;
+    _config.style = style;
+    _config.tone = tone;
+    _config.accent = accent;
+
+    _client.setVoice(voice);
+    _client.setLanguage(language);
+    _client.setVoiceDirectives(_config.buildVoiceDirectives());
+    _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+
+    Serial.printf("[VoiceKit] Nouveau profil vocal : Voix=%s | Langue=%s | Style=%s | Ton=%s%s%s\n",
+                  voice.c_str(), language.c_str(), voiceStyleToString(style), voiceToneToString(tone),
+                  accent.isEmpty() ? "" : " | Accent=", accent.isEmpty() ? "" : accent.c_str());
+
+    // Si la session est actuellement connectée, reconnexion propre pour négocier le nouveau profil
+    if (_client.isConnected()) {
+        Serial.println("[VoiceKit] Reconnexion securisee pour prise en compte du nouveau profil vocal...");
+        _session.deactivate();
+        setState(VoiceState::CONNECTING_SERVICE);
+        _connectingStartTimeMs = millis();
+        return _session.activate();
+    }
+
+    return true;
+}
+
+bool VoxCoreVoice::setVoice(const String& voice) {
+    return setVoiceProfile(voice, _config.language, _config.style, _config.tone, _config.accent);
+}
+
+bool VoxCoreVoice::setLanguage(const String& language) {
+    return setVoiceProfile(_config.voice, language, _config.style, _config.tone, _config.accent);
+}
+
+bool VoxCoreVoice::setStyle(VoiceStyle style) {
+    return setVoiceProfile(_config.voice, _config.language, style, _config.tone, _config.accent);
+}
+
+bool VoxCoreVoice::setTone(VoiceTone tone) {
+    return setVoiceProfile(_config.voice, _config.language, _config.style, tone, _config.accent);
+}
+
+bool VoxCoreVoice::setAccent(const String& accent) {
+    return setVoiceProfile(_config.voice, _config.language, _config.style, _config.tone, accent);
+}
+
+// =============================================================================
 // Implémentation Conversation Bidirectionnelle (v0.4.0)
 // =============================================================================
 
 void VoxCoreVoice::enableConversation(bool enable) {
     _conversationEnabled = enable;
     _config.enableConversation = enable;
+    _client.setVoiceDirectives(_config.buildVoiceDirectives());
     if (enable) {
         _client.setSystemInstruction(_config.conversationInstruction);
         Serial.println("[VoiceKit] Mode conversation bidirectionnelle native (Mode B) ACTIVE");

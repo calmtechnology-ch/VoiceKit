@@ -101,9 +101,8 @@ void LiveSessionController::finishTurn() {
     if (!_turnCompletedLogged && _turnActive.load(std::memory_order_acquire) && !_turnCancelled.load(std::memory_order_acquire)) {
         _turnCompletedLogged = true;
 
-        String normAssistant = DisplayTextNormalizer::normalize(_lastAssistantText);
-        if (!normAssistant.isEmpty()) {
-            Serial.printf("[GEMINI] %s\n", normAssistant.c_str());
+        if (!_lastAssistantText.isEmpty()) {
+            Serial.printf("[GEMINI] %s\n", _lastAssistantText.c_str());
         }
 
         uint32_t pcmDecoded = _client ? _client->getPcmSamplesDispatchedTotal() : 0;
