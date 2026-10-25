@@ -1,4 +1,4 @@
-# VoiceKit v0.5.0.1 — Correctif de Stabilisation : FreeRTOS, Modes et Événements
+# VoiceKit v0.5.1 — Intégration de l'Exemple Officiel VoiceDiagnostics
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -7,11 +7,11 @@
 
 Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)** et de **conversation vocale bidirectionnelle native (Mode B)** haute fidélité pour **M5Stack CoreS3** (ESP32-S3), propulsée par l'API **Gemini Live** (protocole bidirectionnel BidiGenerateContent) et construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
 
-La version **v0.5.0.1** est une **version corrective de stabilisation** traitant les points suivants :
-- **Synchronisation FreeRTOS Thread-Safe** : Remplacement de `volatile` par `std::atomic` sur tous les drapeaux partagés (`_state`, `_isActive`, `_isPaused`, `_speechEndRequested`, `_lastChunkRms`, `_mode`). Mise en place d'une file SPSC (Single-Producer Single-Consumer) bornée et lock-free (128 blocs = 4,096 s) transférant les valeurs RMS du callback audio FreeRTOS Core 1 vers `update()` dans la boucle principale, éliminant tout risque de course de données ou blocage audio.
-- **Sécurisation des Transitions de Modes** : Correction de `stopConversation()` (ne bascule plus prématurément vers `IDLE` si l'opération échoue), distinction entre demande acceptée et transition confirmée par `setupComplete`, refus strict des opérations incompatibles durant une reconnexion, et restauration automatique du dernier mode valide en cas d'échec réseau.
-- **Fiabilisation de `ContinuousListeningController` & Unicité des Événements** : Attribution d'un identifiant séquentiel local par segment, garantie d'au maximum une seule finalisation par segment vocal, rejet des notifications répétées et des callbacks tardifs orphelins, zéro hallucination après timeout STT (texte vide et `confirmed = false`), et reprise automatique après 400 ms.
-- **Préservation Intégrale de l'Existant (`VoxCoreVoice`)** : L'API historique ainsi que les 8 exemples restent 100% compatibles sans aucune rupture d'API.
+La version **v0.5.1** introduit un nouvel exemple officiel d'instrumentation et de visualisation vocale :
+- **Nouvelle Démonstration Officielle `VoiceDiagnostics`** : Tableau de bord tactile complet 320 × 240 M5Unified (sans LVGL) organisé en 4 onglets (`SYS`, `AUDIO`, `NET`, `EVENTS`), permettant d'inspecter en direct l'état de la façade VoiceKit, la mémoire RAM/PSRAM, le signal RMS du microphone, les compteurs TTS/STT, la connectivité Wi-Fi / Gemini Live, avec un historique circulaire des événements sans allocation dynamique et deux boutons d'action (`TEST TTS` en français et `STOP AUDIO`).
+- **Journal Série Structuré & Mode CSV** : Sortie de diagnostic périodique standardisée `[DIAG]` et mode CSV optionnel (`ENABLE_CSV_OUTPUT`), avec régulation automatique de l'UART pendant le streaming audio pour préserver les transferts DMA et WebSocket.
+- **Façade Unifiée et Intégrité VoxCore** : Aucune tâche FreeRTOS superflue, aucun traitement bloquant dans les callbacks audio, utilisation exclusive de la façade `VoiceKit voice;`, et zéro modification du moteur VoxCore v0.5.0.1.
+- **9 Exemples Officiels Inclus** : Compatibilité et non-régression intégrales vérifiées sur l'ensemble des modules et exemples existants.
 
 ---
 
@@ -105,8 +105,9 @@ VoiceKit/
 │       ├── M5AudioOutput (.h/.cpp)        # HAL haut-parleur M5.Speaker
 │       ├── M5AudioInput (.h/.cpp)         # HAL microphone M5.Mic (ES7210)
 │       └── HardwareManager.h              # Arbitrage I2S centralisé HP / Micro
-├── examples/                    # Exemples d'application (8 exemples)
-│   ├── MinimalVoiceKit/         # NOUVEAU v0.5.0 : Démonstrateur façade simplifiée multi-modes
+├── examples/                    # Exemples d'application (9 exemples)
+│   ├── VoiceDiagnostics/        # NOUVEAU v0.5.1 : Outil officiel de diagnostic et télémétrie tactile
+│   ├── MinimalVoiceKit/         # Démonstrateur façade simplifiée multi-modes
 │   ├── ContinuousSTT/           # Dictée continue mains libres avec interface M5Unified
 │   ├── VoiceSettingsDemo/       # Démonstrateur tactile profils & UTF-8
 │   ├── MinimalConversation/     # Application conversation bidirectionnelle (Mode B)
@@ -116,7 +117,7 @@ VoiceKit/
 │   └── MinimalTTS_Arduino/      # Exemple autonome Arduino IDE (.ino)
 └── tests/
     ├── run_tests.bat            # Lanceur des tests automatisés MinGW
-    └── test_voicekit_all.cpp    # 52 suites de tests unitaires (692 validations, 0 échec)
+    └── test_voicekit_all.cpp    # 55 suites de tests unitaires (806 validations, 0 échec)
 ```
 
 ---
@@ -408,35 +409,37 @@ Pour assurer une rétrocompatibilité ascendante stricte à 100%, la classe `Vox
 
 ## 7. Exemples Inclus
 
-La bibliothèque fournit 8 exemples complets prêts à l'emploi :
+La bibliothèque fournit 9 exemples complets prêts à l'emploi :
 
-1. **`examples/MinimalVoiceKit/`** (PlatformIO) — **NOUVEAU v0.5.0** :  
-   Démonstrateur de référence de la nouvelle API simplifiée `VoiceKit`. Permet de tester successivement les 4 modes vocaux (TTS, STT manuel, dictée continue et conversation) sur l'écran tactile du M5Stack CoreS3 (320 × 240) avec diagnostic en temps réel sur le moniteur Série.
-2. **`examples/ContinuousSTT/`** (PlatformIO) :  
+1. **`examples/VoiceDiagnostics/`** (PlatformIO) — **NOUVEAU v0.5.1** :  
+   Outil officiel de diagnostic et de télémétrie vocale pour M5Stack CoreS3. Interface tactile M5Unified (320 × 240) à 4 onglets (`SYS`, `AUDIO`, `NET`, `EVENTS`), suivi en temps réel de l'état VoiceKit, de la mémoire libre (RAM/PSRAM), du niveau RMS du micro, des statistiques STT/TTS et de la connectivité Gemini Live. Intègre un journal série structuré `[DIAG]`, un mode CSV optionnel, un historique circulaire d'événements et deux boutons de contrôle (`TEST TTS` et `STOP AUDIO`).
+2. **`examples/MinimalVoiceKit/`** (PlatformIO) :  
+   Démonstrateur de référence de la façade simplifiée `VoiceKit`. Permet de tester successivement les 4 modes vocaux (TTS, STT manuel, dictée continue et conversation) sur l'écran tactile du M5Stack CoreS3 (320 × 240) avec diagnostic en temps réel sur le moniteur Série.
+3. **`examples/ContinuousSTT/`** (PlatformIO) :  
    Application autonome de dictée vocale mains libres avec interface graphique complète M5Unified (7 états, VU-mètre RMS, compte à rebours de silence, bouton Pause/Reprendre, accents français UTF-8).
-3. **`examples/VoiceSettingsDemo/`** (PlatformIO) :  
+4. **`examples/VoiceSettingsDemo/`** (PlatformIO) :  
    Démonstrateur tactile multi-profils et validation UTF-8 pour M5Stack CoreS3. Permet de faire défiler et tester 5 scénarios complets avec accents français, allemand et anglais.
-4. **`examples/MinimalConversation/`** (PlatformIO) :  
+5. **`examples/MinimalConversation/`** (PlatformIO) :  
    Application conversationnelle vocale bidirectionnelle native (Mode B) pour M5Stack CoreS3. Bouton tactile dynamique (« PARLER » / « STOP ») et cartes d'affichage.
-5. **`examples/MinimalTTS/`** (PlatformIO) :  
+6. **`examples/MinimalTTS/`** (PlatformIO) :  
    Validation physique TTS minimale sans LVGL. Démonstration de synthèse vocale au démarrage puis déclenchement tactile sur l'écran.
-6. **`examples/MinimalSTT/`** (PlatformIO) :  
+7. **`examples/MinimalSTT/`** (PlatformIO) :  
    Démonstration de reconnaissance vocale Push-to-Talk STT pour M5Stack CoreS3 avec transcriptions intérimaires et finales.
-7. **`examples/OrientationClockVoice/`** (PlatformIO) :  
+8. **`examples/OrientationClockVoice/`** (PlatformIO) :  
    Horloge dynamique complète avec **LVGL 9**, accéléromètre **BMI270** (rotation 360°), horloge RTC **BM8563**, et annonce vocale de l'heure en français.
-8. **`examples/MinimalTTS_Arduino/`** (Arduino IDE) :  
+9. **`examples/MinimalTTS_Arduino/`** (Arduino IDE) :  
    Croquis autonome `.ino` prêt à l'emploi avec documentation pas-à-pas des menus Arduino IDE.
 
 ---
 
 ## 8. Garanties de Non-Régression & Sécurité
 
-La version **v0.5.0.1** garantit une non-régression absolue sur l'ensemble des modules validés en v0.5.0 :
+La version **v0.5.1** garantit une non-régression absolue sur l'ensemble des modules validés en v0.5.0 et v0.5.0.1 :
 - **Intégrité absolue du moteur audio VoxCore** : Aucune modification des buffers DMA, de la tâche FreeRTOS Mode 2, du ring buffer PSRAM, ou des mécanismes d'évacuation audio (`LiveAudioPlayer`, `LiveAudioStreamer`, `LiveSessionController`).
 - **Chaîne UTF-8 sans translittération** : Les phrases françaises accentuées, ligatures et apostrophes typographiques sont envoyées intactes à Gemini Live.
 - **Arbitrage matériel garanti** : Pas de conflit I2S ni de larsen grâce au `HardwareManager` qui coupe automatiquement le haut-parleur lors de la prise de son micro et le réactive pour la réponse.
 - **Suite de tests automatisés** : 55 suites de tests unitaires et 806 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
-- **Compilations d'exemples validées à 100%** : Les 8 exemples compilent sans aucune erreur sous PlatformIO et Arduino IDE (M5Stack CoreS3).
+- **Compilations d'exemples validées à 100%** : Les 9 exemples compilent sans aucune erreur sous PlatformIO et Arduino IDE (M5Stack CoreS3).
 - **Zéro identifiant en clair** : Aucun secret, SSID Wi-Fi ni clé API n'est publié dans le dépôt.
 
-Consultez le [Rapport de Livraison v0.5.0.1](RAPPORT_LIVRAISON_v0.5.0.1.md) pour les détails d'architecture, les comparatifs de synchronisation FreeRTOS et les preuves de compilation.
+Consultez le [Rapport de Livraison v0.5.1](RAPPORT_LIVRAISON_v0.5.1.md) pour les détails d'architecture, les métriques exposées et les preuves de compilation.

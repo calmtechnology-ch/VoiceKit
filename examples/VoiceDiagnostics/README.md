@@ -1,0 +1,100 @@
+# VoiceDiagnostics — VoiceKit v0.5.1
+
+Exemple officiel de **diagnostic et de visualisation** pour la bibliothèque **VoiceKit v0.5.1** sur **M5Stack CoreS3**.
+
+Cette application fournit un tableau de bord tactile fluide et léger permettant d'inspecter l'état du moteur vocal, les flux audio (RMS micro, états STT/TTS), les métriques réseau (Wi-Fi, session Gemini Live), l'utilisation mémoire (RAM, PSRAM) et le journal horodaté des événements.
+
+---
+
+## 1. Fonctionnalités et Interface Tactile (320 × 240)
+
+L'interface est construite avec **M5Unified** (sans surcharge ni dépendance LVGL) et s'articule autour de 4 onglets :
+
+### 📊 Onglet `SYS` (Système)
+- **État VoiceKit** : État opérationnel en temps réel (`READY`, `SPEAKING`, `LISTENING`, etc.).
+- **Mode vocal** : Mode fonctionnel actif (`IDLE`, `CONTINUOUS`, `CONVERSATION`).
+- **RAM libre / min** : Mémoire heap interne disponible et minimum libre observé.
+- **PSRAM libre** : Mémoire étendue disponible (8 Mo sur CoreS3).
+- **Uptime** : Durée de fonctionnement depuis le démarrage (en secondes).
+- **ESP32 CPU** : Fréquence du processeur (240 MHz).
+- **Puce & Flash** : Modèle de SoC ESP32-S3 et taille de la mémoire flash.
+
+### 🎙️ Onglet `AUDIO` (Audio & Acoustique)
+- **Microphone RMS** : Niveau sonore d'acquisition micro en temps réel exposé par VoxCore.
+- **Capture STT** : État de la dictée vocale (`INACTIF`, `EN COURS`, `TRANSCRIPTION`).
+- **Restitution TTS** : État du haut-parleur (`INACTIF`, `EN COURS`, `OCCUPE`).
+- **Compteurs audio** : Débuts et fins de synthèse TTS, débuts et fins d'écoute micro, transcriptions finales reçues.
+- **Métriques conversation** : Latence du premier bloc audio et perte d'échantillons du dernier tour conversationnel (affiché `N/D` si aucun tour n'a eu lieu).
+
+### 🌐 Onglet `NET` (Réseau & Gemini Live)
+- **Connexion Wi-Fi** : Statut de liaison (`CONNECTE` ou `DECONNECTE`).
+- **Adresse IP** : Adresse IP locale attribuée par le routeur.
+- **Signal RSSI** : Puissance du signal Wi-Fi en dBm.
+- **Session Gemini** : État de la liaison WebSocket sécurisée TLS (`PRETE`, `CONNEXION...`, `NON PRETE`).
+- **Reconnexions** : Nombre de reconnexions réussies observées.
+- **Erreurs observées** : Compteur d'erreurs de transport ou protocole.
+- **Dernière erreur** : Intitulé abrégé du dernier incident survenu.
+
+### 📝 Onglet `EVENTS` (Journal des Événements)
+- **Historique circulaire** : Affichage chronologique des 6 derniers événements vocaux horodatés (transitions d'état, début/fin TTS, début/fin micro, réceptions de transcription STT, erreurs).
+- **Zéro allocation dynamique** : Tampon circulaire statique en mémoire fixe.
+
+### 🔘 Boutons de Contrôle Permanents
+- **`TEST TTS`** : Déclenche la prononciation vocale d'une phrase de test en français (*« Bonjour. Ceci est un test de diagnostic vocal VoiceKit sur Core S trois. »*).
+- **`STOP AUDIO`** : Interrompt immédiatement toute restitution ou capture en cours via `voice.stop()`.
+
+---
+
+## 2. Sortie Série Structurée
+
+L'application émet périodiquement un relevé structuré sur le port série (115200 baud).
+
+### Format standard `[DIAG]` (par défaut)
+```text
+[DIAG] Voice=READY [DIAG] Mode=IDLE [DIAG] WiFi=CONNECTED [DIAG] RAM_FREE=152320 [DIAG] PSRAM_FREE=7845120 [DIAG] MIC_RMS=215 [DIAG] TTS_BUSY=0
+```
+
+### Format CSV facultatif (`ENABLE_CSV_OUTPUT 1`)
+En définissant `#define ENABLE_CSV_OUTPUT 1` dans `main.cpp` :
+```text
+[DIAG_CSV] 14250,READY,IDLE,CONNECTED,152320,7845120,215,0,0,0
+```
+
+> **Régulation audio** : Pendant la diffusion ou l'acquisition active d'audio, la fréquence d'émission série est automatiquement ralentie (3 secondes) afin de préserver la gigue DMA et d'éviter toute saturation de l'UART.
+
+---
+
+## 3. Installation et Compilation
+
+### Prérequis
+- M5Stack CoreS3 connecté en USB-C.
+- PlatformIO Core ou extension VS Code.
+
+### Configuration des identifiants
+Copier le gabarit de configuration et renseigner vos identifiants :
+```bash
+cp include/secrets.example.h include/secrets.h
+```
+
+Éditer `include/secrets.h` avec votre SSID Wi-Fi, mot de passe et clé API Gemini Live.
+> **Sécurité** : Les clés API et mots de passe ne sont jamais affichés à l'écran ni transmis dans les trames de diagnostic série.
+
+### Compilation
+```bash
+pio run -d examples/VoiceDiagnostics
+```
+
+### Téléversement et Moniteur
+```bash
+pio run -d examples/VoiceDiagnostics -t upload
+pio device monitor -b 115200
+```
+
+---
+
+## 4. Architecture et Respect des Contraintes
+
+1. **Façade unique** : Utilise exclusivement l'instance `VoiceKit voice;`. Aucun deuxième moteur n'est instancié.
+2. **Pas de tâche concurrente** : Aucune tâche FreeRTOS supplémentaire n'est créée.
+3. **Fréquence d'affichage** : Rafraîchissement cadencé à 5 Hz (200 ms) avec effacement localisé du panneau central pour supprimer tout scintillement.
+4. **Authenticité des mesures** : Toutes les données proviennent directement de l'API matérielle ESP32 ou de l'instrumentation VoiceKit. Les métriques absentes sont indiquées `N/D`.

@@ -7,6 +7,48 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.5.1] - 2026-10-25 (Intégration de VoiceDiagnostics aux exemples officiels)
+
+### Nouvel Exemple Officiel `VoiceDiagnostics`
+- **Application Autonome de Diagnostic Tactile (320 × 240)** :
+  - Intégration du nouvel exemple officiel `examples/VoiceDiagnostics` pour M5Stack CoreS3.
+  - Interface tactile fluide construite directement avec M5Unified, sans surcharge ni dépendance LVGL.
+  - 4 onglets tactiles spécialisés :
+    - `SYS` : État opérationnel VoiceKit, mode vocal actif, RAM libre et minimum observé, PSRAM libre (8 Mo), Uptime et caractéristiques du SoC ESP32-S3 (fréquence CPU, modèle, révision, taille Flash).
+    - `AUDIO` : Niveau RMS du microphone acquis en temps réel via VoxCore, état de capture STT (`INACTIF`, `EN COURS`, `TRANSCRIPTION`), état de restitution TTS (`INACTIF`, `EN COURS`, `OCCUPE`), compteurs des débuts/fins de synthèse et d'écoute, transcriptions finales, et métriques du dernier tour conversationnel (`firstAudioLatencyMs`, `droppedSamples` si applicable).
+    - `NET` : Connexion Wi-Fi (statut, IP, RSSI en dBm), état de session Gemini Live (`PRETE`, `CONNEXION...`, `NON PRETE`), compteurs de reconnexions et d'erreurs, et intitulé de la dernière anomalie.
+    - `EVENTS` : Historique circulaire horodaté des 6 derniers événements vocaux (changements d'état, début/fin TTS, début/fin écoute, transcriptions reçues, erreurs), avec zéro allocation dynamique.
+  - 2 boutons d'action permanents :
+    - `TEST TTS` : Déclenche la prononciation vocale d'une phrase de test en français (« *Bonjour. Ceci est un test de diagnostic vocal VoiceKit sur Core S trois.* »).
+    - `STOP AUDIO` : Interrompt immédiatement toute activité vocale en cours via `voice.stop()`.
+
+### Sortie Série Structurée et Télémétrie
+- **Format Série Standardisé `[DIAG]`** :
+  - Émission périodique d'une ligne structurée et immédiatement exploitable par des scripts ou outils de monitoring :  
+    `[DIAG] Voice=READY [DIAG] Mode=IDLE [DIAG] WiFi=CONNECTED [DIAG] RAM_FREE=152320 [DIAG] PSRAM_FREE=7845120 [DIAG] MIC_RMS=215 [DIAG] TTS_BUSY=0`
+- **Sortie CSV Facultative (`ENABLE_CSV_OUTPUT`)** :
+  - Activée via constante de compilation `#define ENABLE_CSV_OUTPUT 1` pour l'enregistrement direct des données dans des tableurs ou outils d'analyse temporelle.
+- **Régulation Série en Streaming Audio** :
+  - Espacement automatique des émissions série (3 secondes) lors de la restitution TTS ou de l'écoute micro pour supprimer toute interférence avec les transferts DMA et WebSocket.
+
+### Intégrité du Cœur et Performances
+- **Utilisation Exclusive de la Façade `VoiceKit`** :
+  - Zéro second moteur vocal instancié, respect strict du pattern façade `VoiceKit voice;`.
+- **Aucune Tâche FreeRTOS Supplémentaire** :
+  - Le diagnostic s'exécute intégralement dans le fil applicatif principal (`setup()` / `loop()`).
+- **Cadence d'Affichage Optimisée (5 Hz / 200 ms)** :
+  - Rafraîchissement ciblé du panneau central sans scintillement (aucun effacement plein écran cyclique).
+- **Protection des Identifiants** :
+  - Clés API et mots de passe Wi-Fi strictement masqués (jamais affichés à l'écran ni transmis sur le port série).
+- **Authenticité des Données** :
+  - Aucune métrique simulée ; affichage explicite de `N/D` lorsque la donnée n'est pas disponible.
+
+### Validation & Non-Régression
+- **9 Exemples Officiels** : Compilation réussie sous PlatformIO (`VoiceDiagnostics`, `MinimalVoiceKit`, `ContinuousSTT`, etc.).
+- **Suite de Tests MinGW** : 55 suites de tests automatisés validées à 100% (806 réussis, 0 échec).
+
+---
+
 ## [0.5.0.1] - 2026-10-25 (Correctif de Stabilisation : FreeRTOS, Transitions de modes et Événements)
 
 ### Correction de la Synchronisation FreeRTOS

@@ -16,4 +16,6 @@ pio device monitor -d examples/MinimalTTS -b 115200
 
 - pio run -d examples\ContinuousSTT -t upload
 
+- pio run -d examples\VoiceDiagnostics -t upload
+
 
