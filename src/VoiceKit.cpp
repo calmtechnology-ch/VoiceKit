@@ -37,7 +37,7 @@ bool VoiceKit::begin(const VoiceKitConfig& config) {
     });
 
     _voice.onTranscription([this](const String& text, bool isFinal) {
-        if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+        if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING) {
             _continuousController.handleTranscription(text, isFinal);
         }
         if (_onTranscription) {
@@ -56,7 +56,7 @@ bool VoiceKit::begin(const VoiceKitConfig& config) {
             _onUserText(text, isFinal);
         }
         // En mode conversation, relayer également vers onTranscription pour uniformité
-        if (_mode == VoiceKitMode::CONVERSATION && _onTranscription) {
+        if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONVERSATION && _onTranscription) {
             _onTranscription(text, isFinal);
         }
     });
@@ -93,7 +93,7 @@ bool VoiceKit::begin(const VoiceKitConfig& config) {
 
     // Branchement audio non bloquant dans la tâche FreeRTOS audio
     _voice.onAudioChunk([this](const int16_t* samples, size_t count, uint32_t rms) {
-        if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+        if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING) {
             _continuousController.processAudioChunk(samples, count, rms);
         }
         if (_userAudioChunk) {
@@ -104,9 +104,9 @@ bool VoiceKit::begin(const VoiceKitConfig& config) {
     bool ok = _voice.begin(config);
 
     if (config.enableConversation) {
-        _mode = VoiceKitMode::CONVERSATION;
+        _mode.store(VoiceKitMode::CONVERSATION, std::memory_order_release);
     } else {
-        _mode = VoiceKitMode::IDLE;
+        _mode.store(VoiceKitMode::IDLE, std::memory_order_release);
     }
 
     return ok;
@@ -115,15 +115,23 @@ bool VoiceKit::begin(const VoiceKitConfig& config) {
 void VoiceKit::update() {
     _voice.update();
 
-    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+    // Synchronisation du mode opérationnel exposé avec VoxCoreVoice une fois la transition achevée
+    if (_mode.load(std::memory_order_relaxed) != VoiceKitMode::CONTINUOUS_LISTENING) {
+        if (!_voice.isModeSwitchPending()) {
+            VoiceKitMode confirmedMode = _voice.isConversationEnabled() ? VoiceKitMode::CONVERSATION : VoiceKitMode::IDLE;
+            _mode.store(confirmedMode, std::memory_order_release);
+        }
+    }
+
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING) {
         _continuousController.update();
     }
 }
 
 void VoiceKit::stop() {
-    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING) {
         _continuousController.stop();
-        _mode = VoiceKitMode::IDLE;
+        _mode.store(VoiceKitMode::IDLE, std::memory_order_release);
     }
     _voice.stop();
 }
@@ -133,7 +141,7 @@ bool VoiceKit::isReady() const {
 }
 
 bool VoiceKit::isBusy() const {
-    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING) {
         return (_continuousController.isBusy() || _voice.isBusy());
     }
     return _voice.isBusy();
@@ -156,8 +164,12 @@ uint8_t VoiceKit::getVolume() const {
 }
 
 bool VoiceKit::say(const String& text) {
-    // Refus strict si un autre mode incompatible est en cours
-    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING || _mode == VoiceKitMode::CONVERSATION) {
+    // Refus strict si un autre mode incompatible est en cours ou en transition
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING ||
+        _mode.load(std::memory_order_relaxed) == VoiceKitMode::CONVERSATION ||
+        _voice.isConversationEnabled() ||
+        _voice.isModeSwitchPending() ||
+        _voice.isConnecting()) {
         return false;
     }
     if (_voice.isBusy()) {
@@ -171,8 +183,12 @@ bool VoiceKit::isSpeaking() const {
 }
 
 bool VoiceKit::listen() {
-    // Refus strict si mode continu ou conversationnel actif
-    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING || _mode == VoiceKitMode::CONVERSATION) {
+    // Refus strict si mode continu ou conversationnel actif ou en transition
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING ||
+        _mode.load(std::memory_order_relaxed) == VoiceKitMode::CONVERSATION ||
+        _voice.isConversationEnabled() ||
+        _voice.isModeSwitchPending() ||
+        _voice.isConnecting()) {
         return false;
     }
     if (!_voice.isReady() || _voice.isBusy()) {
@@ -182,7 +198,7 @@ bool VoiceKit::listen() {
 }
 
 bool VoiceKit::stopListening() {
-    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING) {
         return false;
     }
     if (!_voice.isListening()) {
@@ -204,32 +220,39 @@ bool VoiceKit::isTranscribing() const {
 }
 
 bool VoiceKit::startContinuousListening() {
-    // Refus strict si mode conversationnel actif ou moteur occupé (parole / écoute)
-    if (_mode == VoiceKitMode::CONVERSATION) {
+    // Refus strict si mode conversationnel actif ou moteur occupé en parole/écoute
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONVERSATION || _voice.isConversationEnabled()) {
         return false;
     }
     if (_voice.isBusy()) {
         return false;
     }
-    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+    if (_voice.isModeSwitchPending()) {
+        return false;
+    }
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING) {
         return true;
     }
 
-    _mode = VoiceKitMode::CONTINUOUS_LISTENING;
-    return _continuousController.start();
+    bool started = _continuousController.start();
+    if (started) {
+        _mode.store(VoiceKitMode::CONTINUOUS_LISTENING, std::memory_order_release);
+        return true;
+    }
+    return false;
 }
 
 bool VoiceKit::stopContinuousListening() {
-    if (_mode != VoiceKitMode::CONTINUOUS_LISTENING) {
+    if (_mode.load(std::memory_order_relaxed) != VoiceKitMode::CONTINUOUS_LISTENING) {
         return false;
     }
-    _continuousController.stop();
-    _mode = VoiceKitMode::IDLE;
-    return true;
+    bool stopped = _continuousController.stop();
+    _mode.store(VoiceKitMode::IDLE, std::memory_order_release);
+    return stopped;
 }
 
 bool VoiceKit::pauseContinuousListening() {
-    if (_mode != VoiceKitMode::CONTINUOUS_LISTENING) {
+    if (_mode.load(std::memory_order_relaxed) != VoiceKitMode::CONTINUOUS_LISTENING) {
         return false;
     }
     _continuousController.pause();
@@ -237,7 +260,7 @@ bool VoiceKit::pauseContinuousListening() {
 }
 
 bool VoiceKit::resumeContinuousListening() {
-    if (_mode != VoiceKitMode::CONTINUOUS_LISTENING) {
+    if (_mode.load(std::memory_order_relaxed) != VoiceKitMode::CONTINUOUS_LISTENING) {
         return false;
     }
     return _continuousController.resume();
@@ -245,72 +268,95 @@ bool VoiceKit::resumeContinuousListening() {
 
 bool VoiceKit::startConversation() {
     // Refus strict si reconnaissance continue active ou moteur occupé
-    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING) {
         return false;
     }
     if (_voice.isBusy()) {
         return false;
     }
-    if (_mode == VoiceKitMode::CONVERSATION) {
+    // Refus strict si connexion ou transition déjà en cours (évite double reconnexion)
+    if (_voice.isConnecting() || _voice.isModeSwitchPending()) {
+        return false;
+    }
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONVERSATION && _voice.isConversationEnabled()) {
         return true;
     }
 
     bool ok = _voice.enableConversation(true);
-    if (ok) {
-        _mode = VoiceKitMode::CONVERSATION;
-        return true;
+    if (!ok) {
+        return false;
     }
-    return false;
+
+    // Si hors ligne, la transition est confirmée immédiatement
+    if (!_voice.isModeSwitchPending()) {
+        _mode.store(VoiceKitMode::CONVERSATION, std::memory_order_release);
+    }
+    // Si en ligne, demande acceptée, le mode sera confirmé à réception de setupComplete
+    return true;
 }
 
 bool VoiceKit::stopConversation() {
-    if (_mode != VoiceKitMode::CONVERSATION) {
+    if (_mode.load(std::memory_order_relaxed) != VoiceKitMode::CONVERSATION && !_voice.isConversationEnabled()) {
         return false;
     }
+    // Refus strict si le moteur est occupé par un tour ou en cours de connexion/transition
+    if (_voice.isBusy() || _voice.isConnecting() || _voice.isModeSwitchPending()) {
+        return false;
+    }
+
     _voice.stop();
     bool ok = _voice.enableConversation(false);
-    _mode = VoiceKitMode::IDLE;
-    return ok;
+    if (!ok) {
+        // En cas d'échec de la désactivation, ne jamais forcer IDLE : conserver le dernier mode valide
+        return false;
+    }
+
+    // Si hors ligne, la transition est confirmée immédiatement
+    if (!_voice.isModeSwitchPending()) {
+        _mode.store(VoiceKitMode::IDLE, std::memory_order_release);
+    }
+    // Si en ligne, demande acceptée, le mode sera confirmé à réception de setupComplete
+    return true;
 }
 
 bool VoiceKit::setVoiceProfile(const String& voice, const String& language,
                                VoiceStyle style, VoiceTone tone, const String& accent) {
-    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
         return false;
     }
     return _voice.setVoiceProfile(voice, language, style, tone, accent);
 }
 
 bool VoiceKit::setVoice(const String& voice) {
-    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
         return false;
     }
     return _voice.setVoice(voice);
 }
 
 bool VoiceKit::setLanguage(const String& language) {
-    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
         return false;
     }
     return _voice.setLanguage(language);
 }
 
 bool VoiceKit::setStyle(VoiceStyle style) {
-    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
         return false;
     }
     return _voice.setStyle(style);
 }
 
 bool VoiceKit::setTone(VoiceTone tone) {
-    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
         return false;
     }
     return _voice.setTone(tone);
 }
 
 bool VoiceKit::setAccent(const String& accent) {
-    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
         return false;
     }
     return _voice.setAccent(accent);

@@ -1,4 +1,4 @@
-# VoiceKit v0.5.0 — Simplification de l'API et Stabilisation
+# VoiceKit v0.5.0.1 — Correctif de Stabilisation : FreeRTOS, Modes et Événements
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -7,12 +7,11 @@
 
 Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)** et de **conversation vocale bidirectionnelle native (Mode B)** haute fidélité pour **M5Stack CoreS3** (ESP32-S3), propulsée par l'API **Gemini Live** (protocole bidirectionnel BidiGenerateContent) et construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
 
-La version **v0.5.0** introduit une **simplification majeure de l'API et une stabilisation de la dictée continue** :
-- **Façade Simplifiée Optionnelle (`VoiceKit.h` / `VoiceKit`)** : Permet de piloter l'ensemble des modes (TTS, STT manuel, ContinuousSTT et Conversation) via une seule instance `VoiceKit voice;` avec des méthodes intuitives (`say()`, `listen()`, `stopListening()`, `startContinuousListening()`, `startConversation()`, `stop()`, `isReady()`, etc.) et des retours déterministes `bool`.
-- **Contrôleur Réutilisable de Dictée Continue (`ContinuousListeningController`)** : Intègre le VAD adaptatif 16 kHz (200 ms début de parole, 1 200 ms de silence de clôture, 30 s max), gestion des segments, relance automatique et pause/reprise sans duplication de flux micro.
-- **Gestion des Événements & Unicité des Callbacks** : Callbacks clairs (`onReady`, `onError`, `onSpeechStarted`, `onSpeechFinished`, `onTranscription`, `onConversationFinished`) garantis émis exactement une fois par opération et exécutés dans la boucle principale `loop()`.
-- **Préservation Intégrale de l'Existant (`VoxCoreVoice`)** : L'API historique reste 100% fonctionnelle sans rupture de compatibilité.
-- **Nouvel Exemple PlatformIO `examples/MinimalVoiceKit/`** : Démonstrateur interactif complet avec écran tactile CoreS3 pour tester successivement les 4 modes.
+La version **v0.5.0.1** est une **version corrective de stabilisation** traitant les points suivants :
+- **Synchronisation FreeRTOS Thread-Safe** : Remplacement de `volatile` par `std::atomic` sur tous les drapeaux partagés (`_state`, `_isActive`, `_isPaused`, `_speechEndRequested`, `_lastChunkRms`, `_mode`). Mise en place d'une file SPSC (Single-Producer Single-Consumer) bornée et lock-free (128 blocs = 4,096 s) transférant les valeurs RMS du callback audio FreeRTOS Core 1 vers `update()` dans la boucle principale, éliminant tout risque de course de données ou blocage audio.
+- **Sécurisation des Transitions de Modes** : Correction de `stopConversation()` (ne bascule plus prématurément vers `IDLE` si l'opération échoue), distinction entre demande acceptée et transition confirmée par `setupComplete`, refus strict des opérations incompatibles durant une reconnexion, et restauration automatique du dernier mode valide en cas d'échec réseau.
+- **Fiabilisation de `ContinuousListeningController` & Unicité des Événements** : Attribution d'un identifiant séquentiel local par segment, garantie d'au maximum une seule finalisation par segment vocal, rejet des notifications répétées et des callbacks tardifs orphelins, zéro hallucination après timeout STT (texte vide et `confirmed = false`), et reprise automatique après 400 ms.
+- **Préservation Intégrale de l'Existant (`VoxCoreVoice`)** : L'API historique ainsi que les 8 exemples restent 100% compatibles sans aucune rupture d'API.
 
 ---
 
@@ -432,12 +431,12 @@ La bibliothèque fournit 8 exemples complets prêts à l'emploi :
 
 ## 8. Garanties de Non-Régression & Sécurité
 
-La version **v0.5.0** garantit une non-régression absolue sur l'ensemble des modules validés en v0.4.1.2 :
+La version **v0.5.0.1** garantit une non-régression absolue sur l'ensemble des modules validés en v0.5.0 :
 - **Intégrité absolue du moteur audio VoxCore** : Aucune modification des buffers DMA, de la tâche FreeRTOS Mode 2, du ring buffer PSRAM, ou des mécanismes d'évacuation audio (`LiveAudioPlayer`, `LiveAudioStreamer`, `LiveSessionController`).
 - **Chaîne UTF-8 sans translittération** : Les phrases françaises accentuées, ligatures et apostrophes typographiques sont envoyées intactes à Gemini Live.
 - **Arbitrage matériel garanti** : Pas de conflit I2S ni de larsen grâce au `HardwareManager` qui coupe automatiquement le haut-parleur lors de la prise de son micro et le réactive pour la réponse.
-- **Suite de tests automatisés** : 52 suites de tests unitaires et 692 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
+- **Suite de tests automatisés** : 55 suites de tests unitaires et 806 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
 - **Compilations d'exemples validées à 100%** : Les 8 exemples compilent sans aucune erreur sous PlatformIO et Arduino IDE (M5Stack CoreS3).
 - **Zéro identifiant en clair** : Aucun secret, SSID Wi-Fi ni clé API n'est publié dans le dépôt.
 
-Consultez le [Rapport de Livraison v0.5.0](RAPPORT_LIVRAISON_v0.5.0.md) pour les détails d'architecture, les comparatifs v0.4.1.2 / v0.5.0 et les preuves de compilation.
+Consultez le [Rapport de Livraison v0.5.0.1](RAPPORT_LIVRAISON_v0.5.0.1.md) pour les détails d'architecture, les comparatifs de synchronisation FreeRTOS et les preuves de compilation.

@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <functional>
+#include <atomic>
 #include "VoiceActivityDetector.h"
 #include "VoiceKitConfig.h"
 
@@ -39,16 +40,19 @@ inline const char* continuousStateToString(ContinuousState s) {
  * @class ContinuousListeningController
  * @brief Contrôleur autonome et réutilisable de reconnaissance vocale continue (ContinuousSTT).
  * 
- * Responsabilités :
+ * Responsabilités (v0.5.0.1) :
  * - Analyse synchrone et non bloquante des blocs PCM 16 kHz via VoiceActivityDetector.
+ * - Transfert thread-safe et lock-free des valeurs RMS de la tâche audio FreeRTOS vers update().
  * - Détection automatique de début d'élocution (200 ms) et de fin de phrase (1 200 ms de silence).
  * - Clôture automatique des segments à 30 secondes maximum.
  * - Émission thread-safe de stopListening() depuis la boucle principale (update).
  * - Attente déterministe de la transcription finale Gemini Live authentique.
+ * - Identifiant séquentiel de segment et unicité absolue de finalisation (zéro duplication).
  * - Gestion du timeout de fin de parole sans fabrication de faux texte (zéro hallucination).
- * - Reprise automatique fluide après temporisation (400 ms).
+ * - Reprise automatique fluide après temporisation (400 ms par défaut).
  * - Pause et reprise manuelles sans réinitialisation de la session réseau.
  * - Zéro capture concurrente du microphone : partage strict du flux audio avec VoxCoreVoice.
+ * - Contexte d'exécution documenté et unifié : tous les callbacks d'événements s'exécutent dans la tâche principale.
  */
 class ContinuousListeningController {
 public:
@@ -60,6 +64,10 @@ public:
     ContinuousListeningController();
     ~ContinuousListeningController();
 
+    // Empêcher la copie accidentelle en raison des membres std::atomic
+    ContinuousListeningController(const ContinuousListeningController&) = delete;
+    ContinuousListeningController& operator=(const ContinuousListeningController&) = delete;
+
     /**
      * @brief Associe le contrôleur à l'instance VoxCoreVoice sous-jacente.
      * @param voice Pointeur vers l'instance VoxCoreVoice.
@@ -68,7 +76,7 @@ public:
 
     /**
      * @brief Démarre la reconnaissance vocale continue.
-     * @return true si démarré avec succès.
+     * @return true si la demande est acceptée.
      */
     bool start();
 
@@ -91,11 +99,13 @@ public:
 
     /**
      * @brief Traitement périodique obligatoire à appeler dans loop() ou VoiceKit::update().
+     *        Tous les traitements VAD et callbacks s'exécutent dans ce contexte unifié.
      */
     void update();
 
     /**
-     * @brief Traite un bloc audio PCM 16 kHz (appelé depuis le callback audio).
+     * @brief Traite un bloc audio PCM 16 kHz (appelé depuis le callback audio FreeRTOS Core 1).
+     *        Strictement non bloquant, sans mutex, sans allocation ni manipulation de String.
      * @param samples Pointeur vers les échantillons PCM.
      * @param count Nombre d'échantillons.
      * @param rms Valeur RMS calculée du bloc.
@@ -109,17 +119,18 @@ public:
      */
     void handleTranscription(const String& text, bool isFinal);
 
-    // États & Requêtes
-    ContinuousState getState() const { return _state; }
-    bool isActive() const { return _isActive; }
-    bool isPaused() const { return _isPaused; }
+    // États & Requêtes (Thread-safe)
+    ContinuousState getState() const { return _state.load(std::memory_order_relaxed); }
+    bool isActive() const { return _isActive.load(std::memory_order_relaxed); }
+    bool isPaused() const { return _isPaused.load(std::memory_order_relaxed); }
     bool isSpeechActive() const;
     bool isBusy() const;
 
     uint32_t getSegmentCount() const { return _segmentCount; }
+    uint32_t getCurrentSegmentId() const { return _currentSegmentId; }
     const String& getLastFinalText() const { return _lastFinalText; }
     bool wasLastFinalConfirmed() const { return _lastFinalConfirmed; }
-    uint32_t getLastLevelRms() const { return _lastChunkRms; }
+    uint32_t getLastLevelRms() const { return _lastChunkRms.load(std::memory_order_relaxed); }
     uint32_t getNoiseFloor() const { return _vad.getNoiseFloor(); }
     uint32_t getCurrentSilenceMs() const { return _vad.getCurrentSilenceMs(); }
     uint32_t getSegmentDurationMs() const { return _vad.getSegmentDurationMs(); }
@@ -137,7 +148,7 @@ public:
     void setAutoResumeDelayMs(uint32_t delayMs) { _autoResumeDelayMs = delayMs; }
     uint32_t getAutoResumeDelayMs() const { return _autoResumeDelayMs; }
 
-    // Callbacks
+    // Callbacks — Contexte garanti : Tâche principale (loop / update)
     void onSpeechStarted(SpeechStartedCallback cb) { _onSpeechStarted = std::move(cb); }
     void onSpeechEnded(SpeechEndedCallback cb) { _onSpeechEnded = std::move(cb); }
     void onSegmentComplete(SegmentCallback cb) { _onSegmentComplete = std::move(cb); }
@@ -145,16 +156,27 @@ public:
 
 private:
     void setState(ContinuousState newState);
+    void clearRmsQueue();
+    bool pushRms(uint32_t rms);
+    bool popRms(uint32_t& rms);
 
     VoxCoreVoice* _voice = nullptr;
     VoiceActivityDetector _vad;
-    ContinuousState _state = ContinuousState::INACTIVE;
+    std::atomic<ContinuousState> _state{ContinuousState::INACTIVE};
 
-    bool _isActive = false;
-    bool _isPaused = false;
-    volatile bool _speechEndRequested = false;
-    volatile uint32_t _lastChunkRms = 0;
+    std::atomic<bool> _isActive{false};
+    std::atomic<bool> _isPaused{false};
+    std::atomic<bool> _speechEndRequested{false};
+    std::atomic<uint32_t> _lastChunkRms{0};
 
+    // File SPSC (Single-Producer Single-Consumer) bornée et lock-free pour transfert audio -> update (128 blocs = 4,096 s)
+    static constexpr size_t RMS_QUEUE_CAPACITY = 128;
+    std::atomic<uint32_t> _rmsQueue[RMS_QUEUE_CAPACITY];
+    std::atomic<size_t> _rmsHead{0};
+    std::atomic<size_t> _rmsTail{0};
+
+    uint32_t _currentSegmentId = 0;
+    bool _segmentFinalized = false;
     uint32_t _segmentCount = 0;
     String _lastFinalText = "";
     bool _lastFinalConfirmed = true;

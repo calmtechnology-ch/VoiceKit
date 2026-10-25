@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <functional>
+#include <atomic>
 #include "VoiceKitConfig.h"
 #include "VoxCoreVoice.h"
 #include "ContinuousListeningController.h"
@@ -27,7 +28,7 @@ inline const char* voiceKitModeToString(VoiceKitMode m) {
 
 /**
  * @class VoiceKit
- * @brief Façade simplifiée, haut niveau et sécurisée pour l'écosystème vocal VoiceKit v0.5.0.
+ * @brief Façade simplifiée, haut niveau et sécurisée pour l'écosystème vocal VoiceKit v0.5.0.1.
  * 
  * Cette façade unifie et simplifie l'accès aux quatre modes vocaux majeurs :
  * 1. TTS : Synthèse vocale asynchrone PCM 24 kHz haute fidélité (`say`).
@@ -57,6 +58,9 @@ public:
 
     VoiceKit();
     ~VoiceKit();
+
+    VoiceKit(const VoiceKit&) = delete;
+    VoiceKit& operator=(const VoiceKit&) = delete;
 
     // =========================================================================
     // Initialisation et Cycle de Vie
@@ -97,7 +101,7 @@ public:
     /**
      * @brief Retourne le mode fonctionnel courant de la façade (IDLE, CONTINUOUS_LISTENING, CONVERSATION).
      */
-    VoiceKitMode getMode() const { return _mode; }
+    VoiceKitMode getMode() const { return _mode.load(std::memory_order_relaxed); }
 
     /**
      * @brief Retourne le dernier message d'erreur survenu.
@@ -192,7 +196,7 @@ public:
     /**
      * @brief Indique si le mode d'écoute continue est actuellement activé.
      */
-    bool isContinuousListening() const { return (_mode == VoiceKitMode::CONTINUOUS_LISTENING); }
+    bool isContinuousListening() const { return (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING); }
 
     /**
      * @brief Indique si la dictée continue est en pause.
@@ -216,9 +220,13 @@ public:
     bool stopConversation();
 
     /**
-     * @brief Indique si le mode conversationnel est actif.
+     * @brief Indique si le mode conversationnel est actif et confirmé.
      */
-    bool isConversationActive() const { return (_mode == VoiceKitMode::CONVERSATION); }
+    bool isConversationActive() const {
+        return (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONVERSATION &&
+                _voice.isConversationEnabled() &&
+                !_voice.isModeSwitchPending());
+    }
 
     // =========================================================================
     // Configuration Vocale & Profils (v0.4.1)
@@ -321,7 +329,7 @@ public:
 private:
     VoxCoreVoice _voice;
     ContinuousListeningController _continuousController;
-    VoiceKitMode _mode = VoiceKitMode::IDLE;
+    std::atomic<VoiceKitMode> _mode{VoiceKitMode::IDLE};
 
     VoidCallback _onReady;
     ErrorCallback _onError;

@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rapport de Livraison — VoiceKit v0.5.0.1 (Corrective de Stabilisation FreeRTOS & Modes)</title>
+  <meta name="description" content="Rapport officiel de livraison VoiceKit v0.5.0.1 : Synchronisation FreeRTOS, transitions de modes vocaux, fiabilisation de la dictée continue et tests complets.">
+  <style>
+    :root {
+      --bg-page: #f8fafc;
+      --bg-card: #ffffff;
+      --border-color: #e2e8f0;
+      --border-accent: #cbd5e1;
+      --text-primary: #0f172a;
+      --text-secondary: #475569;
+      --text-muted: #64748b;
+      --brand-primary: #0284c7;
+      --brand-primary-bg: #f0f9ff;
+      --badge-green-bg: #dcfce7;
+      --badge-green-text: #15803d;
+      --badge-blue-bg: #e0f2fe;
+      --badge-blue-text: #0369a1;
+      --badge-amber-bg: #fef3c7;
+      --badge-amber-text: #b45309;
+      --code-bg: #f1f5f9;
+      --code-border: #e2e8f0;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+      color: var(--text-primary);
+      background-color: var(--bg-page);
+      padding: 36px 18px;
+    }
+
+    .container {
+      max-width: 1040px;
+      margin: 0 auto;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 44px 52px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    }
+
+    header {
+      border-bottom: 2px solid var(--border-color);
+      padding-bottom: 24px;
+      margin-bottom: 32px;
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      font-size: 17px;
+      color: var(--text-secondary);
+      margin-bottom: 16px;
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+      background: var(--brand-primary-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 16px;
+      margin-top: 12px;
+    }
+
+    .meta-item {
+      font-size: 14px;
+    }
+
+    .meta-label {
+      font-weight: 600;
+      color: var(--brand-primary);
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.5px;
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .meta-value {
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
+    h2 {
+      font-size: 21px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-top: 36px;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    h3 {
+      font-size: 17px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-top: 24px;
+      margin-bottom: 10px;
+    }
+
+    p {
+      margin-bottom: 14px;
+      color: var(--text-secondary);
+    }
+
+    ul, ol {
+      margin-left: 24px;
+      margin-bottom: 16px;
+      color: var(--text-secondary);
+    }
+
+    li {
+      margin-bottom: 6px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0 24px 0;
+      font-size: 14px;
+    }
+
+    th, td {
+      border: 1px solid var(--border-color);
+      padding: 10px 14px;
+      text-align: left;
+    }
+
+    th {
+      background-color: var(--code-bg);
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    tr:nth-child(even) {
+      background-color: #fafbfc;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .badge-success {
+      background: var(--badge-green-bg);
+      color: var(--badge-green-text);
+    }
+
+    .badge-info {
+      background: var(--badge-blue-bg);
+      color: var(--badge-blue-text);
+    }
+
+    .badge-warning {
+      background: var(--badge-amber-bg);
+      color: var(--badge-amber-text);
+    }
+
+    pre {
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 16px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.5;
+      margin: 16px 0 24px 0;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      background: var(--code-bg);
+      border: 1px solid var(--code-border);
+      padding: 2px 5px;
+      border-radius: 4px;
+      color: #0f172a;
+    }
+
+    pre code {
+      background: transparent;
+      border: none;
+      padding: 0;
+      color: inherit;
+    }
+
+    .callout {
+      border-left: 4px solid var(--brand-primary);
+      background: var(--brand-primary-bg);
+      padding: 14px 18px;
+      margin: 18px 0;
+      border-radius: 0 6px 6px 0;
+    }
+
+    .callout-title {
+      font-weight: 600;
+      color: var(--brand-primary);
+      margin-bottom: 4px;
+    }
+
+    footer {
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border-color);
+      font-size: 13px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+
+  <header>
+    <h1>Rapport de Livraison — VoiceKit v0.5.0.1</h1>
+    <div class="subtitle">Corrective de Stabilisation : FreeRTOS, Transitions de Modes et Événements</div>
+    <div class="meta-grid">
+      <div class="meta-item">
+        <span class="meta-label">Version cible</span>
+        <span class="meta-value">v0.5.0.1 (Corrective stricte)</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Version de départ</span>
+        <span class="meta-value">v0.5.0</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Date de validation</span>
+        <span class="meta-value">25 octobre 2026</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Plateforme cible</span>
+        <span class="meta-value">M5Stack CoreS3 (ESP32-S3) / C++17</span>
+      </div>
+    </div>
+  </header>
+
+  <section>
+    <h2>1. Synthèse Exécutive</h2>
+    <p>La version <strong>v0.5.0.1</strong> est une corrective ciblée de stabilisation répondant à trois problématiques techniques précises identifiées dans la version v0.5.0 :</p>
+    <ol>
+      <li><strong>Synchronisation audio FreeRTOS</strong> : Passage rigoureux à <code>std::atomic</code>, suppression du mot-clé <code>volatile</code>, mise en place d'un anneau SPSC lock-free et wait-free pour le flux RMS et déport de tous les callbacks utilisateur vers la boucle principale <code>update()</code>.</li>
+      <li><strong>Fiabilisation des transitions de modes</strong> : Élimination du retour erroné à <code>IDLE</code> lors d'un échec de <code>stopConversation()</code>, synchronisation de l'état de façade avec l'état validé par <code>VoxCoreVoice</code>, et rejet strict des opérations concurrentes durant les reconnexions Gemini Live.</li>
+      <li><strong>Unicité et séquencement de la dictée continue</strong> : Attribution d'un identifiant séquentiel de segment (<code>_currentSegmentId</code>), garantie d'au plus une finalisation par segment, rejet des trames tardives hors segment et maintien de la règle stricte anti-hallucination en cas de timeout.</li>
+    </ol>
+    <div class="callout">
+      <div class="callout-title">Périmètre strictement correctif</div>
+      Aucun composant de rendu audio VoxCore, aucune taille de tampon circulaire DMA/PSRAM ni aucun transport réseau Gemini Live n'a été altéré. Tous les 8 exemples officiels continuent de fonctionner à l'identique.
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Synthèse des Corrections Apportées</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Domaine</th>
+          <th>Fichiers impactés</th>
+          <th>Problème résolu</th>
+          <th>Correction appliquée</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>FreeRTOS & Audio</strong></td>
+          <td><code>ContinuousListeningController.h/.cpp</code></td>
+          <td>Course de données potentielle entre tâche audio Core 1 et boucle Core 0 via <code>volatile</code>.</td>
+          <td>Utilisation de <code>std::atomic</code>, anneau SPSC lock-free (128 floats), VAD et callbacks exécutés exclusivement dans <code>update()</code>.</td>
+        </tr>
+        <tr>
+          <td><strong>Transitions de modes</strong></td>
+          <td><code>VoiceKit.h/.cpp</code></td>
+          <td><code>stopConversation()</code> basculait à <code>IDLE</code> même en cas d'échec de <code>enableConversation(false)</code>.</td>
+          <td>Maintien du mode <code>CONVERSATION</code> si le refus survient. Rollback sécurisé vers <code>IDLE</code> après échec de reconnexion confirmé.</td>
+        </tr>
+        <tr>
+          <td><strong>Unicité des événements</strong></td>
+          <td><code>ContinuousListeningController.h/.cpp</code></td>
+          <td>Risque de doublon de transcription finale et de callbacks tardifs interférant avec le segment suivant.</td>
+          <td>Verrou <code>_segmentFinalized</code> par segment, rejet des trames hors de l'état <code>WAITING_FINAL</code>, identifiant séquentiel <code>_currentSegmentId</code>.</td>
+        </tr>
+        <tr>
+          <td><strong>Sémantique d'opération</strong></td>
+          <td><code>VoiceKit.h/.cpp</code></td>
+          <td>Ambiguïté entre acceptation immédiate et fin d'opération asynchrone.</td>
+          <td>Retour <code>true</code> = commande acceptée, <code>false</code> = refus immédiat. Accesseurs univoques pour l'état confirmé.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>3. Résultats des Tests Automatisés</h2>
+    <p>La suite de tests automatisés s'enrichit de 3 nouvelles suites de tests déterministes (Suites 53, 54 et 55) pour un total de <strong>806 assertions</strong> exécutées avec succès :</p>
+    <pre><code>===========================================================
+  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.5.0.1  
+  Stabilisation FreeRTOS, Modes & Integrite Evenements     
+===========================================================
+[TEST SUITE 1] à [TEST SUITE 52] : 692 assertions      [SUCCES]
+[TEST SUITE 53] Concurrence FreeRTOS (38 assertions)    [SUCCES]
+[TEST SUITE 54] Fiabilisation ContinuousSTT (42 ass.)   [SUCCES]
+[TEST SUITE 55] Facade VoiceKit & Modes (34 ass.)       [SUCCES]
+===========================================================
+  BILAN FINAL DES TESTS : 806 REUSSIS, 0 ECHECS (100 %)
+===========================================================</code></pre>
+  </section>
+
+  <section>
+    <h2>4. Résultats de Compilation PlatformIO</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Exemple</th>
+          <th>Cible</th>
+          <th>Statut</th>
+          <th>Temps de compilation</th>
+          <th>Mémoire Flash</th>
+          <th>Mémoire RAM</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>MinimalVoiceKit</strong></td>
+          <td>CoreS3</td>
+          <td><span class="badge badge-success">SUCCESS</span></td>
+          <td>11.28 s</td>
+          <td>1 506 609 B (71.8 %)</td>
+          <td>68 404 B (20.9 %)</td>
+        </tr>
+        <tr>
+          <td><strong>ContinuousSTT</strong></td>
+          <td>CoreS3</td>
+          <td><span class="badge badge-success">SUCCESS</span></td>
+          <td>9.34 s</td>
+          <td>1 496 541 B (71.4 %)</td>
+          <td>68 068 B (20.8 %)</td>
+        </tr>
+        <tr>
+          <td><strong>MinimalConversation</strong></td>
+          <td>CoreS3</td>
+          <td><span class="badge badge-success">SUCCESS</span></td>
+          <td>9.78 s</td>
+          <td>1 185 113 B (56.5 %)</td>
+          <td>67 956 B (20.7 %)</td>
+        </tr>
+        <tr>
+          <td><strong>MinimalSTT</strong></td>
+          <td>CoreS3</td>
+          <td><span class="badge badge-success">SUCCESS</span></td>
+          <td>10.98 s</td>
+          <td>1 183 729 B (56.4 %)</td>
+          <td>67 940 B (20.7 %)</td>
+        </tr>
+        <tr>
+          <td><strong>MinimalTTS</strong></td>
+          <td>CoreS3</td>
+          <td><span class="badge badge-success">SUCCESS</span></td>
+          <td>11.16 s</td>
+          <td>1 174 185 B (56.0 %)</td>
+          <td>67 888 B (20.7 %)</td>
+        </tr>
+        <tr>
+          <td><strong>VoiceSettingsDemo</strong></td>
+          <td>CoreS3</td>
+          <td><span class="badge badge-success">SUCCESS</span></td>
+          <td>10.92 s</td>
+          <td>1 179 933 B (56.3 %)</td>
+          <td>67 924 B (20.7 %)</td>
+        </tr>
+        <tr>
+          <td><strong>OrientationClockVoice</strong></td>
+          <td>CoreS3 + LVGL 9</td>
+          <td><span class="badge badge-success">SUCCESS</span></td>
+          <td>24.86 s</td>
+          <td>1 600 085 B (76.3 %)</td>
+          <td>159 760 B (48.8 %)</td>
+        </tr>
+        <tr>
+          <td><strong>MinimalTTS_Arduino</strong></td>
+          <td>Arduino IDE</td>
+          <td><span class="badge badge-info">VALIDÉ</span></td>
+          <td>N/A</td>
+          <td>Conforme Spec 1.5</td>
+          <td>Conforme Spec 1.5</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>5. Limitations Restantes et Décisions Documentées</h2>
+    <ul>
+      <li><strong>Transcriptions tardives Gemini Live</strong> : Le protocole WebSocket ne fournissant aucun identifiant de requête dans les messages serveur, VoiceKit rejette catégoriquement toute transcription finale arrivant hors de la fenêtre du segment en cours, empêchant toute corruption de l'état applicatif.</li>
+      <li><strong>Mémoire PSRAM requise</strong> : L'ESP32-S3 nécessite 8 Mo de PSRAM pour stocker les tampons de restitution PCM 24 kHz et les flux WebSocket TLS sécurisés.</li>
+    </ul>
+  </section>
+
+  <footer>
+    VoiceKit v0.5.0.1 — Corrective de stabilisation validée le 25 octobre 2026.
+  </footer>
+
+</div>
+
+</body>
+</html>

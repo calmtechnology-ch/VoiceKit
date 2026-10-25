@@ -7,6 +7,47 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.5.0.1] - 2026-10-25 (Correctif de Stabilisation : FreeRTOS, Transitions de modes et Événements)
+
+### Correction de la Synchronisation FreeRTOS
+- **Remplacement de `volatile` par `std::atomic`** :
+  - Élimination des accès concurrents non protégés sur `_state`, `_isActive`, `_isPaused`, `_speechEndRequested`, `_lastChunkRms` et `_mode`.
+- **File SPSC (Single-Producer Single-Consumer) Lock-Free** :
+  - Transfert léger et borné (128 blocs = 4,096 secondes d'audio) des valeurs RMS depuis le callback audio FreeRTOS Core 1 vers la méthode `update()` dans la boucle principale.
+  - Zéro allocation dynamique, zéro mutex bloquant dans le chemin critique audio, zéro manipulation de `String` depuis la tâche FreeRTOS.
+- **Unification du Contexte VAD & Callbacks** :
+  - Traitement complet de l'algorithme VAD (`_vad.processRms`) exécuté exclusivement dans `update()`.
+  - Tous les callbacks utilisateurs (`onSpeechStarted`, `onSpeechEnded`, `onSegmentComplete`, `onStateChanged`, etc.) s'exécutent de façon déterministe dans le fil d'exécution principal (`loop()`).
+  - Seul le callback brut `onAudioChunk` demeure dans la tâche FreeRTOS audio et reste strictement non-bloquant.
+
+### Sécurisation des Transitions de Modes
+- **Synchronisation Rigoureuse de l'État dans la Façade `VoiceKit`** :
+  - Correction de l'anomalie où `stopConversation()` basculait prématurément vers `VoiceKitMode::IDLE` même en cas d'échec de désactivation.
+  - Distinction formelle entre une demande acceptée (`bool ok`) et une transition confirmée après réception de `setupComplete` depuis Gemini Live.
+  - Refus strict des opérations incompatibles (`say`, `listen`, `startContinuousListening`, `startConversation`) lorsqu'une connexion ou transition est en cours (`isConnecting()`, `isModeSwitchPending()`).
+  - Restauration automatique du dernier mode valide en cas d'échec de la reconnexion de mode.
+  - Prévention totale des doubles demandes de reconnexion.
+
+### Fiabilisation de `ContinuousListeningController` & Unicité des Événements
+- **Identifiant Séquentiel Local de Segment (`_currentSegmentId`)** :
+  - Chaque segment de parole possède un identifiant incrémental unique.
+  - Unicité absolue de finalisation par segment : au maximum une seule émission de `onSegmentComplete` par segment.
+  - Rejet systématique des notifications finales répétées ou dupliquées par le réseau/serveur.
+- **Protection Anti-Hallucination & Rejet des Callbacks Tardifs** :
+  - Interdiction stricte de convertir une transcription partielle (interim) en transcription finale.
+  - Aucun texte final artificiel après expiration du timeout STT (texte vide et `confirmed = false`).
+  - Rejet catégorique des callbacks tardifs d'un segment terminé arrivant après timeout ou pendant le segment suivant.
+  - Reprise automatique fixée à 400 ms par défaut et réinitialisation complète de l'état VAD et RMS avant chaque segment.
+
+### Validation & Non-Régression
+- **Suite Complète de Tests Automatisés (806 assertions, 0 échec)** :
+  - Conservation des 692 assertions de la version v0.5.0.
+  - Ajout de 114 nouvelles assertions déterministes (Suites 53, 54 et 55) couvrant les blocs audio après arrêt, les pauses/reprises répétées, les événements dupliqués, les callbacks après timeout, les échecs de reconnexion, les refus de transitions occupées, le démarrage continu hors session et l'enchaînement rapide des 4 modes.
+- **Validation PlatformIO Complète** :
+  - Compilation réussie sans warning de l'ensemble des 7 exemples PlatformIO (`MinimalVoiceKit`, `ContinuousSTT`, `MinimalConversation`, `MinimalSTT`, `MinimalTTS`, `VoiceSettingsDemo`, `OrientationClockVoice`).
+
+---
+
 ## [0.5.0] - 2026-10-25 (Simplification de l'API et Stabilisation)
 
 ### Nouvelle Façade Simplifiée `VoiceKit` (`VoiceKit.h`)
