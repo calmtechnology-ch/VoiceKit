@@ -7,6 +7,97 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.5.0] - 2026-10-25 (Simplification de l'API et Stabilisation)
+
+### Nouvelle Façade Simplifiée `VoiceKit` (`VoiceKit.h`)
+- **API Haut Niveau Intuitive et Unifiée** :
+  - Introduction d'une classe façade optionnelle `VoiceKit` exposant une API claire et expressive pour piloter l'ensemble des modes vocaux à partir d'un seul objet :
+    - Cycle de vie : `begin(config)`, `update()`, `stop()`, `isReady()`, `isBusy()`, `getState()`, `getMode()`, `getLastError()`.
+    - Synthèse vocale (TTS) : `say(text)`, `isSpeaking()`.
+    - Reconnaissance manuelle (STT) : `listen()`, `stopListening()`, `cancelListening()`, `isListening()`, `isTranscribing()`.
+    - Reconnaissance continue (ContinuousSTT) : `startContinuousListening()`, `stopContinuousListening()`, `pauseContinuousListening()`, `resumeContinuousListening()`, `isContinuousListening()`, `isContinuousListeningPaused()`.
+    - Conversation bidirectionnelle : `startConversation()`, `stopConversation()`, `isConversationActive()`.
+    - Profil vocal & volume : `setVoiceProfile(...)`, `setVoice(...)`, `setVolume(...)`, `getVolume()`.
+  - **Délégation Transparente sans Duplication** :
+    - La façade délègue fidèlement toutes les opérations réseau, audio DMA et protocolaires au moteur existant `VoxCoreVoice` et au nouveau contrôleur `ContinuousListeningController`.
+    - Zéro tâche FreeRTOS supplémentaire, zéro second buffer audio, zéro nouvelle allocation mémoire invasive.
+  - **Contrôles Déterministes & Résultats Explicites** :
+    - Toutes les méthodes acceptent ou refusent les requêtes avec un retour booléen explicite (`bool`) selon l'état du moteur et la politique d'exclusion mutuelle des modes.
+    - Élimination des conflits : refus strict de lancer du TTS ou une conversation pendant une écoute continue, et réciproquement.
+
+### Nouveau Contrôleur Réutilisable `ContinuousListeningController`
+- **Composant Autonome Intégré à la Bibliothèque (`src/core/ContinuousListeningController.h`, `.cpp`)** :
+  - Extrait et encapsule toute la logique de dictée continue mains libres précédemment démontrée dans l'exemple `ContinuousSTT`.
+  - Intègre le détecteur d'activité vocale léger `VoiceActivityDetector` pour le calcul d'énergie RMS, l'estimation adaptative du plancher de bruit, l'hystérésis (seuil parole vs seuil maintien).
+  - Paramètres déterministes par défaut :
+    - Détection début de parole : 200 ms consécutifs au-dessus du seuil.
+    - Détection fin de phrase : 1 200 ms de silence consécutif post-parole.
+    - Durée maximale de sécurité par segment : 30 secondes.
+    - Délai de relance automatique inter-segments : 400 ms.
+  - **Thread-Safety & Intégrité Audio** :
+    - Traitement des blocs PCM 16 kHz thread-safe (via `std::atomic<uint32_t>` pour le RMS et drapeaux d'état atomiques).
+    - Zéro double capture micro : réutilise directement le flux DMA de `VoxCoreVoice` / `LiveAudioStreamer`.
+    - Règle stricte anti-hallucination : en cas de timeout sans transcription finale authentique de Gemini Live, aucun texte factice n'est généré ni injecté.
+    - Prise en charge des pauses et reprises manuelles sans altérer la session WebSocket TLS sous-jacente.
+
+### Gestion des Événements & Unicité des Callbacks
+- **Architecture de Callbacks Simplifiée et Cohérente** :
+  - `voice.onReady(cb)` : Émis lorsque la session est prête pour une opération.
+  - `voice.onError(cb)` : Émis en cas d'anomalie réseau, audio ou protocolaire.
+  - `voice.onSpeechStarted(cb)` : Émis au premier échantillon audio restitué.
+  - `voice.onSpeechFinished(cb)` : Émis à l'extinction complète de la restitution sonore (garanti exactement une fois par énonciation).
+  - `voice.onTranscription(cb)` : Callback unifié avec distinction stricte du statut (`const String& text, bool isFinal`).
+  - `voice.onConversationFinished(cb)` : Émis à la clôture exacte de chaque tour de conversation.
+- **Contexte d'Exécution Sécurisé** :
+  - Tous les callbacks de haut niveau sont exécutés dans le fil d'exécution de la boucle principale (`loop()`) lors des appels à `update()`.
+  - Seul le callback brut d'acquisition `onAudioChunk` s'exécute dans la tâche audio FreeRTOS Core 1.
+  - Garantie formelle d'unicité : aucune duplication d'événement de fin lors des boucles d'update suivantes.
+
+### Nouvel Exemple PlatformIO `MinimalVoiceKit`
+- **Application Démonstrateur Complète (`examples/MinimalVoiceKit/`)** :
+  - Utilise exclusivement l'API simplifiée `VoiceKit` avec un unique objet `VoiceKit voice;`.
+  - Interface tactile interactive fluide sur écran CoreS3 (320 × 240) sans aucune dépendance à LVGL (basée sur `M5Unified`).
+  - 4 onglets tactiles pour basculer et tester successivement :
+    1. **Synthèse vocale (TTS)** : Phrase de test en français avec accents.
+    2. **Reconnaissance manuelle (STT)** : Push-to-Talk via boutons tactiles Écouter / Arrêter.
+    3. **Dictée continue (ContinuousSTT)** : Écoute mains libres avec détection automatique de fin de parole et bouton Pause / Reprendre.
+    4. **Conversation (Gemini Live)** : Échange bidirectionnel vocal interactif.
+  - Pilotage également possible via commandes textuelles sur le port Série (115200 bauds).
+
+### Préservation Totale de l'Existant (`VoxCoreVoice`)
+- **Compatibilité Ascendante à 100%** :
+  - La classe `VoxCoreVoice` et toutes ses méthodes publiques sont intégralement préservées à l'identique.
+  - Les 7 exemples historiques compilent et s'exécutent sans la moindre modification de comportement :
+    - `examples/MinimalTTS`
+    - `examples/MinimalSTT`
+    - `examples/ContinuousSTT`
+    - `examples/MinimalConversation`
+    - `examples/OrientationClockVoice`
+    - `examples/VoiceSettingsDemo`
+    - `examples/MinimalTTS_Arduino/MinimalTTS_Arduino.ino`
+
+### Tests & Validations
+- **Suites de Tests Automatisés (MinGW C++14/C++17)** :
+  - 52 suites de tests exécutées avec succès (692 assertions validées, 0 échec).
+  - Suites 47 à 52 dédiées aux spécifications v0.5.0 :
+    - Suite 47 : Façade VoiceKit — Initialisation, cycle de vie, modes et délégation.
+    - Suite 48 : Façade VoiceKit — Validation des opérations TTS, STT manuel, ContinuousSTT et Conversation.
+    - Suite 49 : Façade VoiceKit — Refus stricts des opérations incompatibles et transitions de modes.
+    - Suite 50 : ContinuousListeningController — VAD intégré, silence, timeout sans hallucination, pause et reprise.
+    - Suite 51 : Intégrité des événements — Unicité des callbacks de fin et absence de duplication.
+    - Suite 52 : Compatibilité ascendante intégrale — Coexistence VoxCoreVoice et VoiceKit sans régression.
+- **Compilations PlatformIO Validées (8 applications)** :
+  - `examples/MinimalTTS` : SUCCESS (14.78s)
+  - `examples/MinimalSTT` : SUCCESS (15.15s)
+  - `examples/ContinuousSTT` : SUCCESS (18.92s)
+  - `examples/MinimalConversation` : SUCCESS (20.68s)
+  - `examples/OrientationClockVoice` : SUCCESS (40.72s)
+  - `examples/VoiceSettingsDemo` : SUCCESS (19.57s)
+  - `examples/MinimalVoiceKit` : SUCCESS (81.31s)
+  - `examples/MinimalTTS_Arduino` : Syntaxe et conformité Arduino IDE 1.5 validées
+
+---
+
 ## [0.4.1.2] - 2026-10-24 (ContinuousSTT & VAD Détection Fin de Parole)
 
 ### Nouvel Exemple PlatformIO `ContinuousSTT`

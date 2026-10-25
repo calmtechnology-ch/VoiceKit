@@ -1,0 +1,337 @@
+#include "VoiceKit.h"
+
+VoiceKit::VoiceKit() {
+    _continuousController.begin(&_voice);
+}
+
+VoiceKit::~VoiceKit() {
+    stop();
+}
+
+bool VoiceKit::begin(const VoiceKitConfig& config) {
+    _continuousController.begin(&_voice);
+
+    // Configuration des canaux de délégation des callbacks
+    _voice.onReady([this]() {
+        if (_onReady) {
+            _onReady();
+        }
+    });
+
+    _voice.onError([this](const String& err) {
+        if (_onError) {
+            _onError(err);
+        }
+    });
+
+    _voice.onSpeechStarted([this]() {
+        if (_onSpeechStarted) {
+            _onSpeechStarted();
+        }
+    });
+
+    _voice.onSpeechFinished([this]() {
+        if (_onSpeechFinished) {
+            _onSpeechFinished();
+        }
+    });
+
+    _voice.onTranscription([this](const String& text, bool isFinal) {
+        if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+            _continuousController.handleTranscription(text, isFinal);
+        }
+        if (_onTranscription) {
+            _onTranscription(text, isFinal);
+        }
+    });
+
+    _voice.onConversationFinished([this]() {
+        if (_onConversationFinished) {
+            _onConversationFinished();
+        }
+    });
+
+    _voice.onUserText([this](const String& text, bool isFinal) {
+        if (_onUserText) {
+            _onUserText(text, isFinal);
+        }
+        // En mode conversation, relayer également vers onTranscription pour uniformité
+        if (_mode == VoiceKitMode::CONVERSATION && _onTranscription) {
+            _onTranscription(text, isFinal);
+        }
+    });
+
+    _voice.onAssistantText([this](const String& text) {
+        if (_onAssistantText) {
+            _onAssistantText(text);
+        }
+    });
+
+    _voice.onListeningStarted([this]() {
+        if (_onListeningStarted) {
+            _onListeningStarted();
+        }
+    });
+
+    _voice.onListeningFinished([this]() {
+        if (_onListeningFinished) {
+            _onListeningFinished();
+        }
+    });
+
+    _voice.onStateChanged([this](VoiceState state) {
+        if (_onStateChanged) {
+            _onStateChanged(state);
+        }
+    });
+
+    _voice.onConversationTurnMetrics([this](const ConversationMetrics& m) {
+        if (_onConversationTurnMetrics) {
+            _onConversationTurnMetrics(m);
+        }
+    });
+
+    // Branchement audio non bloquant dans la tâche FreeRTOS audio
+    _voice.onAudioChunk([this](const int16_t* samples, size_t count, uint32_t rms) {
+        if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+            _continuousController.processAudioChunk(samples, count, rms);
+        }
+        if (_userAudioChunk) {
+            _userAudioChunk(samples, count, rms);
+        }
+    });
+
+    bool ok = _voice.begin(config);
+
+    if (config.enableConversation) {
+        _mode = VoiceKitMode::CONVERSATION;
+    } else {
+        _mode = VoiceKitMode::IDLE;
+    }
+
+    return ok;
+}
+
+void VoiceKit::update() {
+    _voice.update();
+
+    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+        _continuousController.update();
+    }
+}
+
+void VoiceKit::stop() {
+    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+        _continuousController.stop();
+        _mode = VoiceKitMode::IDLE;
+    }
+    _voice.stop();
+}
+
+bool VoiceKit::isReady() const {
+    return _voice.isReady();
+}
+
+bool VoiceKit::isBusy() const {
+    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+        return (_continuousController.isBusy() || _voice.isBusy());
+    }
+    return _voice.isBusy();
+}
+
+VoiceState VoiceKit::getState() const {
+    return _voice.getState();
+}
+
+String VoiceKit::getLastError() const {
+    return _voice.getLastError();
+}
+
+void VoiceKit::setVolume(uint8_t percent) {
+    _voice.setVolume(percent);
+}
+
+uint8_t VoiceKit::getVolume() const {
+    return _voice.getVolume();
+}
+
+bool VoiceKit::say(const String& text) {
+    // Refus strict si un autre mode incompatible est en cours
+    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING || _mode == VoiceKitMode::CONVERSATION) {
+        return false;
+    }
+    if (_voice.isBusy()) {
+        return false;
+    }
+    return _voice.say(text);
+}
+
+bool VoiceKit::isSpeaking() const {
+    return _voice.isSpeaking();
+}
+
+bool VoiceKit::listen() {
+    // Refus strict si mode continu ou conversationnel actif
+    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING || _mode == VoiceKitMode::CONVERSATION) {
+        return false;
+    }
+    if (!_voice.isReady() || _voice.isBusy()) {
+        return false;
+    }
+    return _voice.startListening();
+}
+
+bool VoiceKit::stopListening() {
+    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+        return false;
+    }
+    if (!_voice.isListening()) {
+        return false;
+    }
+    return _voice.stopListening();
+}
+
+void VoiceKit::cancelListening() {
+    _voice.cancelListening();
+}
+
+bool VoiceKit::isListening() const {
+    return _voice.isListening();
+}
+
+bool VoiceKit::isTranscribing() const {
+    return _voice.isTranscribing();
+}
+
+bool VoiceKit::startContinuousListening() {
+    // Refus strict si mode conversationnel actif ou moteur occupé (parole / écoute)
+    if (_mode == VoiceKitMode::CONVERSATION) {
+        return false;
+    }
+    if (_voice.isBusy()) {
+        return false;
+    }
+    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+        return true;
+    }
+
+    _mode = VoiceKitMode::CONTINUOUS_LISTENING;
+    return _continuousController.start();
+}
+
+bool VoiceKit::stopContinuousListening() {
+    if (_mode != VoiceKitMode::CONTINUOUS_LISTENING) {
+        return false;
+    }
+    _continuousController.stop();
+    _mode = VoiceKitMode::IDLE;
+    return true;
+}
+
+bool VoiceKit::pauseContinuousListening() {
+    if (_mode != VoiceKitMode::CONTINUOUS_LISTENING) {
+        return false;
+    }
+    _continuousController.pause();
+    return true;
+}
+
+bool VoiceKit::resumeContinuousListening() {
+    if (_mode != VoiceKitMode::CONTINUOUS_LISTENING) {
+        return false;
+    }
+    return _continuousController.resume();
+}
+
+bool VoiceKit::startConversation() {
+    // Refus strict si reconnaissance continue active ou moteur occupé
+    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING) {
+        return false;
+    }
+    if (_voice.isBusy()) {
+        return false;
+    }
+    if (_mode == VoiceKitMode::CONVERSATION) {
+        return true;
+    }
+
+    bool ok = _voice.enableConversation(true);
+    if (ok) {
+        _mode = VoiceKitMode::CONVERSATION;
+        return true;
+    }
+    return false;
+}
+
+bool VoiceKit::stopConversation() {
+    if (_mode != VoiceKitMode::CONVERSATION) {
+        return false;
+    }
+    _voice.stop();
+    bool ok = _voice.enableConversation(false);
+    _mode = VoiceKitMode::IDLE;
+    return ok;
+}
+
+bool VoiceKit::setVoiceProfile(const String& voice, const String& language,
+                               VoiceStyle style, VoiceTone tone, const String& accent) {
+    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+        return false;
+    }
+    return _voice.setVoiceProfile(voice, language, style, tone, accent);
+}
+
+bool VoiceKit::setVoice(const String& voice) {
+    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+        return false;
+    }
+    return _voice.setVoice(voice);
+}
+
+bool VoiceKit::setLanguage(const String& language) {
+    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+        return false;
+    }
+    return _voice.setLanguage(language);
+}
+
+bool VoiceKit::setStyle(VoiceStyle style) {
+    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+        return false;
+    }
+    return _voice.setStyle(style);
+}
+
+bool VoiceKit::setTone(VoiceTone tone) {
+    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+        return false;
+    }
+    return _voice.setTone(tone);
+}
+
+bool VoiceKit::setAccent(const String& accent) {
+    if (_mode == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+        return false;
+    }
+    return _voice.setAccent(accent);
+}
+
+String VoiceKit::getVoice() const {
+    return _voice.getVoice();
+}
+
+String VoiceKit::getLanguage() const {
+    return _voice.getLanguage();
+}
+
+VoiceStyle VoiceKit::getStyle() const {
+    return _voice.getStyle();
+}
+
+VoiceTone VoiceKit::getTone() const {
+    return _voice.getTone();
+}
+
+String VoiceKit::getAccent() const {
+    return _voice.getAccent();
+}

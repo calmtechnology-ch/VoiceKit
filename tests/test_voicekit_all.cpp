@@ -6,6 +6,8 @@
 #include <cmath>
 
 #include "VoxCoreVoice.h"
+#include "ContinuousListeningController.h"
+#include "VoiceKit.h"
 #include "Utf8Utils.h"
 #include "VoiceActivityDetector.h"
 #include "cJSON.h"
@@ -533,6 +535,10 @@ static void prepareMockVoiceReady(VoxCoreVoice& voice, MockLiveTransport& mockTr
     const char* setupJson = "{\"setupComplete\":{}}";
     voice.getClient().handleIncomingMessage(setupJson, strlen(setupJson));
     voice.update();
+}
+
+static void prepareMockVoiceKitReady(VoiceKit& vk, MockLiveTransport& mockTransport) {
+    prepareMockVoiceReady(vk.getEngine(), mockTransport);
 }
 
 // =============================================================================
@@ -2273,12 +2279,541 @@ void test_continuous_stt_resilience_and_utf8() {
 }
 
 // =============================================================================
+// NOUVELLES SUITES VOICEKIT v0.5.0 (SIMPLIFICATION ET STABILISATION)
+// =============================================================================
+
+// SUITE 47 : Façade VoiceKit — Initialisation, cycle de vie, modes et délégation transparente
+void test_voicekit_facade_lifecycle_and_delegation() {
+    std::cout << "\n[TEST SUITE 47] Facade VoiceKit : Initialisation, cycle de vie, modes et delegation transparente" << std::endl;
+    MockLiveTransport mockTransport;
+    VoiceKit vk;
+
+    VoiceKitConfig config;
+    config.apiKey = "AIzaTestKeyFacade";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.voice = "Aoede";
+    config.language = "fr-FR";
+    config.volume = 75;
+
+    bool readyCalled = false;
+    vk.onReady([&readyCalled]() { readyCalled = true; });
+
+    bool ok = vk.begin(config);
+    TEST_ASSERT(ok, "VoiceKit::begin() reussi");
+    TEST_ASSERT(!vk.isReady(), "VoiceKit non pret avant connexion session");
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode initial = IDLE");
+
+    prepareMockVoiceKitReady(vk, mockTransport);
+    TEST_ASSERT(vk.isReady(), "VoiceKit::isReady() vrai apres setupComplete");
+    TEST_ASSERT(!vk.isBusy(), "VoiceKit::isBusy() faux au repos");
+    TEST_ASSERT(vk.getState() == VoiceState::READY, "getState() retourne VoiceState::READY");
+    TEST_ASSERT(readyCalled, "Callback onReady() invoque");
+
+    // Propagation du volume
+    TEST_ASSERT(vk.getVolume() == 75, "Volume initial conforme 75%");
+    vk.setVolume(90);
+    TEST_ASSERT(vk.getVolume() == 90, "setVolume(90) correctement applique");
+    TEST_ASSERT(vk.getEngine().getVolume() == 90, "Volume delegue a VoxCoreVoice");
+
+    // Accesseurs de profil vocal
+    TEST_ASSERT(vk.getVoice() == "Aoede", "getVoice() conforme Aoede");
+    TEST_ASSERT(vk.getLanguage() == "fr-FR", "getLanguage() conforme fr-FR");
+    TEST_ASSERT(vk.getStyle() == VoiceStyle::NATURAL, "getStyle() conforme NATURAL");
+    TEST_ASSERT(vk.getTone() == VoiceTone::NEUTRAL, "getTone() conforme NEUTRAL");
+
+    // Modifications valides de profil au repos avec handshake setupComplete
+    bool vOk = vk.setVoice("Fenrir");
+    TEST_ASSERT(vOk, "setVoice(Fenrir) accepte au repos");
+    const char* setupJson = "{\"setupComplete\":{}}";
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    vk.update();
+    TEST_ASSERT(vk.getVoice() == "Fenrir", "Voix mise a jour vers Fenrir");
+
+    bool lOk = vk.setLanguage("en-US");
+    TEST_ASSERT(lOk, "setLanguage(en-US) accepte au repos");
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    vk.update();
+    TEST_ASSERT(vk.getLanguage() == "en-US", "Langue mise a jour vers en-US");
+
+    vk.getEngine().getClient().setTransport(nullptr);
+}
+
+// SUITE 48 : Façade VoiceKit — Validation des opérations TTS, STT manuel, ContinuousSTT et Conversation
+void test_voicekit_facade_operations() {
+    std::cout << "\n[TEST SUITE 48] Facade VoiceKit : Validation des operations TTS, STT manuel, ContinuousSTT et Conversation" << std::endl;
+    MockLiveTransport mockTransport;
+    VoiceKit vk;
+
+    VoiceKitConfig config;
+    config.apiKey = "AIzaTestKeyOps";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    vk.begin(config);
+    prepareMockVoiceKitReady(vk, mockTransport);
+
+    const char* setupJson = "{\"setupComplete\":{}}";
+
+    // --- 1. Mode TTS (say) ---
+    bool speechFinishedFired = false;
+    vk.onSpeechFinished([&speechFinishedFired]() { speechFinishedFired = true; });
+
+    bool sayOk = vk.say("Bonjour, test de synthese vocale.");
+    TEST_ASSERT(sayOk, "vk.say() accepte en mode IDLE");
+    vk.update();
+
+    vk.getEngine().getSession().transitionTo(LiveSessionState::PLAYING, "Audio en cours");
+    std::vector<int16_t> audio(2400, 100);
+    vk.getEngine().getPlayer().feedPcm(audio.data(), audio.size());
+    vk.getEngine().getPlayer().notifyTurnComplete();
+    vk.update();
+    TEST_ASSERT(vk.isSpeaking(), "vk.isSpeaking() vrai pendant restitution audio");
+
+    while (vk.isSpeaking()) {
+        vk.getEngine().getPlayer().simFinishSpeakerChunk();
+        vk.update();
+    }
+
+    TEST_ASSERT(!vk.isSpeaking(), "Restitution achevee");
+    TEST_ASSERT(speechFinishedFired, "onSpeechFinished fired a l'achevement");
+    TEST_ASSERT(vk.isReady(), "VoiceKit redevient PRET apres TTS");
+
+    // --- 2. Mode STT Manuel (listen / stopListening) ---
+    String transcribedText = "";
+    bool transcribedFinal = false;
+    vk.onTranscription([&](const String& text, bool isFinal) {
+        transcribedText = text;
+        transcribedFinal = isFinal;
+    });
+
+    bool listenOk = vk.listen();
+    TEST_ASSERT(listenOk, "vk.listen() accepte en mode IDLE");
+    TEST_ASSERT(vk.isListening(), "vk.isListening() vrai");
+    TEST_ASSERT(vk.isBusy(), "vk.isBusy() vrai pendant l'ecoute");
+
+    int16_t audioChunk[AUDIO_CHUNK_SAMPLES];
+    for (int i = 0; i < AUDIO_CHUNK_SAMPLES; ++i) audioChunk[i] = 1500;
+    vk.getEngine().getStreamer().pushSimulatedChunk(audioChunk, AUDIO_CHUNK_SAMPLES);
+    vk.update();
+
+    const char* interimJson = "{\"serverContent\":{\"interimInputTranscription\":{\"text\":\"Bonjour tout\"}}}";
+    vk.getEngine().getClient().handleIncomingMessage(interimJson, strlen(interimJson));
+    vk.update();
+    TEST_ASSERT(transcribedText == "Bonjour tout", "Transcription partielle recue");
+    TEST_ASSERT(!transcribedFinal, "transcribedFinal faux pour interim");
+
+    bool stopListenOk = vk.stopListening();
+    TEST_ASSERT(stopListenOk, "vk.stopListening() accepte");
+    TEST_ASSERT(vk.isTranscribing(), "vk.isTranscribing() vrai");
+
+    const char* finalJson = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Bonjour tout le monde\"}}}";
+    vk.getEngine().getClient().handleIncomingMessage(finalJson, strlen(finalJson));
+    vk.update();
+    TEST_ASSERT(transcribedText == "Bonjour tout le monde", "Transcription finale recue");
+    TEST_ASSERT(transcribedFinal, "transcribedFinal vrai");
+    TEST_ASSERT(vk.isReady(), "VoiceKit redevient PRET apres transcription finale");
+
+    // --- 3. Mode ContinuousSTT (startContinuousListening / stopContinuousListening) ---
+    bool contStartOk = vk.startContinuousListening();
+    TEST_ASSERT(contStartOk, "startContinuousListening() accepte");
+    TEST_ASSERT(vk.isContinuousListening(), "isContinuousListening() vrai");
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::CONTINUOUS_LISTENING, "Mode = CONTINUOUS_LISTENING");
+    vk.update();
+
+    bool pauseOk = vk.pauseContinuousListening();
+    TEST_ASSERT(pauseOk, "pauseContinuousListening() reussi");
+    TEST_ASSERT(vk.isContinuousListeningPaused(), "isContinuousListeningPaused() vrai");
+
+    bool resumeOk = vk.resumeContinuousListening();
+    TEST_ASSERT(resumeOk, "resumeContinuousListening() reussi");
+    TEST_ASSERT(!vk.isContinuousListeningPaused(), "isContinuousListeningPaused() faux apres reprise");
+
+    bool contStopOk = vk.stopContinuousListening();
+    TEST_ASSERT(contStopOk, "stopContinuousListening() reussi");
+    TEST_ASSERT(!vk.isContinuousListening(), "isContinuousListening() faux apres arret");
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode redevient IDLE");
+    TEST_ASSERT(vk.isReady(), "VoiceKit est PRET");
+
+    // --- 4. Mode Conversation (startConversation / stopConversation) ---
+    bool convStartOk = vk.startConversation();
+    TEST_ASSERT(convStartOk, "startConversation() accepte");
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    vk.update();
+
+    TEST_ASSERT(vk.isConversationActive(), "isConversationActive() vrai");
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::CONVERSATION, "Mode = CONVERSATION");
+
+    bool convStopOk = vk.stopConversation();
+    TEST_ASSERT(convStopOk, "stopConversation() accepte");
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    vk.update();
+
+    TEST_ASSERT(!vk.isConversationActive(), "isConversationActive() faux apres arret");
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode redevient IDLE");
+    TEST_ASSERT(vk.isReady(), "VoiceKit redevient PRET apres arret conversation");
+
+    vk.getEngine().getClient().setTransport(nullptr);
+}
+
+// SUITE 49 : Façade VoiceKit — Refus stricts des opérations incompatibles et transitions de modes
+void test_voicekit_facade_refusals_and_mode_transitions() {
+    std::cout << "\n[TEST SUITE 49] Facade VoiceKit : Refus stricts des operations incompatibles et transitions de modes" << std::endl;
+    MockLiveTransport mockTransport;
+    VoiceKit vk;
+
+    VoiceKitConfig config;
+    config.apiKey = "AIzaTestKeyRefusals";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    vk.begin(config);
+    prepareMockVoiceKitReady(vk, mockTransport);
+
+    const char* setupJson = "{\"setupComplete\":{}}";
+
+    // 1. En mode ContinuousListening : say, listen et startConversation doivent être strictement REFUSÉS
+    vk.startContinuousListening();
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::CONTINUOUS_LISTENING, "Mode CONTINUOUS actif");
+
+    TEST_ASSERT(!vk.say("Tentative TTS interdite"), "say() REFUSE en mode ContinuousListening");
+    TEST_ASSERT(!vk.listen(), "listen() manuel REFUSE en mode ContinuousListening");
+    TEST_ASSERT(!vk.stopListening(), "stopListening() manuel REFUSE en mode ContinuousListening");
+    TEST_ASSERT(!vk.startConversation(), "startConversation() REFUSE en mode ContinuousListening");
+
+    // 2. En mode Conversation : say, listen et startContinuousListening doivent être strictement REFUSÉS
+    vk.stopContinuousListening();
+    vk.startConversation();
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    vk.update();
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::CONVERSATION, "Mode CONVERSATION actif");
+
+    TEST_ASSERT(!vk.say("Tentative TTS interdite"), "say() REFUSE en mode Conversation");
+    TEST_ASSERT(!vk.listen(), "listen() REFUSE en mode Conversation");
+    TEST_ASSERT(!vk.startContinuousListening(), "startContinuousListening() REFUSE en mode Conversation");
+
+    // 3. Pendant une restitution sonore active (TTS isSpeaking / isBusy) : say, listen, modes sont refusés
+    vk.stopConversation();
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    vk.update();
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode revenu a IDLE");
+
+    vk.say("Phrase longue pour test de busy");
+    vk.getEngine().getSession().transitionTo(LiveSessionState::PLAYING, "Audio");
+    vk.update();
+    TEST_ASSERT(vk.isBusy(), "VoiceKit occupe par say()");
+
+    TEST_ASSERT(!vk.say("Seconde phrase refusee"), "say() concurrent REFUSE quand isBusy()");
+    TEST_ASSERT(!vk.listen(), "listen() REFUSE quand isBusy()");
+    TEST_ASSERT(!vk.startContinuousListening(), "startContinuousListening() REFUSE quand isBusy()");
+    TEST_ASSERT(!vk.startConversation(), "startConversation() REFUSE quand isBusy()");
+
+    // 4. Interruption STOP inconditionnelle
+    vk.stop();
+    TEST_ASSERT(!vk.isSpeaking(), "Restitution arretee immediatement par vk.stop()");
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode reset a IDLE par stop()");
+    TEST_ASSERT(vk.isReady(), "VoiceKit redevient PRET");
+
+    // 5. Enchaînement fluide de transitions de modes sans corruption de session
+    bool ok1 = vk.startContinuousListening();
+    TEST_ASSERT(ok1, "Transition 1 : IDLE -> CONTINUOUS");
+    bool ok2 = vk.stopContinuousListening();
+    TEST_ASSERT(ok2, "Transition 2 : CONTINUOUS -> IDLE");
+    bool ok3 = vk.startConversation();
+    TEST_ASSERT(ok3, "Transition 3 : IDLE -> CONVERSATION");
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    vk.update();
+
+    bool ok4 = vk.stopConversation();
+    TEST_ASSERT(ok4, "Transition 4 : CONVERSATION -> IDLE");
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    vk.update();
+
+    bool ok5 = vk.say("TTS final apres transitions");
+    TEST_ASSERT(ok5, "Transition 5 : IDLE -> TTS accepte");
+    vk.stop();
+
+    vk.getEngine().getClient().setTransport(nullptr);
+}
+
+// SUITE 50 : ContinuousListeningController — VAD intégré, silence, timeout sans hallucination, pause et reprise
+void test_continuous_controller_lifecycle_and_vad() {
+    std::cout << "\n[TEST SUITE 50] ContinuousListeningController : VAD integre, silence, timeout sans hallucination, pause et reprise" << std::endl;
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    ContinuousListeningController continuous;
+
+    VoiceKitConfig config;
+    config.apiKey = "AIzaTestKeyContinuous";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.sttFinalTimeoutMs = 5000;
+    voice.begin(config);
+    prepareMockVoiceReady(voice, mockTransport);
+
+    continuous.begin(&voice);
+
+    // 1. Paramètres VAD par défaut conformes au cahier des charges
+    const VadConfig& vadCfg = continuous.getVadConfig();
+    TEST_ASSERT(vadCfg.minSpeechDurationMs == 200, "VAD minSpeechDurationMs = 200 ms par defaut");
+    TEST_ASSERT(vadCfg.silenceDurationMs == 1200, "VAD silenceDurationMs = 1 200 ms par defaut");
+    TEST_ASSERT(vadCfg.maxSegmentDurationMs == 30000, "VAD maxSegmentDurationMs = 30 000 ms par defaut");
+
+    // 2. Personnalisation de configuration sans complexité
+    continuous.setSilenceDurationMs(1000);
+    TEST_ASSERT(continuous.getVadConfig().silenceDurationMs == 1000, "setSilenceDurationMs(1000) applique");
+    continuous.setMinSpeechDurationMs(150);
+    TEST_ASSERT(continuous.getVadConfig().minSpeechDurationMs == 150, "setMinSpeechDurationMs(150) applique");
+    continuous.setMaxSegmentDurationMs(25000);
+    TEST_ASSERT(continuous.getVadConfig().maxSegmentDurationMs == 25000, "setMaxSegmentDurationMs(25000) applique");
+
+    // Restauration des valeurs standard
+    continuous.setSilenceDurationMs(1200);
+    continuous.setMinSpeechDurationMs(200);
+    continuous.setMaxSegmentDurationMs(30000);
+
+    // 3. Démarrage et suivi du cycle de vie
+    bool speechStartFired = false;
+    continuous.onSpeechStarted([&speechStartFired]() { speechStartFired = true; });
+
+    VadEndReason endReasonReceived = VadEndReason::NONE;
+    continuous.onSpeechEnded([&endReasonReceived](VadEndReason r) { endReasonReceived = r; });
+
+    String segTextReceived = "";
+    bool segConfirmedReceived = false;
+    continuous.onSegmentComplete([&](const String& text, bool confirmed) {
+        segTextReceived = text;
+        segConfirmedReceived = confirmed;
+    });
+
+    bool startOk = continuous.start();
+    TEST_ASSERT(startOk, "continuous.start() reussi");
+    TEST_ASSERT(continuous.isActive(), "continuous.isActive() vrai");
+    TEST_ASSERT(voice.isListening(), "voice.isListening() active automatiquement");
+    TEST_ASSERT(continuous.getState() == ContinuousState::LISTENING, "Etat = LISTENING");
+
+    // Blocs de parole (> 200 ms = 7 blocs de 32 ms)
+    int16_t speechChunk[AUDIO_CHUNK_SAMPLES];
+    for (int i = 0; i < AUDIO_CHUNK_SAMPLES; ++i) speechChunk[i] = 1600;
+    for (int i = 0; i < 8; ++i) {
+        continuous.processAudioChunk(speechChunk, AUDIO_CHUNK_SAMPLES, 1600);
+        voice.update();
+        continuous.update();
+    }
+    TEST_ASSERT(speechStartFired, "onSpeechStarted fired apres >200ms de parole");
+    TEST_ASSERT(continuous.isSpeechActive(), "isSpeechActive() vrai");
+    TEST_ASSERT(continuous.isBusy(), "isBusy() vrai pendant la parole");
+
+    // Blocs de silence (> 1 200 ms = 38 blocs de 32 ms)
+    int16_t silenceChunk[AUDIO_CHUNK_SAMPLES];
+    for (int i = 0; i < AUDIO_CHUNK_SAMPLES; ++i) silenceChunk[i] = 50;
+    for (int i = 0; i < 39; ++i) {
+        continuous.processAudioChunk(silenceChunk, AUDIO_CHUNK_SAMPLES, 50);
+        voice.update();
+        continuous.update();
+    }
+    TEST_ASSERT(endReasonReceived == VadEndReason::SILENCE_TIMEOUT, "Fin de parole sur SILENCE_TIMEOUT 1 200 ms");
+    TEST_ASSERT(continuous.getState() == ContinuousState::WAITING_FINAL, "Automate passe a WAITING_FINAL");
+    TEST_ASSERT(!voice.isListening(), "voice.stopListening() appele automatiquement par le controleur");
+
+    // Réception transcription finale
+    const char* okJson = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Segment valide par ContinuousController\"}}}";
+    voice.getClient().handleIncomingMessage(okJson, strlen(okJson));
+    voice.update();
+    continuous.handleTranscription("Segment valide par ContinuousController", true);
+
+    TEST_ASSERT(continuous.getState() == ContinuousState::SEGMENT_DONE, "Etat = SEGMENT_DONE");
+    TEST_ASSERT(continuous.getSegmentCount() == 1, "Compteur de segments = 1");
+    TEST_ASSERT(segTextReceived == "Segment valide par ContinuousController", "Texte du segment conforme");
+    TEST_ASSERT(segConfirmedReceived, "Segment confirme = true");
+
+    // Reprise automatique après 400 ms
+    advanceMockMillis(450);
+    voice.update();
+    continuous.update();
+    TEST_ASSERT(continuous.getState() == ContinuousState::LISTENING, "Reprise automatique vers LISTENING effectuee");
+    TEST_ASSERT(voice.isListening(), "voice.isListening() re-active sans aucune intervention");
+
+    // 4. Test du timeout sans fabrication de texte (zéro hallucination)
+    // Fin de parole simulée
+    continuous.processAudioChunk(speechChunk, AUDIO_CHUNK_SAMPLES, 1600);
+    for (int i = 0; i < 8; ++i) continuous.processAudioChunk(speechChunk, AUDIO_CHUNK_SAMPLES, 1600);
+    for (int i = 0; i < 39; ++i) continuous.processAudioChunk(silenceChunk, AUDIO_CHUNK_SAMPLES, 50);
+    voice.update();
+    continuous.update();
+    TEST_ASSERT(continuous.getState() == ContinuousState::WAITING_FINAL, "En attente finale pour segment 2");
+
+    // Écoulement du temps au-delà du timeout sans message serveur
+    advanceMockMillis(6000);
+    voice.update();
+    continuous.update();
+
+    TEST_ASSERT(continuous.getState() == ContinuousState::SEGMENT_DONE, "Passage a SEGMENT_DONE apres timeout");
+    TEST_ASSERT(!continuous.wasLastFinalConfirmed(), "Dernier segment non confirme");
+    TEST_ASSERT(continuous.getLastFinalText().isEmpty(), "Zero hallucination : texte vide");
+
+    // 5. Test de pause et reprise manuelle
+    continuous.pause();
+    TEST_ASSERT(continuous.isPaused(), "Controleur en pause");
+    TEST_ASSERT(continuous.getState() == ContinuousState::PAUSED, "Etat = PAUSED");
+    TEST_ASSERT(!voice.isListening(), "Ecoute micro arretee par pause()");
+
+    advanceMockMillis(1000);
+    continuous.update();
+    TEST_ASSERT(!voice.isListening(), "Aucune reprise automatique tant que paused");
+
+    continuous.resume();
+    TEST_ASSERT(!continuous.isPaused(), "Pause levee");
+    TEST_ASSERT(voice.isListening(), "Ecoute reprise suite a resume()");
+
+    continuous.stop();
+    TEST_ASSERT(!continuous.isActive(), "Controleur inactif");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// SUITE 51 : Intégrité des événements — Absence de duplication des callbacks de fin et unicité
+void test_events_uniqueness_and_no_duplicate_callbacks() {
+    std::cout << "\n[TEST SUITE 51] Integrite des evenements : Absence de duplication des callbacks de fin et unicite" << std::endl;
+    MockLiveTransport mockTransport;
+    VoiceKit vk;
+
+    VoiceKitConfig config;
+    config.apiKey = "AIzaTestKeyEvents";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    vk.begin(config);
+    prepareMockVoiceKitReady(vk, mockTransport);
+
+    // 1. Unicité du callback onSpeechFinished
+    int speechFinishedCalls = 0;
+    vk.onSpeechFinished([&speechFinishedCalls]() { speechFinishedCalls++; });
+
+    vk.say("Test unicite callback fin parole");
+    vk.getEngine().getSession().transitionTo(LiveSessionState::PLAYING, "Audio");
+    std::vector<int16_t> audio(2400, 100);
+    vk.getEngine().getPlayer().feedPcm(audio.data(), audio.size());
+    vk.getEngine().getPlayer().notifyTurnComplete();
+    vk.update();
+
+    while (vk.isSpeaking()) {
+        vk.getEngine().getPlayer().simFinishSpeakerChunk();
+        vk.update();
+    }
+    TEST_ASSERT(speechFinishedCalls == 1, "onSpeechFinished emis EXACTEMENT UNE FOIS");
+
+    // Appels update() répétés ne doivent JAMAIS re-déclencher onSpeechFinished
+    for (int i = 0; i < 10; ++i) {
+        vk.update();
+    }
+    TEST_ASSERT(speechFinishedCalls == 1, "Zero duplication de onSpeechFinished sur boucles d'update suivantes");
+
+    // 2. Unicité du callback onTranscription (final)
+    int finalTranscriptionCalls = 0;
+    vk.onTranscription([&finalTranscriptionCalls](const String& text, bool isFinal) {
+        if (isFinal) finalTranscriptionCalls++;
+    });
+
+    vk.listen();
+    vk.stopListening();
+    const char* finalJson = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Phrase test unicite\"}}}";
+    vk.getEngine().getClient().handleIncomingMessage(finalJson, strlen(finalJson));
+    vk.update();
+
+    TEST_ASSERT(finalTranscriptionCalls == 1, "Transcription finale emise EXACTEMENT UNE FOIS");
+    for (int i = 0; i < 10; ++i) {
+        vk.update();
+    }
+    TEST_ASSERT(finalTranscriptionCalls == 1, "Zero duplication de transcription finale sur updates ulterieurs");
+
+    // 3. Unicité du callback onConversationFinished
+    int convFinishedCalls = 0;
+    vk.onConversationFinished([&convFinishedCalls]() { convFinishedCalls++; });
+
+    vk.startConversation();
+    const char* setupComp = "{\"setupComplete\":{}}";
+    vk.getEngine().getClient().handleIncomingMessage(setupComp, strlen(setupComp));
+    vk.update();
+
+    bool convTurnStarted = vk.getEngine().startListening();
+    TEST_ASSERT(convTurnStarted, "startListening() conversation accepte");
+    std::vector<int16_t> sampleBlock(AUDIO_CHUNK_SAMPLES, 400);
+    vk.getEngine().getStreamer().pushSimulatedChunk(sampleBlock.data(), sampleBlock.size());
+    vk.getEngine().getStreamer().tick();
+    vk.getEngine().stopListening();
+
+    vk.getEngine().getSession().transitionTo(LiveSessionState::PLAYING, "Premier son recu");
+    vk.update();
+    vk.getEngine().getSession().finishTurn();
+    vk.update();
+
+    TEST_ASSERT(convFinishedCalls == 1, "onConversationFinished emis EXACTEMENT UNE FOIS par tour");
+    for (int i = 0; i < 10; ++i) {
+        vk.update();
+    }
+    TEST_ASSERT(convFinishedCalls == 1, "Zero duplication de onConversationFinished sur updates ulterieurs");
+
+    vk.stopConversation();
+    vk.getEngine().getClient().handleIncomingMessage(setupComp, strlen(setupComp));
+    vk.update();
+    vk.getEngine().getClient().setTransport(nullptr);
+}
+
+// SUITE 52 : Compatibilité ascendante intégrale — Coexistence VoxCoreVoice et VoiceKit sans régression
+void test_v050_complete_backward_compatibility() {
+    std::cout << "\n[TEST SUITE 52] Compatibilite ascendante integrale : Coexistence VoxCoreVoice et VoiceKit sans regression" << std::endl;
+    MockLiveTransport mockTransport;
+
+    // 1. Instanciation directe de l'ancienne API VoxCoreVoice
+    VoxCoreVoice directVoice;
+    VoiceKitConfig config;
+    config.apiKey = "AIzaTestKeyRetro";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.voice = "Charon";
+    config.language = "fr-FR";
+
+    bool directOk = directVoice.begin(config);
+    TEST_ASSERT(directOk, "Ancienne API VoxCoreVoice::begin() fonctionne sans modification");
+    prepareMockVoiceReady(directVoice, mockTransport);
+
+    TEST_ASSERT(directVoice.isReady(), "VoxCoreVoice directe est READY");
+    TEST_ASSERT(directVoice.getVoice() == "Charon", "Profil vocal VoxCoreVoice preserve");
+    TEST_ASSERT(directVoice.getLanguage() == "fr-FR", "Langue VoxCoreVoice preservee");
+
+    bool directSay = directVoice.say("Test compatibilite descendante");
+    TEST_ASSERT(directSay, "VoxCoreVoice::say() fonctionne a l'identique de v0.4.1.2");
+
+    directVoice.stop();
+    TEST_ASSERT(directVoice.isReady(), "VoxCoreVoice directe redevient READY apres stop()");
+
+    // 2. Chaine UTF-8 et accents français vérifiés sur la façade VoiceKit
+    VoiceKit vk;
+    vk.begin(config);
+    prepareMockVoiceKitReady(vk, mockTransport);
+
+    String receivedAccent = "";
+    vk.onTranscription([&receivedAccent](const String& txt, bool isFinal) {
+        if (isFinal) receivedAccent = txt;
+    });
+
+    vk.listen();
+    const char* utf8Test = "Hélène fête l'été avec un délicieux gâteau à Noël près du Rhône.";
+    std::string fullJson = std::string("{\"serverContent\":{\"inputTranscription\":{\"text\":\"") + utf8Test + "\"}}}";
+    vk.getEngine().getClient().handleIncomingMessage(fullJson.c_str(), fullJson.length());
+    vk.update();
+
+    TEST_ASSERT(receivedAccent == utf8Test, "Chaine UTF-8 et accents francais 100% preserves via VoiceKit");
+    TEST_ASSERT(receivedAccent.indexOf("Hélène") >= 0, "Accents e majuscule et e grave conserves");
+    TEST_ASSERT(receivedAccent.indexOf("délicieux") >= 0, "Accents e aigu conserves");
+    TEST_ASSERT(receivedAccent.indexOf("gâteau") >= 0, "Accent circonflexe conserve");
+    TEST_ASSERT(receivedAccent.indexOf("Rhône") >= 0, "Circonflexe o conserve");
+
+    vk.stop();
+    vk.getEngine().getClient().setTransport(nullptr);
+    directVoice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.4.1.2  " << std::endl;
-    std::cout << "  Validation ContinuousSTT & VAD (Detection Fin de Parole)  " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.5.0    " << std::endl;
+    std::cout << "  Simplification de l'API & Stabilisation                  " << std::endl;
+    std::cout << "  ContinuousListeningController & Facade VoiceKit          " << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
     std::cout << "===========================================================" << std::endl;
 
@@ -2338,6 +2873,14 @@ int main() {
     test_vad_advanced_temporal_scenarios();
     test_continuous_stt_complete_lifecycle();
     test_continuous_stt_resilience_and_utf8();
+
+    // Nouvelles suites VoiceKit v0.5.0 (Simplification et Stabilisation)
+    test_voicekit_facade_lifecycle_and_delegation();
+    test_voicekit_facade_operations();
+    test_voicekit_facade_refusals_and_mode_transitions();
+    test_continuous_controller_lifecycle_and_vad();
+    test_events_uniqueness_and_no_duplicate_callbacks();
+    test_v050_complete_backward_compatibility();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

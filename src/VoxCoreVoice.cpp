@@ -33,7 +33,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _lastError = "";
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.4.1.2 — TTS + STT + Conversation  ");
+    Serial.println("  VoxCore VoiceKit v0.5.0 — TTS + STT + Conversation  ");
     Serial.printf("  Mode Audio : %s\n",
                   (LiveAudioPlayer::getCompiledAudioMode() == 1) ? "MODE 1 (REACTIVE_CALLBACK)" : "MODE 2 (DEDICATED_AUDIO_TASK)");
     Serial.println("========================================================");
