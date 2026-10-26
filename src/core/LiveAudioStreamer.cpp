@@ -591,7 +591,7 @@ bool LiveAudioStreamer::start(GeminiLiveClient* client) {
     BaseType_t txTaskRes = xTaskCreatePinnedToCore(
         txTaskEntry,
         "live_tx_task",
-        4096,
+        LIVE_TX_TASK_STACK_SIZE,
         this,
         3, // Priorité 3 (au-dessus UI, au même niveau que le micro)
         &_txTaskHandle,

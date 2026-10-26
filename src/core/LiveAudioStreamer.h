@@ -28,6 +28,10 @@ static constexpr uint32_t LIVE_TX_TASK_STARTED_BIT     = (1 << 3);
 static constexpr uint32_t LIVE_TX_TASK_START_FAIL_BIT  = (1 << 4);
 static constexpr uint32_t LIVE_TX_TASK_STOPPED_BIT     = (1 << 5);
 
+// Tailles de pile FreeRTOS pour le streaming audio (v0.5.3.1 - Fix Stack Canary Overflow)
+static constexpr uint32_t LIVE_MIC_TASK_STACK_SIZE    = 4096;
+static constexpr uint32_t LIVE_TX_TASK_STACK_SIZE     = 10240; // 10 Ko pour absorber msgBuf Base64 et la pile reseau TLS
+
 // =============================================================================
 // LiveAudioStreamer : Capture progressive et streaming audio micro PCM 16 kHz
 // VoxCore v0.2.1.1 (Embedded Voice Application Framework)
