@@ -114,6 +114,20 @@ public:
     const ConnectionMetrics& getConnectionMetrics() const { return _voice.getConnectionMetrics(); }
 
     /**
+     * @brief Retourne les métriques instrumentées de latence du dernier tour vocal (v0.5.3).
+     */
+    const VoiceLatencyMetrics& getLatencyMetrics() const { return _voice.getLatencyMetrics(); }
+
+    /**
+     * @brief Configure le seuil de silence du VAD local en millisecondes (800, 1000, 1200 ms).
+     *        Valeur par défaut stricte : 1 200 ms.
+     */
+    void setVadSilenceDurationMs(uint32_t ms);
+    uint32_t getVadSilenceDurationMs() const;
+    void setSilenceDurationMs(uint32_t ms) { setVadSilenceDurationMs(ms); }
+    uint32_t getSilenceDurationMs() const { return getVadSilenceDurationMs(); }
+
+    /**
      * @brief Règle le volume sonore (0 à 100 %).
      */
     void setVolume(uint8_t percent);

@@ -101,6 +101,10 @@ bool VoiceKit::begin(const VoiceKitConfig& config) {
         }
     });
 
+    if (config.vadSilenceDurationMs > 0) {
+        _continuousController.setSilenceDurationMs(config.vadSilenceDurationMs);
+    }
+
     bool ok = _voice.begin(config);
 
     if (config.enableConversation) {
@@ -380,4 +384,12 @@ VoiceTone VoiceKit::getTone() const {
 
 String VoiceKit::getAccent() const {
     return _voice.getAccent();
+}
+
+void VoiceKit::setVadSilenceDurationMs(uint32_t ms) {
+    _continuousController.setSilenceDurationMs(ms);
+}
+
+uint32_t VoiceKit::getVadSilenceDurationMs() const {
+    return _continuousController.getVadConfig().silenceDurationMs;
 }

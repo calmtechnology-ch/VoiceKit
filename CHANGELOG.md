@@ -7,6 +7,66 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.5.3] - 2026-10-26 (Voice Latency Optimization — Réactivité des interactions vocales & Instrumentation)
+
+### Instrumentation Précise de la Latence Vocale (7 Jalons / 6 Durées Dérivées)
+- **Structure Complète `VoiceLatencyMetrics`** :
+  - `speechEndDetectedMs` : Horodatage à la milliseconde de détection/validation de fin de parole par le VAD local.
+  - `micStoppedMs` : Arrêt matériel effectif de la capture microphone ES7210.
+  - `activityEndSentMs` : Envoi de la notification `clientContent.turnComplete: true` sur la WebSocket Gemini Live.
+  - `firstResponseReceivedMs` : Réception du premier événement `serverContent` de Gemini Live.
+  - `firstAudioReceivedMs` : Réception du premier paquet PCM 24 kHz extrait du flux Bidi.
+  - `firstAudioPlayedMs` : Remise du premier échantillon au pilote DMA I2S / AW88298 (début effectif de restitution).
+  - `playbackFinishedMs` : Fin matérielle et acoustique de la restitution audio.
+- **Calcul Strict des Durées Dérivées (Politique Anti-Faux Zéro)** :
+  - Fin de parole $\rightarrow$ fin de capture : `getSpeechEndToMicStoppedMs()`.
+  - Fin de capture $\rightarrow$ notification Gemini : `getMicStoppedToActivityEndMs()`.
+  - Notification Gemini $\rightarrow$ premier audio reçu : `getActivityEndToFirstAudioMs()`.
+  - Premier audio reçu $\rightarrow$ début restitution : `getFirstAudioToPlaybackMs()`.
+  - Fin de parole $\rightarrow$ début restitution (latence perçue) : `getResponseLatencyMs()`.
+  - Durée totale du tour vocal : `getTotalTurnDurationMs()`.
+  - **Règle absolue** : Tout événement non observé ou non applicable renvoie explicitement `-1` (`N/D`), éliminant tout faux `0 ms`.
+  - Intégration transparente dans `ConversationMetrics` et accesseur public direct `VoiceKit::getLatencyMetrics()`.
+
+### Optimisations Locales & Suppression des Allocations Dynamiques
+- **Encodage Base64 Direct sur Pile (`GeminiLiveClient::encodeBase64Direct`)** :
+  - Encodage Base64 direct sans aucune allocation dynamique d'objet `String` sur le tas FreeRTOS toutes les 32 ms.
+  - Suppression de la fragmentation mémoire du tas et élimination des saccades audio pendant le streaming microphone continu.
+- **Décodage Base64 Optimisé (`GeminiLiveClient::decodeBase64`)** :
+  - Décodage direct dans le vecteur cible sans allocations intermédiaires de chaînes temporaires.
+- **Sérialisation Légère des Trames JSON** :
+  - Réduction de l'empreinte mémoire des trames `realtimeInput` et `clientContent`.
+- **Formats Audio Strictement Préservés** :
+  - Capture microphone : PCM 16 kHz 16 bits mono.
+  - Restitution haut-parleur : PCM 24 kHz 16 bits mono.
+
+### Contrôleur VAD Configurable & Réduction du Délai de Fin de Parole
+- **Seuil de Silence VAD Paramétrable** :
+  - Configuration de `vadSilenceDurationMs` dans `VoiceKitConfig` (1 200 ms par défaut).
+  - Nouvelles méthodes de contrôle dynamique : `voice.setVadSilenceDurationMs(uint32_t ms)` et `voice.getVadSilenceDurationMs()` (avec alias `setSilenceDurationMs`/`getSilenceDurationMs`).
+  - Validation des paliers **800 ms**, **1 000 ms** et **1 200 ms** :
+    - 1 200 ms : Référence par défaut pour pauses longues et dictée continue.
+    - 1 000 ms : Équilibre optimal réduisant la latence perçue de 200 ms sans coupure.
+    - 800 ms : Mode ultra-réactif pour questions directes courtes.
+
+### Enrichissement de l'Outil de Diagnostic `VoiceDiagnostics`
+- **6e Onglet Tactile Dédié `LATENCY` (`LAT`)** :
+  - Interface compacte 320 × 240 avec 6 onglets de navigation (`SYS`, `AUDIO`, `LAT`, `NET`, `CONN`, `EVT`).
+  - Affichage temps réel : Dernière latence perçue, délai Gemini, délai local DMA, durée de capture microphone.
+  - Statistiques de session : Tours mesurés, tours incomplets, min, moyenne, max et médiane glissante.
+  - Réglage interactif du seuil VAD (800 / 1 000 / 1 200 ms) par touche tactile et par commande série `VAD <ms>`.
+- **Journalisation Série Structurée et Format CSV** :
+  - Émission de synthèses horodatées `[LATENCY]` à chaque fin de tour vocal.
+  - Export CSV direct `[LATENCY_CSV]` avec en-tête `[LATENCY_CSV_HEADER]` pour analyse comparative.
+
+### Sanctuaire Audio & Garanties de Non-Régression
+- Maintien intégral du buffer circulaire en PSRAM de 120 000 échantillons (~5 s) et du quadruple buffer DMA (160 ms).
+- Préservation absolue des garanties de vidage de `LiveAudioPlayer` : aucun arrêt prématuré du haut-parleur, restitution vérifiée jusqu'au dernier mot (« alpha tango terminé »).
+- 912 assertions unitaires automatisées validées (65 suites de tests, +79 assertions en v0.5.3).
+- 100% des exemples compilés sous PlatformIO sans erreur.
+
+---
+
 ## [0.5.2] - 2026-10-26 (Fast Connection — Optimisation des temps de démarrage Wi-Fi & Gemini Live)
 
 ### Optimisation WiFiManager & FastConnect

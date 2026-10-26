@@ -63,10 +63,11 @@
 // Instance unique de la façade VoiceKit
 static VoiceKit voice;
 
-// Navigation par onglets (5 écrans)
+// Navigation par onglets (6 écrans)
 enum class Page : uint8_t {
     SYSTEM = 0,
     AUDIO,
+    LATENCY,
     NETWORK,
     CONNECTION,
     EVENTS
@@ -92,6 +93,51 @@ static bool s_everConnected     = false;
 static bool s_hasConvMetrics    = false;
 static uint32_t s_lastLatencyMs = 0;
 static uint32_t s_lastDroppedSamples = 0;
+static uint32_t s_lastMicCaptureMs = 0;
+
+// Statistiques de latence instrumentée (v0.5.3)
+static constexpr size_t MAX_LATENCY_SAMPLES = 64;
+static uint32_t s_latencySamples[MAX_LATENCY_SAMPLES];
+static size_t s_sampleCount = 0;
+static uint32_t s_turnsMeasured = 0;
+static uint32_t s_turnsIncomplete = 0;
+static uint32_t s_minLatency = 0;
+static uint32_t s_maxLatency = 0;
+static uint32_t s_avgLatency = 0;
+static uint32_t s_medianLatency = 0;
+
+static void recordLatencySample(uint32_t sampleMs) {
+    if (s_sampleCount < MAX_LATENCY_SAMPLES) {
+        s_latencySamples[s_sampleCount++] = sampleMs;
+    } else {
+        for (size_t i = 1; i < MAX_LATENCY_SAMPLES; ++i) {
+            s_latencySamples[i - 1] = s_latencySamples[i];
+        }
+        s_latencySamples[MAX_LATENCY_SAMPLES - 1] = sampleMs;
+    }
+
+    uint64_t sum = 0;
+    uint32_t minVal = 0xFFFFFFFF;
+    uint32_t maxVal = 0;
+    for (size_t i = 0; i < s_sampleCount; ++i) {
+        uint32_t val = s_latencySamples[i];
+        sum += val;
+        if (val < minVal) minVal = val;
+        if (val > maxVal) maxVal = val;
+    }
+    s_minLatency = (s_sampleCount > 0) ? minVal : 0;
+    s_maxLatency = maxVal;
+    s_avgLatency = (s_sampleCount > 0) ? (uint32_t)(sum / s_sampleCount) : 0;
+
+    uint32_t sorted[MAX_LATENCY_SAMPLES];
+    memcpy(sorted, s_latencySamples, s_sampleCount * sizeof(uint32_t));
+    std::sort(sorted, sorted + s_sampleCount);
+    if (s_sampleCount % 2 == 1) {
+        s_medianLatency = sorted[s_sampleCount / 2];
+    } else if (s_sampleCount > 0) {
+        s_medianLatency = (sorted[s_sampleCount / 2 - 1] + sorted[s_sampleCount / 2]) / 2;
+    }
+}
 
 static String s_lastErrorStr        = "";
 static String s_latestTranscriptStr = "";
@@ -186,18 +232,17 @@ static void drawUI() {
         // En-tête supérieur
         M5.Display.setTextColor(COLOR_FG, COLOR_BG);
         M5.Display.setCursor(10, 6);
-        M5.Display.print("VoiceDiagnostics  v0.5.2");
+        M5.Display.print("VoiceDiagnostics  v0.5.3");
 
-        // Barre d'onglets (SYS, AUDIO, NET, CONN, EVENTS)
-        const char* tabs[5] = {"SYS", "AUDIO", "NET", "CONN", "EVENTS"};
-        for (int i = 0; i < 5; ++i) {
-            int x = 6 + i * 62;
+        // Barre d'onglets (SYS, AUDIO, LAT, NET, CONN, EVT)
+        const char* tabs[6] = {"SYS", "AUDIO", "LAT", "NET", "CONN", "EVT"};
+        for (int i = 0; i < 6; ++i) {
+            int x = 6 + i * 52;
             bool active = (i == (int)s_currentPage);
             uint16_t tabColor = active ? COLOR_ACCENT : COLOR_PANEL;
-            M5.Display.fillRoundRect(x, 23, 58, 25, 4, tabColor);
+            M5.Display.fillRoundRect(x, 23, 49, 25, 4, tabColor);
             M5.Display.setTextColor(COLOR_FG, tabColor);
-            // Centrage approximatif du texte court
-            int offset = (i == 0 || i == 2) ? 19 : ((i == 1) ? 12 : ((i == 3) ? 16 : 10));
+            int offset = (i == 0 || i == 2 || i == 3 || i == 5) ? 14 : ((i == 1) ? 8 : 11);
             M5.Display.setCursor(x + offset, 32);
             M5.Display.print(tabs[i]);
         }
@@ -265,6 +310,44 @@ static void drawUI() {
         line(130, "Micro debuts/fins", String(s_listeningStarts) + " / " + String(s_listeningEnds));
         line(148, "STT finales",       String(s_sttFinals));
         line(166, "Conv. lat. / perte", s_hasConvMetrics ? (String(s_lastLatencyMs) + " ms / " + String(s_lastDroppedSamples)) : "N/D");
+    }
+    else if (s_currentPage == Page::LATENCY) {
+        // --- ÉCRAN 3 : LATENCY (v0.5.3) ---
+        const auto& lat = voice.getLatencyMetrics();
+        int32_t respLat = lat.getResponseLatencyMs();
+        String respLatStr = (respLat >= 0) ? (String(respLat) + " ms") : "N/D";
+        line(58,  "Latence rep. percue", respLatStr, (respLat >= 0) ? COLOR_GREEN : COLOR_MUTED);
+
+        int32_t geminiLat = lat.getActivityEndToFirstAudioMs();
+        String geminiStr = (geminiLat >= 0) ? (String(geminiLat) + " ms") : "N/D";
+        line(76,  "Delai Gemini 1erPCM", geminiStr, (geminiLat >= 0) ? COLOR_FG : COLOR_MUTED);
+
+        int32_t localLat = lat.getFirstAudioToPlaybackMs();
+        String localStr = (localLat >= 0) ? (String(localLat) + " ms") : "N/D";
+        line(94,  "Delai local -> DMA",  localStr, (localLat >= 0) ? COLOR_FG : COLOR_MUTED);
+
+        uint32_t micCap = s_lastMicCaptureMs;
+        String micStr = (micCap > 0) ? (String(micCap) + " ms") : "N/D";
+        line(112, "Duree capture micro", micStr, (micCap > 0) ? COLOR_FG : COLOR_MUTED);
+
+        String turnsStr = String(s_turnsMeasured) + " / " + String(s_turnsIncomplete);
+        line(130, "Tours mes./incomplet", turnsStr, s_turnsIncomplete > 0 ? COLOR_WARN : COLOR_FG);
+
+        String statsStr;
+        if (s_sampleCount > 0) {
+            statsStr = String(s_minLatency) + " / " + String(s_avgLatency) + " / " + String(s_maxLatency) + " ms";
+        } else {
+            statsStr = "N/D";
+        }
+        line(148, "Min / Moy / Max",     statsStr, (s_sampleCount > 0) ? COLOR_ACCENT : COLOR_MUTED);
+
+        String medVadStr;
+        if (s_sampleCount > 0) {
+            medVadStr = String(s_medianLatency) + " ms | VAD " + String(voice.getVadSilenceDurationMs()) + "ms";
+        } else {
+            medVadStr = "N/D | VAD " + String(voice.getVadSilenceDurationMs()) + "ms";
+        }
+        line(166, "Mediane / Seuil VAD", medVadStr, COLOR_FG);
     }
     else if (s_currentPage == Page::NETWORK) {
         // --- ÉCRAN 3 : NETWORK ---
@@ -458,6 +541,22 @@ void setup() {
     voice.onSpeechFinished([]() {
         s_speechEnds++;
         addEvent("TTS: Fin restitution", COLOR_FG);
+        const auto& lat = voice.getLatencyMetrics();
+        if (lat.hasFirstAudioPlayed()) {
+            int32_t respLat = lat.getResponseLatencyMs();
+            if (respLat > 0) {
+                s_turnsMeasured++;
+                recordLatencySample((uint32_t)respLat);
+            }
+            Serial.printf("[LATENCY_CSV] %lu,0,%d,%d,%d,%d,%d,%d,0,0,0\n",
+                (unsigned long)millis(),
+                lat.getSpeechEndToMicStoppedMs(),
+                lat.getMicStoppedToActivityEndMs(),
+                lat.getActivityEndToFirstAudioMs(),
+                lat.getFirstAudioToPlaybackMs(),
+                lat.getResponseLatencyMs(),
+                lat.getTotalTurnDurationMs());
+        }
     });
 
     voice.onListeningStarted([]() {
@@ -484,8 +583,31 @@ void setup() {
         s_hasConvMetrics = true;
         s_lastLatencyMs = m.firstAudioLatencyMs;
         s_lastDroppedSamples = m.droppedSamples;
+        s_lastMicCaptureMs = m.micCaptureDurationMs;
+        const auto& lat = m.latency;
+        int32_t respLat = lat.getResponseLatencyMs();
+        if (respLat > 0) {
+            s_turnsMeasured++;
+            recordLatencySample((uint32_t)respLat);
+        } else {
+            s_turnsIncomplete++;
+        }
+
+        Serial.printf("[LATENCY_CSV] %lu,%llu,%d,%d,%d,%d,%d,%d,%u,%u,%u\n",
+            (unsigned long)millis(),
+            (unsigned long long)m.turnId,
+            lat.getSpeechEndToMicStoppedMs(),
+            lat.getMicStoppedToActivityEndMs(),
+            lat.getActivityEndToFirstAudioMs(),
+            lat.getFirstAudioToPlaybackMs(),
+            lat.getResponseLatencyMs(),
+            lat.getTotalTurnDurationMs(),
+            (unsigned)m.micCaptureDurationMs,
+            (unsigned)m.pcmBlocksReceived,
+            (unsigned)m.droppedSamples);
+
         char buf[48];
-        snprintf(buf, sizeof(buf), "Conv: %lums lat, %ludrop", (unsigned long)m.firstAudioLatencyMs, (unsigned long)m.droppedSamples);
+        snprintf(buf, sizeof(buf), "Conv: %dms lat, %ludrop", (respLat > 0 ? (int)respLat : (int)m.firstAudioLatencyMs), (unsigned long)m.droppedSamples);
         addEvent(buf, COLOR_FG);
     });
 
@@ -509,6 +631,7 @@ void setup() {
     }
 
     Serial.println("[CONN_CSV_HEADER] t_wifi_ms,t_sntp_ms,t_ws_ms,t_setup_ms,t_ready_ms,fast_connect,sntp_skipped,wifi_attempts,gemini_attempts,failures,channel,bssid");
+    Serial.println("[LATENCY_CSV_HEADER] timestamp_ms,turn_id,speech_end_to_mic_stop_ms,mic_stop_to_activity_end_ms,activity_end_to_first_audio_ms,first_audio_to_playback_ms,response_latency_ms,total_turn_duration_ms,mic_capture_ms,rx_blocks,dropped_samples");
 #if ENABLE_CSV_OUTPUT
     Serial.println("[DIAG_CSV_HEADER] ms,state,mode,wifi,ram_free,psram_free,mic_rms,tts_busy,errors,reconnects");
 #endif
@@ -520,17 +643,50 @@ void loop() {
     M5.update();
     voice.update();
 
+    // Commandes série interactives pour tester les seuils VAD (800, 1000, 1200 ms)
+    if (Serial.available()) {
+        String cmd = Serial.readStringUntil('\n');
+        cmd.trim();
+        if (cmd == "800" || cmd.equalsIgnoreCase("VAD 800")) {
+            voice.setVadSilenceDurationMs(800);
+            Serial.println("[VAD] Seuil silence VAD regle a 800 ms");
+            addEvent("VAD Silence: 800 ms", COLOR_ACCENT);
+            s_forceFullRedraw = true;
+        } else if (cmd == "1000" || cmd.equalsIgnoreCase("VAD 1000")) {
+            voice.setVadSilenceDurationMs(1000);
+            Serial.println("[VAD] Seuil silence VAD regle a 1000 ms");
+            addEvent("VAD Silence: 1000 ms", COLOR_ACCENT);
+            s_forceFullRedraw = true;
+        } else if (cmd == "1200" || cmd.equalsIgnoreCase("VAD 1200")) {
+            voice.setVadSilenceDurationMs(1200);
+            Serial.println("[VAD] Seuil silence VAD regle a 1200 ms (defaut)");
+            addEvent("VAD Silence: 1200 ms", COLOR_ACCENT);
+            s_forceFullRedraw = true;
+        }
+    }
+
     // Gestion des appuis tactiles M5Unified
     if (M5.Touch.getCount()) {
         auto t = M5.Touch.getDetail();
         if (t.wasPressed()) {
-            // Sélection des 5 onglets supérieurs (y in 23..48)
+            // Sélection des 6 onglets supérieurs (y in 23..48)
             if (t.y >= 23 && t.y <= 48) {
-                if (t.x < 68)        s_currentPage = Page::SYSTEM;
-                else if (t.x < 130)  s_currentPage = Page::AUDIO;
-                else if (t.x < 192)  s_currentPage = Page::NETWORK;
-                else if (t.x < 254)  s_currentPage = Page::CONNECTION;
+                if (t.x < 56)        s_currentPage = Page::SYSTEM;
+                else if (t.x < 108)  s_currentPage = Page::AUDIO;
+                else if (t.x < 160)  s_currentPage = Page::LATENCY;
+                else if (t.x < 212)  s_currentPage = Page::NETWORK;
+                else if (t.x < 264)  s_currentPage = Page::CONNECTION;
                 else                 s_currentPage = Page::EVENTS;
+                s_forceFullRedraw = true;
+            }
+            // Changement seuil VAD par appui tactile sur la dernière ligne de la page LATENCY
+            else if (s_currentPage == Page::LATENCY && t.y >= 155 && t.y <= 188) {
+                uint32_t cur = voice.getVadSilenceDurationMs();
+                uint32_t next = (cur == 1200) ? 800 : ((cur == 800) ? 1000 : 1200);
+                voice.setVadSilenceDurationMs(next);
+                char buf[40];
+                snprintf(buf, sizeof(buf), "VAD Silence: %u ms", (unsigned)next);
+                addEvent(buf, COLOR_ACCENT);
                 s_forceFullRedraw = true;
             }
             // Boutons d'action inférieurs (y in 194..234)

@@ -128,6 +128,8 @@ public:
     bool isActivityStartConfirmed() const { return _activityStartSent; }
     bool isActivityEndConfirmed() const { return _activityEndSent; }
     bool isActivityEndSent() const { return _activityEndSent; }
+    uint32_t getMicStoppedMs() const { return _micStoppedMs; }
+    uint32_t getActivityEndSentMs() const { return _activityEndSentMs; }
     bool isMicTaskRunning() const { return _micTaskRunning; }
     bool isTxTaskRunning() const { return _txTaskRunning; }
     bool isTaskQuarantined() const { return _taskQuarantined || _txTaskQuarantined; }
@@ -255,6 +257,8 @@ private:
     AudioChunkCallback _chunkCallback = nullptr;
     bool _activityStartSent = false;
     bool _activityEndSent = false;
+    uint32_t _micStoppedMs = 0;
+    uint32_t _activityEndSentMs = 0;
 
     // Métriques avancées TX v0.2.1.1 (Correction A & C)
     volatile uint32_t _sendRefusedCount = 0;

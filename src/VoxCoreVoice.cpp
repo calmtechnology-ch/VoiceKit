@@ -287,6 +287,9 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         if (_state == VoiceState::LISTENING || _state == VoiceState::TRANSCRIBING) {
             return;
         }
+        _latencyMetrics.firstResponseReceivedMs = _client.getFirstResponseReceivedMs();
+        _latencyMetrics.firstAudioReceivedMs = _client.getFirstAudioReceivedMs();
+        _latencyMetrics.firstAudioPlayedMs = _player.getFirstPlayRawAcceptedTimeMs();
         setState(VoiceState::SPEAKING);
         if (_onSpeechStarted) {
             _onSpeechStarted();
@@ -297,6 +300,8 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         if (_state == VoiceState::LISTENING || _state == VoiceState::TRANSCRIBING) {
             return;
         }
+        _latencyMetrics.playbackFinishedMs = _player.getPlaybackFinishedTimeMs();
+        if (_latencyMetrics.playbackFinishedMs == 0) _latencyMetrics.playbackFinishedMs = millis();
         setState(VoiceState::READY);
         if (_onSpeechFinished) {
             _onSpeechFinished();
@@ -581,6 +586,8 @@ bool VoxCoreVoice::say(const String& text) {
 bool VoxCoreVoice::dispatchSpeech(const String& text) {
     String prompt = _config.promptPrefix + text;
     Serial.printf("[VoiceKit] Prononciation : \"%s\"\n", text.c_str());
+    _latencyMetrics.reset();
+    _latencyMetrics.turnStartedMs = millis();
     bool ok = _session.sendTextMessage(prompt);
     if (!ok) {
         _lastError = "Echec envoi message texte vers Gemini Live";
@@ -588,6 +595,8 @@ bool VoxCoreVoice::dispatchSpeech(const String& text) {
         if (_onError) _onError(_lastError);
         return false;
     }
+    _latencyMetrics.activityEndSentMs = _client.getActivityEndSentMs();
+    if (_latencyMetrics.activityEndSentMs == 0) _latencyMetrics.activityEndSentMs = millis();
     return true;
 }
 
@@ -906,6 +915,10 @@ bool VoxCoreVoice::startListening() {
     _transcriptionPending = false;
     _lastInterimText = "";
     _lastFinalText = "";
+    uint32_t prevSpeechEnd = _latencyMetrics.speechEndDetectedMs;
+    _latencyMetrics.reset();
+    _latencyMetrics.turnStartedMs = millis();
+    _latencyMetrics.speechEndDetectedMs = prevSpeechEnd;
 
     // 5. Démarrage effectif du streamer (envoie activityStart et active double-buffering)
     if (!_streamer.start(&_client)) {
@@ -938,6 +951,12 @@ bool VoxCoreVoice::stopListening() {
     bool stopped = _streamer.stop();
     _transcriptionPending = true;
     _stopListeningTimeMs = millis();
+    _latencyMetrics.micStoppedMs = _stopListeningTimeMs;
+    if (_streamer.getActivityEndSentMs() > 0) {
+        _latencyMetrics.activityEndSentMs = _streamer.getActivityEndSentMs();
+    } else if (_client.getActivityEndSentMs() > 0) {
+        _latencyMetrics.activityEndSentMs = _client.getActivityEndSentMs();
+    }
 
     if (_onListeningFinished) {
         _onListeningFinished();
@@ -983,7 +1002,12 @@ bool VoxCoreVoice::isTranscribing() const {
 }
 
 void VoxCoreVoice::handleIncomingTranscription(const String& text, bool isFinal) {
+    if (_latencyMetrics.firstResponseReceivedMs == 0) {
+        _latencyMetrics.firstResponseReceivedMs = _client.getFirstResponseReceivedMs();
+        if (_latencyMetrics.firstResponseReceivedMs == 0) _latencyMetrics.firstResponseReceivedMs = millis();
+    }
     if (isFinal) {
+        _latencyMetrics.playbackFinishedMs = millis();
         Serial.printf("[VoiceKit] Transcription FINALE recue : \"%s\"\n", text.c_str());
         _finalTranscriptionReceived = true;
         _transcriptionPending = false;
@@ -1004,6 +1028,20 @@ void VoxCoreVoice::handleIncomingTranscription(const String& text, bool isFinal)
         if (_onTranscription) {
             _onTranscription(text, false);
         }
+    }
+}
+
+const VoiceLatencyMetrics& VoxCoreVoice::getLatencyMetrics() const {
+    if (_conversationEnabled) {
+        return _conversationController.getLatencyMetrics();
+    }
+    return _latencyMetrics;
+}
+
+void VoxCoreVoice::notifySpeechEndDetected(uint32_t ms) {
+    _latencyMetrics.speechEndDetectedMs = ms;
+    if (_conversationEnabled) {
+        _conversationController.notifySpeechEndDetected(ms);
     }
 }
 

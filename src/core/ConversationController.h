@@ -54,6 +54,8 @@ public:
     bool isTurnActive() const { return _isTurnActive; }
     VoiceState getState() const { return _state; }
     const ConversationMetrics& getMetrics() const { return _metrics; }
+    const VoiceLatencyMetrics& getLatencyMetrics() const { return _metrics.latency; }
+    void notifySpeechEndDetected(uint32_t ms) { _metrics.latency.speechEndDetectedMs = ms; }
     const String& getLastUserText() const { return _lastUserText; }
     const String& getLastAssistantText() const { return _lastAssistantText; }
 

@@ -294,6 +294,7 @@ void LiveAudioStreamer::txTaskLoop() {
             if (_client && _client->isConnected()) {
                 if (_client->sendActivityEnd()) {
                     _activityEndSent = true;
+                    _activityEndSentMs = millis();
                 }
             }
         }
@@ -515,6 +516,8 @@ bool LiveAudioStreamer::start(GeminiLiveClient* client) {
     _lastChunkRms = 0;
     _activityStartSent = false;
     _activityEndSent = false;
+    _micStoppedMs = 0;
+    _activityEndSentMs = 0;
 
     if (!_audioInput) {
         _audioInput = HardwareManager::getInstance().getAudioInput();
@@ -825,6 +828,7 @@ bool LiveAudioStreamer::stop() {
         if (!sendFailed && _blocksDropped == 0 && !_queueSaturated) {
             if (_client->sendActivityEnd()) {
                 _activityEndSent = true;
+                _activityEndSentMs = millis();
             }
         } else {
             Serial.println("[LiveStreamer] activityEnd annule suite a perte de blocs ou echec envoi");
@@ -934,6 +938,7 @@ size_t LiveAudioStreamer::getQueueSize() const {
 }
 
 bool LiveAudioStreamer::stopMicHardware() {
+    _micStoppedMs = millis();
     if (_audioInput) {
         uint32_t t0 = millis();
         while (_audioInput->isRecording() && (millis() - t0 < 100)) {

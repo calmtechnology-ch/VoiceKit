@@ -136,6 +136,7 @@ public:
     uint32_t getSegmentDurationMs() const { return _vad.getSegmentDurationMs(); }
     float getSilenceProgressRatio() const { return _vad.getSilenceProgressRatio(); }
     VadEndReason getLastEndReason() const { return _vad.getEndReason(); }
+    uint32_t getSpeechEndDetectedMs() const { return _speechEndDetectedMs; }
 
     // Configuration VAD
     VoiceActivityDetector& getVad() { return _vad; }
@@ -182,6 +183,7 @@ private:
     bool _lastFinalConfirmed = true;
 
     uint32_t _stopListeningTimeMs = 0;
+    uint32_t _speechEndDetectedMs = 0;
     uint32_t _lastCompletedTimeMs = 0;
     uint32_t _autoResumeDelayMs = 400;
 

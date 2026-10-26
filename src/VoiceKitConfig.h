@@ -191,7 +191,119 @@ struct VoiceToneWrapper {
     "Reponds toujours en francais direct et naturel en une ou deux phrases maximum."
 
 /**
- * @brief Métriques diagnostiques d'un tour conversationnel (v0.4.0).
+ * @brief Métriques détaillées d'instrumentation de la latence vocale d'un tour (v0.5.3 — Latency Optimization).
+ * 
+ * Mesure avec rigueur chaque étape du pipeline vocal entre la parole et la restitution.
+ * Toute valeur non observée reste à 0 et les durées dérivées correspondantes retournent -1 (N/D),
+ * garantissant de ne jamais inventer une durée artificielle de 0 ms.
+ * Distingue le début du transfert DMA (firstAudioPlayedMs) de la sortie acoustique audible.
+ */
+struct VoiceLatencyMetrics {
+    // 7 Instants temporels observés (en millisecondes depuis le boot, 0 = non observé / N/D)
+    uint32_t speechEndDetectedMs = 0;    ///< Instant détection fin de parole par VAD local (0 si bouton manuel)
+    uint32_t micStoppedMs = 0;           ///< Instant fin effective de capture microphone
+    uint32_t activityEndSentMs = 0;      ///< Instant envoi notification fin d'activité (activityEnd) à Gemini
+    uint32_t firstResponseReceivedMs = 0;///< Instant premier événement de réponse serveur reçu (texte ou audio)
+    uint32_t firstAudioReceivedMs = 0;   ///< Instant premier paquet PCM de réponse reçu
+    uint32_t firstAudioPlayedMs = 0;     ///< Instant premier bloc audio remis au périphérique matériel DMA (playRaw)
+    uint32_t playbackFinishedMs = 0;     ///< Instant fin effective de restitution audio (vidage + drain)
+
+    // Horodatage du début du tour pour calcul de la durée globale
+    uint32_t turnStartedMs = 0;          ///< Instant de début du tour vocal (0 si non observé)
+
+    // Indicateurs d'observation explicites
+    bool hasSpeechEndDetected() const { return speechEndDetectedMs > 0; }
+    bool hasMicStopped() const { return micStoppedMs > 0; }
+    bool hasActivityEndSent() const { return activityEndSentMs > 0; }
+    bool hasFirstResponseReceived() const { return firstResponseReceivedMs > 0; }
+    bool hasFirstAudioReceived() const { return firstAudioReceivedMs > 0; }
+    bool hasFirstAudioPlayed() const { return firstAudioPlayedMs > 0; }
+    bool hasPlaybackFinished() const { return playbackFinishedMs > 0; }
+
+    // 6 Durées dérivées calculées (-1 si non mesuré ou non disponible)
+    
+    // 1. Fin de parole -> fin de capture
+    int32_t getSpeechEndToMicStoppedMs() const {
+        if (speechEndDetectedMs == 0 || micStoppedMs == 0 || micStoppedMs < speechEndDetectedMs) {
+            return -1;
+        }
+        return static_cast<int32_t>(micStoppedMs - speechEndDetectedMs);
+    }
+
+    // 2. Fin de capture -> notification Gemini
+    int32_t getMicStoppedToActivityEndMs() const {
+        if (micStoppedMs == 0 || activityEndSentMs == 0 || activityEndSentMs < micStoppedMs) {
+            return -1;
+        }
+        return static_cast<int32_t>(activityEndSentMs - micStoppedMs);
+    }
+
+    // 3. Notification Gemini -> premier audio reçu
+    int32_t getActivityEndToFirstAudioMs() const {
+        if (activityEndSentMs == 0 || firstAudioReceivedMs == 0 || firstAudioReceivedMs < activityEndSentMs) {
+            return -1;
+        }
+        return static_cast<int32_t>(firstAudioReceivedMs - activityEndSentMs);
+    }
+
+    // Notification Gemini -> premier événement de réponse (texte ou audio)
+    int32_t getActivityEndToFirstResponseMs() const {
+        if (activityEndSentMs == 0 || firstResponseReceivedMs == 0 || firstResponseReceivedMs < activityEndSentMs) {
+            return -1;
+        }
+        return static_cast<int32_t>(firstResponseReceivedMs - activityEndSentMs);
+    }
+
+    // 4. Premier audio reçu -> début restitution (remise DMA)
+    int32_t getFirstAudioToPlaybackMs() const {
+        if (firstAudioReceivedMs == 0 || firstAudioPlayedMs == 0 || firstAudioPlayedMs < firstAudioReceivedMs) {
+            return -1;
+        }
+        return static_cast<int32_t>(firstAudioPlayedMs - firstAudioReceivedMs);
+    }
+
+    // 5. Fin de parole -> début restitution (nécessite VAD local speechEndDetectedMs)
+    int32_t getSpeechEndToPlaybackMs() const {
+        if (speechEndDetectedMs == 0 || firstAudioPlayedMs == 0 || firstAudioPlayedMs < speechEndDetectedMs) {
+            return -1;
+        }
+        return static_cast<int32_t>(firstAudioPlayedMs - speechEndDetectedMs);
+    }
+
+    // Latence de réponse perçue par l'utilisateur :
+    // - si VAD local actif : depuis fin de parole détectée (speechEndDetectedMs)
+    // - si mode manuel (bouton) : depuis arrêt microphone (micStoppedMs)
+    int32_t getResponseLatencyMs() const {
+        uint32_t startEvent = (speechEndDetectedMs > 0) ? speechEndDetectedMs : micStoppedMs;
+        if (startEvent == 0 || firstAudioPlayedMs == 0 || firstAudioPlayedMs < startEvent) {
+            return -1;
+        }
+        return static_cast<int32_t>(firstAudioPlayedMs - startEvent);
+    }
+
+    // 6. Durée totale du tour vocal
+    int32_t getTotalTurnDurationMs() const {
+        uint32_t startRef = (turnStartedMs > 0) ? turnStartedMs : ((speechEndDetectedMs > 0) ? speechEndDetectedMs : micStoppedMs);
+        if (startRef == 0 || playbackFinishedMs == 0 || playbackFinishedMs < startRef) {
+            return -1;
+        }
+        return static_cast<int32_t>(playbackFinishedMs - startRef);
+    }
+
+    void reset() {
+        speechEndDetectedMs = 0;
+        micStoppedMs = 0;
+        activityEndSentMs = 0;
+        firstResponseReceivedMs = 0;
+        firstAudioReceivedMs = 0;
+        firstAudioPlayedMs = 0;
+        playbackFinishedMs = 0;
+        turnStartedMs = 0;
+    }
+};
+
+/**
+ * @brief Métriques diagnostiques d'un tour conversationnel (v0.4.0 / v0.5.3).
  */
 struct ConversationMetrics {
     uint64_t turnId = 0;
@@ -203,6 +315,7 @@ struct ConversationMetrics {
     uint32_t totalTurnDurationMs = 0;
     String userText = "";
     String assistantText = "";
+    VoiceLatencyMetrics latency; ///< Métriques détaillées d'étapes de latence (v0.5.3)
 };
 
 /**
@@ -233,7 +346,7 @@ struct ConnectionMetrics {
 };
 
 /**
- * @brief Configuration d'initialisation de VoxCore VoiceKit v0.5.2.
+ * @brief Configuration d'initialisation de VoxCore VoiceKit v0.5.3.
  */
 struct VoiceKitConfig {
     // Cle d'API Google Gemini
@@ -282,6 +395,9 @@ struct VoiceKitConfig {
 
     // Timeout maximal d'attente de la transcription finale Gemini (en ms)
     uint32_t sttFinalTimeoutMs = 6000;
+
+    // Seuil de silence VAD pour fin de parole en ms (défaut : 1200 ms, réglable à 800, 1000, 1200 ms)
+    uint32_t vadSilenceDurationMs = 1200;
 
     // Mode conversationnel bidirectionnel natif (Mode B v0.4.0)
     bool enableConversation = false;

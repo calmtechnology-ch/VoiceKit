@@ -146,6 +146,11 @@ public:
     uint32_t getSetupCompleteMs() const { return _setupCompleteDurationMs; }
     uint32_t getConnectAttempts() const { return _connectAttempts; }
 
+    // Instrumentation latence vocale (v0.5.3)
+    uint32_t getActivityEndSentMs() const { return _lastActivityEndSentMs; }
+    uint32_t getFirstResponseReceivedMs() const { return _firstResponseReceivedMs; }
+    uint32_t getFirstAudioReceivedMs() const { return _firstAudioReceivedMs; }
+
     // Envoi de la réponse structurée à un toolCall Gemini Live
     bool sendToolResponse(const String& callId, const String& funcName, const String& resultJson);
     bool sendToolError(const String& callId, const String& funcName, const String& errorMessage);
@@ -153,8 +158,9 @@ public:
     // Injection transport (pour tests)
     void setTransport(ILiveTransport* transport);
 
-    // Utilitaires de conversion Base64 portables (testables)
+    // Utilitaires de conversion Base64 portables et rapides (testables, conformes RFC 4648)
     static String encodeBase64(const uint8_t* data, size_t length);
+    static size_t encodeBase64Direct(const uint8_t* data, size_t length, char* outBuf);
     static bool decodeBase64(const char* input, size_t inLen, std::vector<uint8_t>& output);
 
     // Traitement des trames reçues (public pour tests automatisés de messages)
@@ -236,4 +242,10 @@ private:
     uint32_t _setupStartTimeMs = 0;
     uint32_t _setupCompleteDurationMs = 0;
     uint32_t _connectAttempts = 0;
+
+    // Instrumentation latence vocale (v0.5.3)
+    uint32_t _lastActivityEndSentMs = 0;
+    uint32_t _firstResponseReceivedMs = 0;
+    uint32_t _firstAudioReceivedMs = 0;
+    bool _waitingForResponse = false;
 };

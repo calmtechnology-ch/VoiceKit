@@ -415,19 +415,37 @@ bool GeminiLiveClient::sendAudioChunk(const int16_t* samples, size_t sampleCount
         return false;
     }
 
-    // Conversion en octets et encodage Base64 conforme RFC 4648
     const uint8_t* bytePtr = reinterpret_cast<const uint8_t*>(samples);
     const size_t byteCount = sampleCount * sizeof(int16_t);
-    String b64 = encodeBase64(bytePtr, byteCount);
+    const size_t b64Len = ((byteCount + 2) / 3) * 4;
 
-    String msg;
-    msg.reserve(b64.length() + 80);
-    msg = "{\"realtimeInput\":{\"audio\":{\"mimeType\":\"audio/pcm;rate=16000\",\"data\":\"";
-    msg += b64;
-    msg += "\"}}}";
+    static const char prefix[] = "{\"realtimeInput\":{\"audio\":{\"mimeType\":\"audio/pcm;rate=16000\",\"data\":\"";
+    static const size_t prefixLen = sizeof(prefix) - 1;
+    static const char suffix[] = "\"}}}";
+    static const size_t suffixLen = sizeof(suffix) - 1;
+    const size_t totalLen = prefixLen + b64Len + suffixLen;
 
     uint32_t t0 = micros();
-    bool sent = _transport->send(msg.c_str(), msg.length());
+    bool sent = false;
+
+    // Pour blocs usuels (512 éch. = 1024 octets -> 1444 octets JSON), formater directement
+    // sur la pile sans aucune allocation dynamique ni copie intermédiaire (v0.5.3)
+    if (totalLen < 2048) {
+        char msgBuf[2048];
+        memcpy(msgBuf, prefix, prefixLen);
+        encodeBase64Direct(bytePtr, byteCount, msgBuf + prefixLen);
+        memcpy(msgBuf + prefixLen + b64Len, suffix, suffixLen);
+        msgBuf[totalLen] = '\0';
+        sent = _transport->send(msgBuf, totalLen);
+    } else {
+        std::vector<char> msgBuf(totalLen + 1);
+        memcpy(msgBuf.data(), prefix, prefixLen);
+        encodeBase64Direct(bytePtr, byteCount, msgBuf.data() + prefixLen);
+        memcpy(msgBuf.data() + prefixLen + b64Len, suffix, suffixLen);
+        msgBuf[totalLen] = '\0';
+        sent = _transport->send(msgBuf.data(), totalLen);
+    }
+
     uint32_t elapsedUs = micros() - t0;
 
     _lastSendDurationUs = elapsedUs;
@@ -452,6 +470,10 @@ bool GeminiLiveClient::sendAudioChunk(const int16_t* samples, size_t sampleCount
 
 bool GeminiLiveClient::sendActivityEnd() {
     if (!isConnected() || !_setupComplete) return false;
+    _lastActivityEndSentMs = millis();
+    _firstResponseReceivedMs = 0;
+    _firstAudioReceivedMs = 0;
+    _waitingForResponse = true;
     const char* msg = "{\"realtimeInput\":{\"activityEnd\":{}}}";
     Serial.println("[LiveClient] Signalisation fin d'activite vocale (activityEnd)");
     return _transport->send(msg, strlen(msg));
@@ -467,12 +489,17 @@ bool GeminiLiveClient::sendTurnComplete() {
 
 bool GeminiLiveClient::sendInterruption() {
     if (!isConnected()) return false;
+    _waitingForResponse = false;
     const char* intMsg = "{\"clientContent\":{\"turns\":[{\"role\":\"user\",\"parts\":[]}],\"turnComplete\":true}}";
     return _transport->send(intMsg, strlen(intMsg));
 }
 
 bool GeminiLiveClient::sendTextMessage(const String& text) {
     if (!isConnected() || !_setupComplete) return false;
+    _lastActivityEndSentMs = millis();
+    _firstResponseReceivedMs = 0;
+    _firstAudioReceivedMs = 0;
+    _waitingForResponse = true;
 
     String msg = "{\"clientContent\":{\"turns\":[{\"role\":\"user\",\"parts\":[{\"text\":\"";
     msg += escapeJsonString(text);
@@ -538,6 +565,27 @@ String GeminiLiveClient::encodeBase64(const uint8_t* data, size_t length) {
     return ret;
 }
 
+size_t GeminiLiveClient::encodeBase64Direct(const uint8_t* data, size_t length, char* outBuf) {
+    if (!data || length == 0 || !outBuf) return 0;
+    size_t i = 0;
+    size_t outPos = 0;
+    while (i < length) {
+        size_t rem = length - i;
+        uint32_t octet_a = data[i++];
+        uint32_t octet_b = (rem > 1) ? data[i++] : 0;
+        uint32_t octet_c = (rem > 2) ? data[i++] : 0;
+
+        uint32_t triple = (octet_a << 16) + (octet_b << 8) + octet_c;
+
+        outBuf[outPos++] = BASE64_CHARS[(triple >> 18) & 0x3F];
+        outBuf[outPos++] = BASE64_CHARS[(triple >> 12) & 0x3F];
+        outBuf[outPos++] = (rem > 1) ? BASE64_CHARS[(triple >> 6) & 0x3F] : '=';
+        outBuf[outPos++] = (rem > 2) ? BASE64_CHARS[triple & 0x3F] : '=';
+    }
+    outBuf[outPos] = '\0';
+    return outPos;
+}
+
 static inline int base64CharValue(char c) {
     if (c >= 'A' && c <= 'Z') return c - 'A';
     if (c >= 'a' && c <= 'z') return c - 'a' + 26;
@@ -551,7 +599,10 @@ bool GeminiLiveClient::decodeBase64(const char* input, size_t inLen, std::vector
     output.clear();
     if (!input || inLen == 0) return true;
 
-    output.reserve((inLen / 4) * 3);
+    size_t maxOut = (inLen / 4) * 3;
+    output.resize(maxOut);
+    uint8_t* outPtr = output.data();
+    size_t outPos = 0;
 
     size_t i = 0;
     while (i < inLen) {
@@ -559,7 +610,7 @@ bool GeminiLiveClient::decodeBase64(const char* input, size_t inLen, std::vector
         if (i >= inLen) break;
 
         char c0 = input[i++];
-        if (i >= inLen) return false;
+        if (i >= inLen) { output.clear(); return false; }
         char c1 = input[i++];
         char c2 = (i < inLen) ? input[i++] : '=';
         char c3 = (i < inLen) ? input[i++] : '=';
@@ -570,15 +621,17 @@ bool GeminiLiveClient::decodeBase64(const char* input, size_t inLen, std::vector
         int v3 = (c3 == '=') ? 0 : base64CharValue(c3);
 
         if (v0 < 0 || v1 < 0 || (c2 != '=' && v2 < 0) || (c3 != '=' && v3 < 0)) {
+            output.clear();
             return false;
         }
 
         uint32_t triple = (v0 << 18) | (v1 << 12) | (v2 << 6) | v3;
 
-        output.push_back(static_cast<uint8_t>((triple >> 16) & 0xFF));
-        if (c2 != '=') output.push_back(static_cast<uint8_t>((triple >> 8) & 0xFF));
-        if (c3 != '=') output.push_back(static_cast<uint8_t>(triple & 0xFF));
+        outPtr[outPos++] = static_cast<uint8_t>((triple >> 16) & 0xFF);
+        if (c2 != '=') outPtr[outPos++] = static_cast<uint8_t>((triple >> 8) & 0xFF);
+        if (c3 != '=') outPtr[outPos++] = static_cast<uint8_t>(triple & 0xFF);
     }
+    output.resize(outPos);
     return true;
 }
 
@@ -596,6 +649,8 @@ void GeminiLiveClient::resetTurnRxMetrics() {
     _postTurnCompletePcmSamples = 0;
     _postTurnCompletePcmBlocks = 0;
     _turnAudioPartsCount = 0;
+    _firstResponseReceivedMs = 0;
+    _firstAudioReceivedMs = 0;
 }
 
 // =============================================================================
@@ -624,10 +679,15 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
     // 2. Contenu produit par le serveur (serverContent)
     cJSON* serverContent = cJSON_GetObjectItemCaseSensitive(root, "serverContent");
     if (serverContent) {
+        if (_waitingForResponse && _firstResponseReceivedMs == 0) {
+            _firstResponseReceivedMs = millis();
+        }
+
         // Interruption signalee par le serveur
         cJSON* interrupted = cJSON_GetObjectItemCaseSensitive(serverContent, "interrupted");
         if (cJSON_IsTrue(interrupted)) {
             Serial.println("[LiveClient] Intervention interrompue signalee par le serveur");
+            _waitingForResponse = false;
             if (_onInterrupted) _onInterrupted();
         }
 
@@ -711,6 +771,9 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
                                     _pcmBytesDecodedTotal += (uint32_t)pcmBytes.size();
                                     _pcmSamplesDispatchedTotal += (uint32_t)sampleCount;
                                     _lastPcmPacketTimeMs = millis();
+                                    if (_waitingForResponse && _firstAudioReceivedMs == 0) {
+                                        _firstAudioReceivedMs = _lastPcmPacketTimeMs;
+                                    }
                                     AudioTraceLog::record(AudioTraceEventType::PCM_DECODED, (uint32_t)sampleCount);
 
                                     if (_turnCompleteReceived) {
@@ -738,6 +801,7 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
         if (cJSON_IsTrue(turnComplete)) {
             _turnCompleteReceived = true;
             _turnCompleteTimeMs = millis();
+            _waitingForResponse = false;
             AudioTraceLog::record(AudioTraceEventType::TURN_COMPLETE_RECEIVED);
             Serial.println("[LiveClient] Fin de generation audio (turnComplete)");
             if (_onTurnComplete) _onTurnComplete();

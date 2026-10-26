@@ -1,4 +1,4 @@
-# VoiceKit v0.5.2 — Fast Connection & Diagnostic Vocal Avancé
+# VoiceKit v0.5.3 — Optimisation de Latence Vocale & Diagnostic Avancé
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -7,14 +7,13 @@
 
 Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)** et de **conversation vocale bidirectionnelle native (Mode B)** haute fidélité pour **M5Stack CoreS3** (ESP32-S3), propulsée par l'API **Gemini Live** (protocole bidirectionnel BidiGenerateContent) et construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
 
-La version **v0.5.2** introduit l'accélération matérielle de démarrage **Fast Connection**, l'instrumentation des phases de connexion et l'enrichissement de l'outil de diagnostic :
-- **Connexion Wi-Fi Rapide (FastConnect)** : Mémorisation en mémoire non volatile (NVS / `Preferences`) du dernier BSSID et du canal radio de votre point d'accès. La connexion directe par canal réduit le temps d'obtention d'IP de **2384 ms à 946 ms (-60.3%)** sur CoreS3, avec repli automatique transparent vers le balayage multi-canaux classique en cas d'échec (timeout 3.5 s).
-- **Synchronisation SNTP Optimisée & Respect TLS** : Détection immédiate d'une horloge RTC/système déjà valide (redémarrage à chaud ou réveil). Bypassement de l'attente bloquante (`0 ms`), tout en préservant à 100% la validation stricte des certificats TLS GoogleRoots.
-- **Robustesse Gemini Live & Reconnexions** : Conditionnement strict de toute tentative de reconnexion WebSocket à la connectivité réseau effective (`isNetworkReady()`), prévenant l'épuisement prématuré des tentatives lors d'une coupure Wi-Fi. Suppression des reconnexions redondantes si la session est déjà prête.
-- **Instrumentation Temporelle Complète (5 Phases)** : Mesure à la milliseconde de chaque jalon : Wi-Fi (`t_wifi`), SNTP (`t_sntp`), WebSocket TLS (`t_ws`), Configuration Gemini (`t_setup`) et initialisation totale (`t_ready`), exposée via la nouvelle structure `ConnectionMetrics` et la méthode `voice.getConnectionMetrics()`.
-- **Démonstration `VoiceDiagnostics` v0.5.2** : Ajout d'un 5e écran tactile dédié `CONNECTION` (`CONN`) affichant les métriques réelles, les indicateurs `(FAST)` et `(IMMEDIAT)`, les échecs et tentatives, ainsi qu'une journalisation série structurée `[CONN]` et CSV `[CONN_CSV]`.
-- **Performances Globales Mesurées sur CoreS3** : Démarrage total de la façade jusqu'à `VoiceKit::isReady()` réduit de **5002 ms à 3182 ms (-36.4%)**.
-- **Non-Régression Totale** : 8 exemples officiels compilés sous PlatformIO, 60 suites de tests (833 assertions) validées à 100%, et préservation absolue des tampons audio PCM et des APIs publiques v0.5.1.
+La version **v0.5.3** apporte l'optimisation de la réactivité des interactions vocales (**Voice Latency Optimization**), l'instrumentation détaillée de chaque tour vocal et l'élimination des allocations superflues :
+- **Instrumentation Précise de la Latence Vocale (7 Jalons / 6 Durées)** : Mesure à la milliseconde de chaque jalon d'un tour vocal (`speechEndDetectedMs`, `micStoppedMs`, `activityEndSentMs`, `firstResponseReceivedMs`, `firstAudioReceivedMs`, `firstAudioPlayedMs`, `playbackFinishedMs`) et calcul strict des durées dérivées. Toute valeur non observée renvoie explicitement `-1` (`N/D`), sans aucun faux zéro.
+- **Suppression Totale des Allocations Tas en Streaming** : Encodage Base64 direct sur la pile (`encodeBase64Direct`) sans instanciation d'objets `String` toutes les 32 ms. Élimine la fragmentation mémoire du tas FreeRTOS et les micro-saccades processeur.
+- **Contrôle Dynamique du Silence VAD** : Paramétrage du seuil de silence VAD local (`vadSilenceDurationMs`, 1 200 ms par défaut) avec validation de réactivité à **800 ms**, **1 000 ms** et **1 200 ms** via l'API `setVadSilenceDurationMs(ms)`.
+- **Démonstrateur `VoiceDiagnostics` v0.5.3** : Ajout d'un 6e onglet tactile dédié `LATENCY` (`LAT`) affichant la latence perçue, le délai Gemini, le délai local DMA, la durée de capture, les statistiques de session (min, moy, max, médiane) et le réglage interactif du VAD, complété d'une sortie série `[LATENCY_CSV]`.
+- **Sanctuaire Audio Intact & Anti-Régression** : Préservation absolue du buffer circulaire PSRAM 120 000 échantillons (~5 s) et du quadruple buffer DMA (160 ms). Aucune coupure de syllabe ni de dernier mot (validation stricte sur la phrase repère : *« alpha tango terminé »*).
+- **Consolidation Complète** : Conservation intégrale des optimisations FastConnect v0.5.2, 912 tests unitaires réussis (+79 assertions v0.5.3) et 100% des exemples compilés sous PlatformIO.
 
 ---
 
@@ -109,7 +108,7 @@ VoiceKit/
 │       ├── M5AudioInput (.h/.cpp)         # HAL microphone M5.Mic (ES7210)
 │       └── HardwareManager.h              # Arbitrage I2S centralisé HP / Micro
 ├── examples/                    # Exemples d'application (9 exemples)
-│   ├── VoiceDiagnostics/        # NOUVEAU v0.5.1 : Outil officiel de diagnostic et télémétrie tactile
+│   ├── VoiceDiagnostics/        # NOUVEAU v0.5.3 : Outil officiel de diagnostic (6 onglets dont LATENCY) & CSV
 │   ├── MinimalVoiceKit/         # Démonstrateur façade simplifiée multi-modes
 │   ├── ContinuousSTT/           # Dictée continue mains libres avec interface M5Unified
 │   ├── VoiceSettingsDemo/       # Démonstrateur tactile profils & UTF-8
@@ -120,7 +119,7 @@ VoiceKit/
 │   └── MinimalTTS_Arduino/      # Exemple autonome Arduino IDE (.ino)
 └── tests/
     ├── run_tests.bat            # Lanceur des tests automatisés MinGW
-    └── test_voicekit_all.cpp    # 55 suites de tests unitaires (806 validations, 0 échec)
+    └── test_voicekit_all.cpp    # 65 suites de tests unitaires (912 validations, 0 échec)
 ```
 
 ---
@@ -318,6 +317,9 @@ VoiceKit voice;
 | `VoiceState getState() const` | Retourne l'état opérationnel interne du moteur VoxCore. | `VoiceState` | Non bloquant |
 | `VoiceKitMode getMode() const` | Retourne le mode de la façade (`IDLE`, `CONTINUOUS_LISTENING`, `CONVERSATION`). | `VoiceKitMode` | Non bloquant |
 | `const ConnectionMetrics& getConnectionMetrics() const` | Retourne les métriques et temps de connexion mesurés (Wi-Fi, SNTP, WS, Setup, Total READY). | `const ConnectionMetrics&` | Non bloquant |
+| `const VoiceLatencyMetrics& getLatencyMetrics() const` | Retourne les métriques de latence vocale détaillées du dernier tour vocal (7 jalons, 6 durées). | `const VoiceLatencyMetrics&` | Non bloquant |
+| `void setVadSilenceDurationMs(uint32_t ms)` | Configure le seuil de silence VAD local (800, 1000, 1200 ms). Alias : `setSilenceDurationMs()`. | `void` | Immédiat |
+| `uint32_t getVadSilenceDurationMs() const` | Retourne le seuil de silence VAD actuel en ms. Alias : `getSilenceDurationMs()`. | `uint32_t` | Non bloquant |
 | `String getLastError() const` | Retourne le dernier message d'erreur survenu. | `String` | Non bloquant |
 
 ### 4.2 Événements & Callbacks Unifiés
@@ -402,6 +404,8 @@ Pour assurer une rétrocompatibilité ascendante stricte à 100%, la classe `Vox
 - `void onUserText(TranscriptionCallback cb)`, `void onAssistantText(AssistantTextCallback cb)`
 - `void onConversationFinished(VoidCallback cb)`, `void onConversationTurnMetrics(TurnMetricsCallback cb)`
 - `const ConversationMetrics& getConversationMetrics() const`
+- `const VoiceLatencyMetrics& getLatencyMetrics() const`
+- `void setVadSilenceDurationMs(uint32_t ms)`, `uint32_t getVadSilenceDurationMs() const`
 
 ### API Profil Vocal & Langue
 - `bool setVoiceProfile(voice, lang, style, tone, accent)`
@@ -415,8 +419,8 @@ Pour assurer une rétrocompatibilité ascendante stricte à 100%, la classe `Vox
 
 La bibliothèque fournit 9 exemples complets prêts à l'emploi :
 
-1. **`examples/VoiceDiagnostics/`** (PlatformIO) — **NOUVEAU v0.5.1** :  
-   Outil officiel de diagnostic et de télémétrie vocale pour M5Stack CoreS3. Interface tactile M5Unified (320 × 240) à 4 onglets (`SYS`, `AUDIO`, `NET`, `EVENTS`), suivi en temps réel de l'état VoiceKit, de la mémoire libre (RAM/PSRAM), du niveau RMS du micro, des statistiques STT/TTS et de la connectivité Gemini Live. Intègre un journal série structuré `[DIAG]`, un mode CSV optionnel, un historique circulaire d'événements et deux boutons de contrôle (`TEST TTS` et `STOP AUDIO`).
+1. **`examples/VoiceDiagnostics/`** (PlatformIO) — **MIS À JOUR v0.5.3** :  
+   Outil officiel de diagnostic et de télémétrie vocale pour M5Stack CoreS3. Interface tactile M5Unified (320 × 240) à 6 onglets (`SYS`, `AUDIO`, `LAT`, `NET`, `CONN`, `EVT`). L'onglet `LAT` affiche la latence complète de réponse, le délai Gemini, le délai local DMA, la durée de capture microphone, les statistiques de session (min/moy/max/médiane) et le contrôle interactif du VAD (800 / 1 000 / 1 200 ms). Inclut la journalisation série structurée `[LATENCY]` et l'export CSV `[LATENCY_CSV]`.
 2. **`examples/MinimalVoiceKit/`** (PlatformIO) :  
    Démonstrateur de référence de la façade simplifiée `VoiceKit`. Permet de tester successivement les 4 modes vocaux (TTS, STT manuel, dictée continue et conversation) sur l'écran tactile du M5Stack CoreS3 (320 × 240) avec diagnostic en temps réel sur le moniteur Série.
 3. **`examples/ContinuousSTT/`** (PlatformIO) :  
@@ -438,12 +442,13 @@ La bibliothèque fournit 9 exemples complets prêts à l'emploi :
 
 ## 8. Garanties de Non-Régression & Sécurité
 
-La version **v0.5.1** garantit une non-régression absolue sur l'ensemble des modules validés en v0.5.0 et v0.5.0.1 :
-- **Intégrité absolue du moteur audio VoxCore** : Aucune modification des buffers DMA, de la tâche FreeRTOS Mode 2, du ring buffer PSRAM, ou des mécanismes d'évacuation audio (`LiveAudioPlayer`, `LiveAudioStreamer`, `LiveSessionController`).
-- **Chaîne UTF-8 sans translittération** : Les phrases françaises accentuées, ligatures et apostrophes typographiques sont envoyées intactes à Gemini Live.
-- **Arbitrage matériel garanti** : Pas de conflit I2S ni de larsen grâce au `HardwareManager` qui coupe automatiquement le haut-parleur lors de la prise de son micro et le réactive pour la réponse.
-- **Suite de tests automatisés** : 55 suites de tests unitaires et 806 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
+La version **v0.5.3** garantit une non-régression absolue sur l'ensemble des modules validés en v0.5.2 :
+- **Intégrité absolue du moteur audio VoxCore** : Aucune réduction arbitraire du buffer circulaire PSRAM (120 000 échantillons @ 24 kHz) ni des marges DMA (160 ms). Préservation intégrale de la tâche FreeRTOS Mode 2 et du vidage exact sans coupure de syllabe.
+- **Validation Repère Acoustique (« alpha tango terminé »)** : Vérification rigoureuse que les derniers mots émis par Gemini Live sont intégralement restitués sans troncature.
+- **Suppression du Heap Churn** : Remplacement des allocations `String` lors du streaming microphone Base64 par un tamponnage direct sur la pile (`encodeBase64Direct`), assurant une fluidité audio maximale.
+- **Politique Anti-Faux Zéro** : Toute métrique temporelle non observée renvoie explicitement `-1` (`N/D`), sans création artificielle de durées nulles.
+- **Suite de tests automatisés** : 65 suites de tests unitaires et 912 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
 - **Compilations d'exemples validées à 100%** : Les 9 exemples compilent sans aucune erreur sous PlatformIO et Arduino IDE (M5Stack CoreS3).
 - **Zéro identifiant en clair** : Aucun secret, SSID Wi-Fi ni clé API n'est publié dans le dépôt.
 
-Consultez le [Rapport de Livraison v0.5.1](RAPPORT_LIVRAISON_v0.5.1.md) pour les détails d'architecture, les métriques exposées et les preuves de compilation.
+Consultez le [Rapport de Livraison v0.5.3](RAPPORT_LIVRAISON_v0.5.3.md) pour les détails d'architecture, les métriques exposées et les mesures comparatives.

@@ -326,6 +326,16 @@ public:
     const ConnectionMetrics& getConnectionMetrics() const { return _connectionMetrics; }
 
     /**
+     * @brief Retourne les métriques instrumentées de latence vocale (v0.5.3).
+     */
+    const VoiceLatencyMetrics& getLatencyMetrics() const;
+
+    /**
+     * @brief Notifie l'instant exact de détection de fin de parole par un VAD local.
+     */
+    void notifySpeechEndDetected(uint32_t ms);
+
+    /**
      * @brief Vérifie si l'horloge système UTC est synchronisée (timestamp >= 2024).
      */
     static bool isSystemTimeValid();
@@ -341,6 +351,7 @@ private:
     String _lastError = "";
 
     ConnectionMetrics _connectionMetrics;
+    VoiceLatencyMetrics _latencyMetrics;
     uint32_t _initStartTimeMs = 0;
     uint32_t _totalReadyMs = 0;
 

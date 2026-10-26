@@ -59,8 +59,12 @@ bool ConversationController::startTurn() {
     _turnStartTimeMs = millis();
     _lastUserText = "";
     _lastAssistantText = "";
+    uint32_t prevSpeechEnd = _metrics.latency.speechEndDetectedMs;
     _metrics = ConversationMetrics();
     _metrics.turnId = _session ? _session->getCurrentTurnId() + 1 : 1;
+    _metrics.latency.reset();
+    _metrics.latency.turnStartedMs = _turnStartTimeMs;
+    _metrics.latency.speechEndDetectedMs = prevSpeechEnd;
 
     // Protection anti-larsen : désactivation du haut-parleur pendant la capture micro
     if (_player) {
@@ -99,6 +103,7 @@ bool ConversationController::finishTurnAudio() {
 
     _micStopMs = millis();
     _metrics.micCaptureDurationMs = _micStopMs - _turnStartTimeMs;
+    _metrics.latency.micStoppedMs = _micStopMs;
     _metrics.audioBlocksSent = _streamer ? _streamer->getChunksSent() : 0;
 
     Serial.printf("[Conversation] Fin parole : %u ms de capture, %u blocs audio emis\n",
@@ -107,6 +112,12 @@ bool ConversationController::finishTurnAudio() {
     // Arrêt de la capture micro et envoi de activityEnd
     if (_streamer) {
         _streamer->stop();
+        if (_streamer->getActivityEndSentMs() > 0) {
+            _metrics.latency.activityEndSentMs = _streamer->getActivityEndSentMs();
+        }
+    }
+    if (_metrics.latency.activityEndSentMs == 0 && _client && _client->getActivityEndSentMs() > 0) {
+        _metrics.latency.activityEndSentMs = _client->getActivityEndSentMs();
     }
 
     // Signalisation au contrôleur de session qu'on attend la réponse Gemini
@@ -147,6 +158,13 @@ void ConversationController::tick() {
     if (_state == VoiceState::WAITING_RESPONSE) {
         if (_session && _session->getState() == LiveSessionState::PLAYING) {
             _metrics.firstAudioLatencyMs = _session->getFirstAudioLatencyMs();
+            if (_client) {
+                _metrics.latency.firstResponseReceivedMs = _client->getFirstResponseReceivedMs();
+                _metrics.latency.firstAudioReceivedMs = _client->getFirstAudioReceivedMs();
+            }
+            if (_player) {
+                _metrics.latency.firstAudioPlayedMs = _player->getFirstPlayRawAcceptedTimeMs();
+            }
             Serial.printf("[Conversation] Reponse audio recue (latence premier son : %u ms)\n",
                           (unsigned)_metrics.firstAudioLatencyMs);
             setState(VoiceState::SPEAKING);
@@ -187,6 +205,30 @@ void ConversationController::handleTurnFinished(uint64_t turnId) {
     }
     _metrics.totalTurnDurationMs = millis() - _turnStartTimeMs;
 
+    if (_streamer && _metrics.latency.activityEndSentMs == 0) {
+        _metrics.latency.activityEndSentMs = _streamer->getActivityEndSentMs();
+    }
+    if (_client) {
+        if (_metrics.latency.activityEndSentMs == 0) {
+            _metrics.latency.activityEndSentMs = _client->getActivityEndSentMs();
+        }
+        if (_metrics.latency.firstResponseReceivedMs == 0) {
+            _metrics.latency.firstResponseReceivedMs = _client->getFirstResponseReceivedMs();
+        }
+        if (_metrics.latency.firstAudioReceivedMs == 0) {
+            _metrics.latency.firstAudioReceivedMs = _client->getFirstAudioReceivedMs();
+        }
+    }
+    if (_player) {
+        if (_metrics.latency.firstAudioPlayedMs == 0) {
+            _metrics.latency.firstAudioPlayedMs = _player->getFirstPlayRawAcceptedTimeMs();
+        }
+        _metrics.latency.playbackFinishedMs = _player->getPlaybackFinishedTimeMs();
+    }
+    if (_metrics.latency.playbackFinishedMs == 0) {
+        _metrics.latency.playbackFinishedMs = millis();
+    }
+
     Serial.println("================================================================================");
     Serial.printf("[Conversation] Tour #%llu TERMINE en %u ms | Blocs TX: %u | Blocs RX: %u | Pertes: %u\n",
                   (unsigned long long)_metrics.turnId, (unsigned)_metrics.totalTurnDurationMs,
@@ -198,6 +240,16 @@ void ConversationController::handleTurnFinished(uint64_t turnId) {
     if (!_metrics.assistantText.isEmpty()) {
         Serial.printf("[Conversation] Gemini      : \"%s\"\n", _metrics.assistantText.c_str());
     }
+    Serial.println("--------------------------------------------------------------------------------");
+    Serial.println("  [LATENCY] Metriques de latence du tour vocal (v0.5.3) :                       ");
+    if (_metrics.latency.hasSpeechEndDetected()) {
+        Serial.printf("  - Fin de parole (VAD) -> Fin de capture micro : %d ms\n", _metrics.latency.getSpeechEndToMicStoppedMs());
+    }
+    Serial.printf("  - Fin de capture micro -> Envoi activityEnd    : %d ms\n", _metrics.latency.getMicStoppedToActivityEndMs());
+    Serial.printf("  - Envoi activityEnd -> 1er audio Gemini        : %d ms\n", _metrics.latency.getActivityEndToFirstAudioMs());
+    Serial.printf("  - 1er audio recu -> Debut restitution DMA      : %d ms\n", _metrics.latency.getFirstAudioToPlaybackMs());
+    Serial.printf("  - Latence de reponse vocale percue             : %d ms\n", _metrics.latency.getResponseLatencyMs());
+    Serial.printf("  - Duree totale du tour vocal                   : %d ms\n", _metrics.latency.getTotalTurnDurationMs());
     Serial.println("================================================================================");
 
     _isTurnActive = false;

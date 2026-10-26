@@ -85,6 +85,7 @@ bool ContinuousListeningController::start() {
     _isActive.store(true, std::memory_order_release);
     _isPaused.store(false, std::memory_order_release);
     _speechEndRequested.store(false, std::memory_order_relaxed);
+    _speechEndDetectedMs = 0;
     _segmentFinalized = false;
     clearRmsQueue();
 
@@ -106,6 +107,7 @@ bool ContinuousListeningController::stop() {
     _isActive.store(false, std::memory_order_release);
     _isPaused.store(false, std::memory_order_release);
     _speechEndRequested.store(false, std::memory_order_relaxed);
+    _speechEndDetectedMs = 0;
     _segmentFinalized = false;
     clearRmsQueue();
 
@@ -229,6 +231,8 @@ void ContinuousListeningController::update() {
         while (popRms(queuedRms)) {
             bool ended = _vad.processRms(queuedRms, 32);
             if (ended) {
+                _speechEndDetectedMs = millis();
+                if (_speechEndDetectedMs == 0) _speechEndDetectedMs = 1;
                 _speechEndRequested.store(true, std::memory_order_release);
                 clearRmsQueue();
                 break;
@@ -241,7 +245,8 @@ void ContinuousListeningController::update() {
     // 3. Prise en compte de la demande de fin de parole issue du VAD
     if (_speechEndRequested.load(std::memory_order_acquire)) {
         _speechEndRequested.store(false, std::memory_order_relaxed);
-        if (_voice->isListening()) {
+        if (_voice && _voice->isListening()) {
+            _voice->notifySpeechEndDetected(_speechEndDetectedMs);
             _voice->stopListening();
             _stopListeningTimeMs = now;
             _segmentFinalized = false;

@@ -3302,12 +3302,310 @@ void test_v052_facade_connection_metrics_and_resilience() {
 }
 
 // =============================================================================
+// SUITES DE TESTS VoiceKit v0.5.3 (Voice Latency Optimization & Non-Regression)
+// =============================================================================
+
+// SUITE 61 : Structure VoiceLatencyMetrics et calculs dérivés stricts (zéro faux 0 ms)
+void test_v053_voice_latency_metrics_calculations() {
+    std::cout << "\n[TEST SUITE 61] VoiceLatencyMetrics : Calculs des durees et gestion des valeurs non observees" << std::endl;
+
+    VoiceLatencyMetrics m;
+    TEST_ASSERT(!m.hasSpeechEndDetected(), "speechEndDetected non observe par defaut");
+    TEST_ASSERT(!m.hasMicStopped(), "micStopped non observe par defaut");
+    TEST_ASSERT(!m.hasActivityEndSent(), "activityEndSent non observe par defaut");
+    TEST_ASSERT(!m.hasFirstResponseReceived(), "firstResponseReceived non observe par defaut");
+    TEST_ASSERT(!m.hasFirstAudioReceived(), "firstAudioReceived non observe par defaut");
+    TEST_ASSERT(!m.hasFirstAudioPlayed(), "firstAudioPlayed non observe par defaut");
+    TEST_ASSERT(!m.hasPlaybackFinished(), "playbackFinished non observe par defaut");
+
+    // RÈGLE ABSOLUE : Une valeur non observée doit renvoyer -1 (N/D) et JAMAIS 0 ms
+    TEST_ASSERT(m.getSpeechEndToMicStoppedMs() == -1, "getSpeechEndToMicStoppedMs renvoie -1 si non observe");
+    TEST_ASSERT(m.getMicStoppedToActivityEndMs() == -1, "getMicStoppedToActivityEndMs renvoie -1 si non observe");
+    TEST_ASSERT(m.getActivityEndToFirstAudioMs() == -1, "getActivityEndToFirstAudioMs renvoie -1 si non observe");
+    TEST_ASSERT(m.getActivityEndToFirstResponseMs() == -1, "getActivityEndToFirstResponseMs renvoie -1 si non observe");
+    TEST_ASSERT(m.getFirstAudioToPlaybackMs() == -1, "getFirstAudioToPlaybackMs renvoie -1 si non observe");
+    TEST_ASSERT(m.getSpeechEndToPlaybackMs() == -1, "getSpeechEndToPlaybackMs renvoie -1 si non observe");
+    TEST_ASSERT(m.getResponseLatencyMs() == -1, "getResponseLatencyMs renvoie -1 si non observe");
+    TEST_ASSERT(m.getTotalTurnDurationMs() == -1, "getTotalTurnDurationMs renvoie -1 si non observe");
+
+    // Simulation d'un tour vocal complet avec VAD local
+    m.turnStartedMs           = 10000;
+    m.speechEndDetectedMs     = 12400; // VAD local detecte fin de parole
+    m.micStoppedMs            = 12450; // Capture micro arretee 50 ms plus tard
+    m.activityEndSentMs       = 12470; // Paquet activityEnd emis sur WebSocket
+    m.firstResponseReceivedMs = 13100; // Premier retour Gemini (texte/metadata)
+    m.firstAudioReceivedMs    = 13200; // Premier paquet PCM recu de Gemini
+    m.firstAudioPlayedMs      = 13240; // Premier bloc PCM remis au DMA I2S (playRaw)
+    m.playbackFinishedMs      = 15500; // Restitution audio complete achevee
+
+    TEST_ASSERT(m.hasSpeechEndDetected(), "hasSpeechEndDetected true");
+    TEST_ASSERT(m.hasMicStopped(), "hasMicStopped true");
+    TEST_ASSERT(m.hasActivityEndSent(), "hasActivityEndSent true");
+    TEST_ASSERT(m.hasFirstResponseReceived(), "hasFirstResponseReceived true");
+    TEST_ASSERT(m.hasFirstAudioReceived(), "hasFirstAudioReceived true");
+    TEST_ASSERT(m.hasFirstAudioPlayed(), "hasFirstAudioPlayed true");
+    TEST_ASSERT(m.hasPlaybackFinished(), "hasPlaybackFinished true");
+
+    // Verification des 6 calculs derives
+    TEST_ASSERT(m.getSpeechEndToMicStoppedMs() == 50, "Fin parole -> Fin capture = 50 ms");
+    TEST_ASSERT(m.getMicStoppedToActivityEndMs() == 20, "Fin capture -> Notification Gemini = 20 ms");
+    TEST_ASSERT(m.getActivityEndToFirstAudioMs() == 730, "Notification Gemini -> Premier audio recu = 730 ms");
+    TEST_ASSERT(m.getActivityEndToFirstResponseMs() == 630, "Notification Gemini -> Premiere reponse = 630 ms");
+    TEST_ASSERT(m.getFirstAudioToPlaybackMs() == 40, "Premier audio recu -> Debut restitution DMA = 40 ms");
+    TEST_ASSERT(m.getSpeechEndToPlaybackMs() == 840, "Fin parole -> Debut restitution DMA = 840 ms");
+    TEST_ASSERT(m.getResponseLatencyMs() == 840, "getResponseLatencyMs avec VAD = 840 ms");
+    TEST_ASSERT(m.getTotalTurnDurationMs() == 5500, "Duree totale tour vocal = 5500 ms");
+
+    // Simulation sans VAD local (mode push-to-talk manuel avec bouton)
+    VoiceLatencyMetrics manualM;
+    manualM.turnStartedMs        = 20000;
+    manualM.speechEndDetectedMs  = 0;     // Non observe (bouton manuel)
+    manualM.micStoppedMs         = 23000; // Relachement bouton
+    manualM.activityEndSentMs    = 23025;
+    manualM.firstAudioReceivedMs = 23700;
+    manualM.firstAudioPlayedMs   = 23740;
+    manualM.playbackFinishedMs   = 25000;
+
+    TEST_ASSERT(manualM.getSpeechEndToMicStoppedMs() == -1, "Fin parole -> Fin capture est N/D (-1) sans VAD");
+    TEST_ASSERT(manualM.getSpeechEndToPlaybackMs() == -1, "Fin parole -> Restitution est N/D (-1) sans VAD");
+    TEST_ASSERT(manualM.getResponseLatencyMs() == 740, "getResponseLatencyMs replie sur micStopped en mode bouton (740 ms)");
+    TEST_ASSERT(manualM.getTotalTurnDurationMs() == 5000, "Duree totale = 5000 ms");
+
+    // Verification de la reinitialisation
+    m.reset();
+    TEST_ASSERT(!m.hasMicStopped(), "reset remet micStopped a 0");
+    TEST_ASSERT(!m.hasFirstAudioPlayed(), "reset remet firstAudioPlayed a 0");
+    TEST_ASSERT(m.getResponseLatencyMs() == -1, "reset remet getResponseLatencyMs a -1");
+}
+
+// SUITE 62 : Encodage et décodage Base64 optimisés (zéro allocation tas pendant le streaming)
+void test_v053_base64_optimization_integrity() {
+    std::cout << "\n[TEST SUITE 62] Optimisation Base64 : Encodage direct et conformite RFC 4648" << std::endl;
+
+    GeminiLiveClient client;
+
+    // Test 1 : Vecteurs de test standards RFC 4648
+    char buf[2048];
+    const uint8_t v1[] = "f";
+    size_t len1 = GeminiLiveClient::encodeBase64Direct(v1, 1, buf);
+    buf[len1] = '\0';
+    TEST_ASSERT(strcmp(buf, "Zg==") == 0, "Base64 RFC 'f' -> 'Zg=='");
+
+    const uint8_t v2[] = "fo";
+    size_t len2 = GeminiLiveClient::encodeBase64Direct(v2, 2, buf);
+    buf[len2] = '\0';
+    TEST_ASSERT(strcmp(buf, "Zm8=") == 0, "Base64 RFC 'fo' -> 'Zm8='");
+
+    const uint8_t v3[] = "foo";
+    size_t len3 = GeminiLiveClient::encodeBase64Direct(v3, 3, buf);
+    buf[len3] = '\0';
+    TEST_ASSERT(strcmp(buf, "Zm9v") == 0, "Base64 RFC 'foo' -> 'Zm9v'");
+
+    const uint8_t v4[] = "foobar";
+    size_t len4 = GeminiLiveClient::encodeBase64Direct(v4, 6, buf);
+    buf[len4] = '\0';
+    TEST_ASSERT(strcmp(buf, "Zm9vYmFy") == 0, "Base64 RFC 'foobar' -> 'Zm9vYmFy'");
+
+    // Test 2 : Encodage d'un bloc audio microphone réel (512 échantillons = 1024 octets)
+    int16_t micChunk[AUDIO_CHUNK_SAMPLES];
+    for (size_t i = 0; i < AUDIO_CHUNK_SAMPLES; ++i) {
+        micChunk[i] = static_cast<int16_t>(i * 37 - 9500);
+    }
+    const uint8_t* rawBytes = reinterpret_cast<const uint8_t*>(micChunk);
+    size_t rawLen = AUDIO_CHUNK_SAMPLES * sizeof(int16_t);
+
+    size_t outLen = GeminiLiveClient::encodeBase64Direct(rawBytes, rawLen, buf);
+    buf[outLen] = '\0';
+    size_t expectedLen = ((rawLen + 2) / 3) * 4;
+    TEST_ASSERT(outLen == expectedLen, "Taille Base64 exacte pour 1024 octets (1368 car)");
+
+    // Test 3 : Décodage et vérification de la parfaite intégrité bit-à-bit (zéro altération audio)
+    std::vector<uint8_t> decoded;
+    bool decOk = GeminiLiveClient::decodeBase64(buf, outLen, decoded);
+    TEST_ASSERT(decOk, "Decodage Base64 reussi");
+    TEST_ASSERT(decoded.size() == rawLen, "Taille decodee identique a l'original (1024 octets)");
+
+    bool dataMatches = (memcmp(rawBytes, decoded.data(), rawLen) == 0);
+    TEST_ASSERT(dataMatches, "Donnees audio PCM strictement identiques apres encodage/decodage");
+}
+
+// SUITE 63 : Expérimentation et configuration des seuils VAD (800, 1000, 1200 ms)
+void test_v053_vad_threshold_experimentation() {
+    std::cout << "\n[TEST SUITE 63] VAD : Experimentation controlee des seuils de silence (800, 1000, 1200 ms)" << std::endl;
+
+    ContinuousListeningController clc;
+
+    // 1. Valeur par défaut stricte : 1 200 ms
+    TEST_ASSERT(clc.getVadConfig().silenceDurationMs == 1200, "Seuil de silence par defaut = 1 200 ms");
+    TEST_ASSERT(clc.getVadConfig().minSpeechDurationMs == 200, "Validation debut parole = 200 ms");
+    TEST_ASSERT(clc.getVadConfig().maxSegmentDurationMs == 30000, "Duree max segment = 30 000 ms");
+
+    // 2. Configuration contrôlée à 800 ms
+    clc.setSilenceDurationMs(800);
+    TEST_ASSERT(clc.getVadConfig().silenceDurationMs == 800, "Seuil de silence configurable a 800 ms");
+
+    // 3. Configuration contrôlée à 1000 ms
+    clc.setSilenceDurationMs(1000);
+    TEST_ASSERT(clc.getVadConfig().silenceDurationMs == 1000, "Seuil de silence configurable a 1000 ms");
+
+    // 4. Rétablissement à 1200 ms
+    clc.setSilenceDurationMs(1200);
+    TEST_ASSERT(clc.getVadConfig().silenceDurationMs == 1200, "Seuil de silence retabli a 1200 ms");
+
+    // 5. Test temporel de pause : une pause naturelle de 500 ms NE DOIT PAS couper la parole
+    // même avec le seuil le plus réactif (800 ms)
+    VoiceActivityDetector vad;
+    VadConfig cfg;
+    cfg.minSpeechDurationMs = 200;
+    cfg.silenceDurationMs = 800; // seuil le plus agressif
+    cfg.maxSegmentDurationMs = 30000;
+    cfg.initialNoiseFloor = 200;
+    vad.setConfig(cfg);
+
+    // Initialisation du bruit de fond
+    for (int i = 0; i < 15; ++i) {
+        vad.processRms(200, 32);
+    }
+    TEST_ASSERT(!vad.isSpeechActive(), "Silence initial");
+
+    // Début de parole : 250 ms de voix à 1500 RMS (> 200 ms requis)
+    for (int i = 0; i < 8; ++i) {
+        vad.processRms(1500, 32);
+    }
+    TEST_ASSERT(vad.isSpeechActive(), "Parole active validee (> 200 ms)");
+
+    // Pause naturelle de 500 ms (15 blocs de 32 ms = 480 ms de silence à 200 RMS)
+    bool prematureCut = false;
+    for (int i = 0; i < 15; ++i) {
+        if (vad.processRms(200, 32)) {
+            prematureCut = true;
+            break;
+        }
+    }
+    TEST_ASSERT(!prematureCut, "Pause naturelle de 500 ms NON coupee avec seuil de 800 ms");
+    TEST_ASSERT(vad.isSpeechActive(), "La parole reste active pendant la pause de 500 ms");
+
+    // Reprise de parole après la pause
+    for (int i = 0; i < 5; ++i) {
+        vad.processRms(1500, 32);
+    }
+    TEST_ASSERT(vad.isSpeechActive(), "Parole toujours active apres reprise");
+
+    // Fin de parole : silence prolonge de 850 ms (> 800 ms)
+    bool ended = false;
+    for (int i = 0; i < 28; ++i) { // 28 * 32 ms = 896 ms
+        if (vad.processRms(200, 32)) {
+            ended = true;
+            break;
+        }
+    }
+    TEST_ASSERT(ended, "Fin de parole detectee apres depassement du seuil de 800 ms");
+}
+
+// SUITE 64 : Pipeline de latence en tour de conversation (Mode B)
+void test_v053_conversation_turn_latency_pipeline() {
+    std::cout << "\n[TEST SUITE 64] Pipeline de latence en tour de conversation (Mode B)" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_LATENCY_PIPE";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableConversation = true;
+
+    voice.begin(config);
+    voice.getClient().setTransport(&mockTransport);
+
+    mockTransport.connect("wss://example.com");
+    voice.update();
+
+    const char* setupJson = "{\"setupComplete\":{}}";
+    voice.getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    voice.update();
+
+    TEST_ASSERT(voice.isReady(), "Session prete");
+
+    ConversationController& conv = voice.getConversationController();
+
+    // 1. Démarrage du tour
+    bool startOk = conv.startTurn();
+    TEST_ASSERT(startOk, "startTurn() reussi");
+    TEST_ASSERT(conv.isTurnActive(), "Tour actif");
+    const auto& lat1 = conv.getLatencyMetrics();
+    TEST_ASSERT(lat1.turnStartedMs > 0, "turnStartedMs horodate");
+    TEST_ASSERT(!lat1.hasMicStopped(), "micStopped non encore defini");
+
+    // 2. Fin de capture audio
+    bool finishAudioOk = conv.finishTurnAudio();
+    TEST_ASSERT(finishAudioOk, "finishTurnAudio() reussi");
+    const auto& lat2 = conv.getLatencyMetrics();
+    TEST_ASSERT(lat2.hasMicStopped(), "micStoppedMs horodate apres finishTurnAudio");
+    TEST_ASSERT(lat2.micStoppedMs >= lat2.turnStartedMs, "micStoppedMs >= turnStartedMs");
+
+    // 3. Réception de la réponse Gemini Live (interim transcription + model audio)
+    const char* serverContent = "{\"serverContent\":{\"modelTurn\":{\"parts\":[{\"inlineData\":{\"mimeType\":\"audio/pcm;rate=24000\",\"data\":\"//8=\"}}]}}}";
+    voice.getClient().handleIncomingMessage(serverContent, strlen(serverContent));
+    voice.update();
+    conv.tick();
+
+    const auto& lat3 = conv.getLatencyMetrics();
+    TEST_ASSERT(lat3.hasFirstResponseReceived(), "firstResponseReceivedMs capture des reception JSON");
+    TEST_ASSERT(lat3.hasFirstAudioReceived(), "firstAudioReceivedMs capture des reception PCM");
+
+    // 4. Clôture propre du tour
+    conv.handleTurnFinished(1);
+    const auto& latFinal = conv.getLatencyMetrics();
+    TEST_ASSERT(latFinal.hasPlaybackFinished(), "playbackFinishedMs capture a la fin de restitution");
+    TEST_ASSERT(latFinal.getTotalTurnDurationMs() >= 0, "Duree totale valide >= 0");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// SUITE 65 : Façade VoiceKit v0.5.3 — Métriques de latence et préservation de l'intégrité audio
+void test_v053_facade_latency_and_audio_integrity() {
+    std::cout << "\n[TEST SUITE 65] Facade VoiceKit v0.5.3 : Exposition VoiceLatencyMetrics et integrite audio" << std::endl;
+
+    VoiceKit vk;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_FACADE_V053";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.vadSilenceDurationMs = 1200;
+
+    bool initOk = vk.begin(config);
+    TEST_ASSERT(initOk, "VoiceKit::begin() accepte la configuration v0.5.3");
+    TEST_ASSERT(vk.getVadSilenceDurationMs() == 1200, "VAD silence duration par defaut = 1200 ms");
+
+    // Modification du seuil VAD via la façade
+    vk.setVadSilenceDurationMs(1000);
+    TEST_ASSERT(vk.getVadSilenceDurationMs() == 1000, "VAD silence duration modifiee a 1000 ms");
+
+    vk.setVadSilenceDurationMs(800);
+    TEST_ASSERT(vk.getVadSilenceDurationMs() == 800, "VAD silence duration modifiee a 800 ms");
+
+    vk.setSilenceDurationMs(1200); // Test de l'alias
+    TEST_ASSERT(vk.getSilenceDurationMs() == 1200, "Alias setSilenceDurationMs retablit 1200 ms");
+
+    // Exposition des métriques de latence
+    const auto& lat = vk.getLatencyMetrics();
+    TEST_ASSERT(lat.getResponseLatencyMs() == -1, "Latence de reponse initialement N/D (-1)");
+
+    // Garanties d'intégrité audio VoxCore strictes (v0.5.3) :
+    // - Capacité du buffer PSRAM étendue à 120 000 échantillons (5,0 secondes)
+    // - Quadruple buffer DMA (4x40 ms = 160 ms de marge)
+    // - Format micro 16 kHz et format restitution 24 kHz strictement préservés
+    TEST_ASSERT(vk.getEngine().getPlayer().getBufferCapacity() == LIVE_AUDIO_RX_BUFFER_SAMPLES, "Buffer circulaire PSRAM de 120 000 echantillons preserve");
+    TEST_ASSERT(LiveAudioPlayer::DMA_BUFFER_COUNT == 4, "Quadruple tampon DMA preserve (4x40 ms)");
+    TEST_ASSERT(LiveAudioPlayer::DMA_CHUNK_SAMPLES == 960, "Blocs DMA de 960 echantillons = 40 ms a 24 kHz");
+    TEST_ASSERT(AUDIO_CHUNK_SAMPLES == 512, "Blocs micro de 512 echantillons = 32 ms a 16 kHz");
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.5.2    " << std::endl;
-    std::cout << "  Fast Connection, Instrumentation & Non-Regression Totale " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.5.3    " << std::endl;
+    std::cout << "  Voice Latency Optimization, Base64 & Non-Regression      " << std::endl;
     std::cout << "  Stabilisation FreeRTOS, Modes, VAD & Facade VoiceKit     " << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
     std::cout << "===========================================================" << std::endl;
@@ -3388,6 +3686,13 @@ int main() {
     test_v052_gemini_reconnect_network_conditioning();
     test_v052_startup_timing_instrumentation();
     test_v052_facade_connection_metrics_and_resilience();
+
+    // Nouvelles suites VoiceKit v0.5.3 (Voice Latency Optimization & Non-Regression)
+    test_v053_voice_latency_metrics_calculations();
+    test_v053_base64_optimization_integrity();
+    test_v053_vad_threshold_experimentation();
+    test_v053_conversation_turn_latency_pipeline();
+    test_v053_facade_latency_and_audio_integrity();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;
