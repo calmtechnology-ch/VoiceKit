@@ -7,6 +7,54 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.0] - 2026-10-26 (Multi-Fournisseurs — Intégration OpenAI Realtime & Préservation VoxCore)
+
+### Architecture Multi-Fournisseurs (`IVoiceProvider`)
+- **Contrat d'Abstraction Unifié** :
+  - Création de l'interface pure `IVoiceProvider` définissant le cycle de vie complet d'un fournisseur vocal : initialisation/connexion TLS (`connect`, `disconnect`, `isConnected`), configuration dynamique (`updateSessionConfig`), émission audio (`sendAudioChunk`, `commitAudio`), requêtes textuelles (`sendTextMessage`), contrôle de conversation (`createResponse`, `sendInterruption`), et enregistrement de callbacks standardisés (transcriptions STT/TTS, audio streaming RX, fin de réponse, fermeture, statut de session et erreurs).
+  - Fournisseur par défaut : `VoiceProviderType::GEMINI` (Google Gemini Live) pour une compatibilité ascendante stricte à 100%.
+  - Fournisseur alternatif : `VoiceProviderType::OPENAI` (OpenAI Realtime API).
+  - Sélection transparente via `VoiceKitConfig` : `config.provider = VoiceProviderType::OPENAI;` sans aucune modification nécessaire dans le code applicatif.
+
+### Client Natif OpenAI Realtime (`OpenAIRealtimeClient`)
+- **Connexion WebSocket TLS Directe ESP32-S3** :
+  - Connexion sécurisée sur l'endpoint officiel `wss://api.openai.com/v1/realtime?model=<model>` (par défaut `gpt-realtime-2.1-mini`).
+  - Authentification sécurisée par en-têtes HTTP `Authorization: Bearer <OPENAI_API_KEY>` et `OpenAI-Beta: realtime=v1`.
+  - Intégration du bundle de certificats officiels DigiCert (`OpenAIRoots.h`).
+  - Masquage systématique des clés d'API dans les logs de débogage et protection des secrets.
+- **Protocole Realtime Bidi** :
+  - Négociation de session via `session.update` dès réception de `session.created` (désactivation du turn_detection serveur pour laisser la priorité au VAD local matériel de VoiceKit, voix `alloy`, modèle de transcription `whisper-1`).
+  - Streaming audio montant : encodage Base64 direct et émission d'événements `input_audio_buffer.append`.
+  - Contrôle de tour : envoi automatique de `input_audio_buffer.commit` suivi de `response.create` lors de la détection de fin de parole.
+  - Streaming audio descendant : réception des événements `response.audio.delta`, décodage Base64 optimisé et injection dans le tampon PSRAM du lecteur VoxCore.
+  - Gestion des transcriptions : extraction asynchrone des transcriptions utilisateur Whisper (`conversation.item.input_audio_transcription.completed`) et assistant (`response.audio_transcript.delta` / `done`).
+  - Interruption prioritaire STOP : émission immédiate de `response.cancel` et `input_audio_buffer.clear` avec vidage instantané du buffer de restitution.
+
+### Rééchantillonnage Audio Dédié (`AudioResampler`)
+- **Conversion 16 kHz vers 24 kHz Non-Bloquante** :
+  - Conception d'un rééchantillonneur linéaire haute performance en arithmétique entière à virgule fixe (`(x0 + 2*x1)/3`, `(2*x1 + x2)/3`).
+  - Conversion par blocs de capture micro (512 échantillons 16 kHz $\to$ 768 échantillons 24 kHz pour OpenAI).
+  - Traitement en moins de 15 µs sur ESP32-S3 Core 1, n'impactant aucunement la tâche audio critique FreeRTOS.
+
+### Préservation Intégrale du Moteur Audio VoxCore
+- **Stabilité Audio & Zéro Coupure Finale** :
+  - Conservation intégrale de la tâche FreeRTOS audio dédiée (Mode 2), des buffers DMA I2S et du tampon circulaire PSRAM de 120 000 échantillons (~5 secondes d'audio).
+  - L'événement `response.done` (OpenAI comme Gemini) signale la fin de la génération serveur mais ne coupe jamais la restitution : vidage exact jusqu'au tout dernier échantillon PCM.
+  - Préservation certifiée du test de prononciation « Cette phrase se termine par alpha tango terminé » sans coupure de la syllabe finale.
+
+### Nouvel Exemple `OpenAIConversation`
+- **Démonstration Minimaliste sans LVGL** :
+  - `examples/OpenAIConversation/` : conversation bidirectionnelle en français avec OpenAI Realtime sur M5Stack CoreS3.
+  - Indicateur d'état, capture microphone continue avec VAD local, restitution haut-parleur AW88298, transcription console et interruption par bouton tactile.
+
+### Validation & Non-Régression
+- **11 Nouvelles Suites de Tests (Suites 69 à 79)** :
+  - Validation de `IVoiceProvider`, `AudioResampler`, `OpenAIRealtimeClient`, négociation `session.update`, encodage/décodage Base64, streaming bidirectionnel, transcriptions Whisper, arrêt STOP, gestion des erreurs et reconnexion.
+  - **1047 tests unitaires réussis avec 0 échec**.
+  - Compilation PlatformIO validée à 100% sur `OpenAIConversation`, `MinimalConversation`, `MinimalTTS` et `MinimalSTT`.
+
+---
+
 ## [0.5.3.1] - 2026-10-26 (Consolidation & Validation — Fiabilisation, Documentation & Métriques)
 
 ### Consolidation & Correction des Incohérences Documentaires

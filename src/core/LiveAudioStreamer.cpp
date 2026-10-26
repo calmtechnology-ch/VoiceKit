@@ -1,4 +1,5 @@
 #include "LiveAudioStreamer.h"
+#include "core/GeminiVoiceProvider.h"
 #include "hal/HardwareManager.h"
 #include <cstring>
 #include <cmath>
@@ -249,8 +250,8 @@ void LiveAudioStreamer::txTaskLoop() {
 
                 uint32_t sendStartUs = micros();
                 bool sent = false;
-                if (_client && _client->isConnected()) {
-                    sent = _client->sendAudioChunk(_ringBuffers[slot].samples, AUDIO_CHUNK_SAMPLES);
+                if (_provider && _provider->isConnected()) {
+                    sent = _provider->sendAudioChunk(_ringBuffers[slot].samples, AUDIO_CHUNK_SAMPLES);
                 }
                 uint32_t sendDurationUs = micros() - sendStartUs;
 
@@ -273,7 +274,7 @@ void LiveAudioStreamer::txTaskLoop() {
                 } else {
                     _sendRefusedCount++;
                     _lastTxStatus = LiveTxStatus::TX_SEND_FAILED;
-                    if (_client && !_client->isConnected()) {
+                    if (_provider && !_provider->isConnected()) {
                         _isStreaming = false;
                         strncpy(_lastError, "WebSocket deconnecte pendant streaming", sizeof(_lastError));
                         break;
@@ -291,8 +292,8 @@ void LiveAudioStreamer::txTaskLoop() {
                           (unsigned)_blocksDropped, liveTxStatusToString(_lastTxStatus));
             strncpy(_lastError, "Echec transmission : blocs perdus avant activityEnd", sizeof(_lastError));
         } else {
-            if (_client && _client->isConnected()) {
-                if (_client->sendActivityEnd()) {
+            if (_provider && _provider->isConnected()) {
+                if (_provider->sendActivityEnd()) {
                     _activityEndSent = true;
                     _activityEndSentMs = millis();
                     if (_activityEndSentMs == 0) _activityEndSentMs = 1;
@@ -459,8 +460,15 @@ void LiveAudioStreamer::micTaskLoop() {
 #endif
 
 bool LiveAudioStreamer::start(GeminiLiveClient* client) {
-    if (!client || !client->isConnected() || !client->isSetupComplete()) {
-        strncpy(_lastError, "Client Gemini Live non pret", sizeof(_lastError));
+    if (!client) return false;
+    _legacyClient = client;
+    _legacyAdapter = std::unique_ptr<IVoiceProvider>(new GeminiVoiceProvider(client));
+    return start(_legacyAdapter.get());
+}
+
+bool LiveAudioStreamer::start(IVoiceProvider* provider) {
+    if (!provider || !provider->isConnected() || !provider->isSetupComplete()) {
+        strncpy(_lastError, "Fournisseur vocal non pret", sizeof(_lastError));
         _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
         return false;
     }
@@ -490,7 +498,7 @@ bool LiveAudioStreamer::start(GeminiLiveClient* client) {
         _ringBuffers[i].state = LiveBufferState::FREE;
     }
 
-    _client = client;
+    _provider = provider;
     _queueSaturated = false;
     _stopDrainRequested = false;
     _lastError[0] = '\0';
@@ -583,7 +591,7 @@ bool LiveAudioStreamer::start(GeminiLiveClient* client) {
 
     // Signalisation du début d'activité vocale officielle selon le protocole Gemini Live
     // Garantit l'ordonnancement strict : activityStart AVANT tout bloc audio (Correction B)
-    if (_client->sendActivityStart()) {
+    if (_provider->sendActivityStart()) {
         _activityStartSent = true;
     }
 
@@ -699,7 +707,7 @@ bool LiveAudioStreamer::start(GeminiLiveClient* client) {
 }
 
 bool LiveAudioStreamer::tick() {
-    if (!_isStreaming || !_client) return false;
+    if (!_isStreaming || !_provider) return false;
 
     // Détection de saturation de la file (si le réseau est plus lent que le micro)
     if (_queueSaturated) {
@@ -745,7 +753,7 @@ bool LiveAudioStreamer::tick() {
         _ringBuffers[slot].state = LiveBufferState::SENDING;
 
         uint32_t sendStartUs = micros();
-        bool sent = _client->sendAudioChunk(_ringBuffers[slot].samples, AUDIO_CHUNK_SAMPLES);
+        bool sent = _provider->sendAudioChunk(_ringBuffers[slot].samples, AUDIO_CHUNK_SAMPLES);
         uint32_t sendDurationUs = micros() - sendStartUs;
 
         _lastSendDurationUs = sendDurationUs;
@@ -809,13 +817,13 @@ bool LiveAudioStreamer::stop() {
         Serial.println("[LiveStreamer] AVERTISSEMENT : La tache TX ne s'est pas arretee dans le delai imparti ! Tampons maintenus en quarantaine.");
     }
 #else
-    if (_client && _client->isConnected() && _lastTxStatus != LiveTxStatus::TX_STOP_REQUESTED) {
+    if (_provider && _provider->isConnected() && _lastTxStatus != LiveTxStatus::TX_STOP_REQUESTED) {
         bool sendFailed = false;
         while (!_nativeTxQueue.empty()) {
             size_t slot = _nativeTxQueue.front();
             _nativeTxQueue.pop();
             _ringBuffers[slot].state = LiveBufferState::SENDING;
-            if (_client->sendAudioChunk(_ringBuffers[slot].samples, AUDIO_CHUNK_SAMPLES)) {
+            if (_provider->sendAudioChunk(_ringBuffers[slot].samples, AUDIO_CHUNK_SAMPLES)) {
                 _chunksSent++;
                 _bytesSent += AUDIO_CHUNK_SAMPLES * sizeof(int16_t);
             } else {
@@ -826,7 +834,7 @@ bool LiveAudioStreamer::stop() {
             _ringBuffers[slot].state = LiveBufferState::FREE;
         }
         if (!sendFailed && _blocksDropped == 0 && !_queueSaturated) {
-            if (_client->sendActivityEnd()) {
+            if (_provider->sendActivityEnd()) {
                 _activityEndSent = true;
                 _activityEndSentMs = millis();
                 if (_activityEndSentMs == 0) _activityEndSentMs = 1;

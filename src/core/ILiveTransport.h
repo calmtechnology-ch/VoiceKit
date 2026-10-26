@@ -18,7 +18,7 @@ public:
 
     virtual ~ILiveTransport() = default;
 
-    virtual bool connect(const char* uri, const char* certPem = nullptr) = 0;
+    virtual bool connect(const char* uri, const char* certPem = nullptr, const char* extraHeaders = nullptr) = 0;
     virtual void disconnect() = 0;
     virtual bool isConnected() const = 0;
     virtual bool send(const char* data, size_t len) = 0;

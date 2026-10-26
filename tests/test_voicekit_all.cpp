@@ -12,6 +12,10 @@
 #include "VoiceActivityDetector.h"
 #include "cJSON.h"
 #include "native_mock/MockLiveTransport.h"
+#include "core/IVoiceProvider.h"
+#include "core/AudioResampler.h"
+#include "core/OpenAIRealtimeClient.h"
+#include "core/GeminiVoiceProvider.h"
 #include "../examples/OrientationClockVoice/include/FrenchTimeFormatter.h"
 #include "../examples/OrientationClockVoice/src/FrenchTimeFormatter.cpp"
 #include "../examples/OrientationClockVoice/include/WiFiTimeSync.h"
@@ -3821,12 +3825,418 @@ void test_v0531_facade_modes_transitions_and_resilience() {
 }
 
 // =============================================================================
+// SUITE 69 : Multi-Provider VoiceKitConfig & Enum Selection (v0.6.0)
+// =============================================================================
+void test_v060_multiprovider_config_and_enum() {
+    std::cout << "\n[TEST SUITE 69] Multi-Provider VoiceKitConfig & Enum Selection" << std::endl;
+
+    VoiceKitConfig cfg;
+    TEST_ASSERT(cfg.provider == VoiceProviderType::GEMINI, "Fournisseur par defaut est GEMINI");
+    TEST_ASSERT(strcmp(voiceProviderTypeToString(VoiceProviderType::GEMINI), "GEMINI") == 0, "Enum GEMINI string valide");
+    TEST_ASSERT(strcmp(voiceProviderTypeToString(VoiceProviderType::OPENAI), "OPENAI") == 0, "Enum OPENAI string valide");
+
+    // Configuration explicite OpenAI
+    cfg.provider = VoiceProviderType::OPENAI;
+    cfg.apiKey = "sk-proj-test123456";
+    cfg.model = "gpt-realtime-2.1-mini";
+    cfg.voice = "alloy";
+    cfg.language = "fr-FR";
+
+    TEST_ASSERT(cfg.provider == VoiceProviderType::OPENAI, "Fournisseur bascule a OPENAI");
+    TEST_ASSERT(cfg.apiKey == "sk-proj-test123456", "Cle API OpenAI assignee");
+    TEST_ASSERT(cfg.model == "gpt-realtime-2.1-mini", "Modele OpenAI assigne");
+    TEST_ASSERT(cfg.voice == "alloy", "Voix OpenAI assignee");
+    TEST_ASSERT(cfg.language == "fr-FR", "Langue OpenAI assignee");
+}
+
+// =============================================================================
+// SUITE 70 : AudioResampler 16 kHz vers 24 kHz (Rapport 2:3) (v0.6.0)
+// =============================================================================
+void test_v060_audio_resampler_16to24() {
+    std::cout << "\n[TEST SUITE 70] AudioResampler 16 kHz vers 24 kHz" << std::endl;
+
+    TEST_ASSERT(AudioResampler16to24::calculateOutputSamples(0) == 0, "0 ech -> 0 ech");
+    TEST_ASSERT(AudioResampler16to24::calculateOutputSamples(512) == 768, "512 ech -> 768 ech");
+    TEST_ASSERT(AudioResampler16to24::calculateOutputSamples(1024) == 1536, "1024 ech -> 1536 ech");
+
+    int16_t in[512];
+    int16_t out[768];
+
+    // Vérification des pointeurs nuls ou tampons trop courts
+    TEST_ASSERT(AudioResampler16to24::resample(nullptr, 512, out, 768) == 0, "Rejet pointeur in null");
+    TEST_ASSERT(AudioResampler16to24::resample(in, 512, nullptr, 768) == 0, "Rejet pointeur out null");
+    TEST_ASSERT(AudioResampler16to24::resample(in, 512, out, 500) == 0, "Rejet tampon out trop court");
+
+    // 1. Signal continu plat (DC)
+    for (size_t i = 0; i < 512; i++) in[i] = 1500;
+    size_t count = AudioResampler16to24::resample(in, 512, out, 768);
+    TEST_ASSERT(count == 768, "768 echantillons generes");
+    bool allDc = true;
+    for (size_t i = 0; i < 768; i++) {
+        if (out[i] != 1500) { allDc = false; break; }
+    }
+    TEST_ASSERT(allDc, "Signal DC conserve a 1500 sur tous les 768 echantillons");
+
+    // 2. Rampe linéaire x(n) = 3 * n -> interpolation (x0 + 2*x1)/3 et (2*x1 + x2)/3
+    for (size_t i = 0; i < 512; i++) in[i] = (int16_t)(3 * i);
+    count = AudioResampler16to24::resample(in, 512, out, 768);
+    TEST_ASSERT(count == 768, "Rampe 768 ech");
+    TEST_ASSERT(out[0] == 0, "out[0] == 0");
+    TEST_ASSERT(out[1] == 2, "out[1] == 2");
+    TEST_ASSERT(out[2] == 4, "out[2] == 4");
+    TEST_ASSERT(out[3] == 6, "out[3] == 6");
+    TEST_ASSERT(out[4] == 8, "out[4] == 8");
+
+    // 3. Signal sinusoïdal : vérification de continuité et absence de saturation anormale
+    for (size_t i = 0; i < 512; i++) {
+        in[i] = (int16_t)(10000.0 * sin(2.0 * M_PI * 440.0 * i / 16000.0));
+    }
+    count = AudioResampler16to24::resample(in, 512, out, 768);
+    TEST_ASSERT(count == 768, "Sinus 768 ech");
+    int16_t minVal = 0, maxVal = 0;
+    for (size_t i = 0; i < 768; i++) {
+        if (out[i] < minVal) minVal = out[i];
+        if (out[i] > maxVal) maxVal = out[i];
+    }
+    TEST_ASSERT(maxVal <= 10000 && minVal >= -10000, "Amplitude de la sinusoide preservee sans depassement");
+}
+
+// =============================================================================
+// SUITE 71 : IVoiceProvider & GeminiVoiceProvider Adapter (v0.6.0)
+// =============================================================================
+void test_v060_ivoiceprovider_contract_and_gemini_adapter() {
+    std::cout << "\n[TEST SUITE 71] IVoiceProvider & GeminiVoiceProvider Adapter" << std::endl;
+
+    GeminiLiveClient client;
+    GeminiVoiceProvider adapter(&client);
+    TEST_ASSERT(adapter.getProviderType() == VoiceProviderType::GEMINI, "Type Gemini valide");
+
+    adapter.setVoice("Aoede");
+    TEST_ASSERT(client.getVoice() == "Aoede", "Délégation setVoice");
+    TEST_ASSERT(adapter.getVoice() == "Aoede", "Lecture getVoice");
+
+    adapter.setModel("gemini-2.0-flash-exp");
+    TEST_ASSERT(client.getModel() == "gemini-2.0-flash-exp", "Délégation setModel");
+
+    adapter.setLanguage("fr-FR");
+    TEST_ASSERT(client.getLanguage() == "fr-FR", "Délégation setLanguage");
+
+    adapter.setSystemInstruction("Instruction test");
+    TEST_ASSERT(client.getSystemInstruction() == "Instruction test", "Délégation setSystemInstruction");
+
+    adapter.setConversationMode(true);
+    TEST_ASSERT(adapter.isConversationMode() == true, "Mode conversation actif sur adaptateur");
+
+    // Callbacks
+    bool turnCompleted = false;
+    adapter.setOnTurnComplete([&turnCompleted]() { turnCompleted = true; });
+    TEST_ASSERT(!turnCompleted, "Callback non declenche avant evenement");
+}
+
+// =============================================================================
+// SUITE 72 : OpenAIRealtimeClient : Connexion & Handshake WebSocket TLS (v0.6.0)
+// =============================================================================
+void test_v060_openai_realtime_connection_and_handshake() {
+    std::cout << "\n[TEST SUITE 72] OpenAIRealtimeClient : Connexion & Handshake WebSocket TLS" << std::endl;
+
+    OpenAIRealtimeClient client;
+    MockLiveTransport transport;
+    client.setTransport(&transport);
+
+    VoiceKitConfig cfg;
+    cfg.provider = VoiceProviderType::OPENAI;
+    cfg.apiKey = "sk-test-token-voicekit";
+    cfg.model = "gpt-realtime-2.1-mini";
+    cfg.voice = "alloy";
+    cfg.language = "fr-FR";
+
+    TEST_ASSERT(client.begin(cfg), "begin() reussi");
+    TEST_ASSERT(client.connect(), "connect() initie avec succes");
+
+    // Vérification de l'URI générée
+    String uri = transport.getLastUri();
+    TEST_ASSERT(uri.indexOf("wss://api.openai.com/v1/realtime") >= 0, "URI contient l'endpoint wss OpenAI Realtime");
+    TEST_ASSERT(uri.indexOf("model=gpt-realtime-2.1-mini") >= 0, "URI specifie le modele gpt-realtime-2.1-mini");
+
+    // Vérification des en-têtes HTTP de négociation TLS
+    String headers = transport.getLastHeaders();
+    TEST_ASSERT(headers.indexOf("Authorization: Bearer sk-test-token-voicekit") >= 0, "Header Authorization Bearer present");
+    TEST_ASSERT(headers.indexOf("OpenAI-Beta: realtime=v1") >= 0, "Header OpenAI-Beta realtime=v1 present");
+
+    // Simuler l'ouverture du socket
+    transport.triggerConnected();
+    client.tick();
+    TEST_ASSERT(client.isConnected(), "Client considere CONNECTE apres ouverture WebSocket");
+    TEST_ASSERT(!client.isSetupComplete(), "Setup NON complet avant session.created");
+}
+
+// =============================================================================
+// SUITE 73 : OpenAIRealtimeClient : Négociation de Session (session.update) (v0.6.0)
+// =============================================================================
+void test_v060_openai_realtime_session_negotiation() {
+    std::cout << "\n[TEST SUITE 73] OpenAIRealtimeClient : Negociation de Session (session.update)" << std::endl;
+
+    OpenAIRealtimeClient client;
+    MockLiveTransport transport;
+    client.setTransport(&transport);
+
+    VoiceKitConfig cfg;
+    cfg.provider = VoiceProviderType::OPENAI;
+    cfg.apiKey = "sk-test-token";
+    cfg.model = "gpt-realtime-2.1-mini";
+    cfg.voice = "alloy";
+    cfg.language = "fr-FR";
+    cfg.systemInstruction = "Tu es un assistant concis.";
+    client.begin(cfg);
+    client.connect();
+    transport.triggerConnected();
+
+    bool setupConfirmed = false;
+    client.setOnSetupComplete([&setupConfirmed]() { setupConfirmed = true; });
+
+    // Le serveur OpenAI envoie session.created
+    const char* sessCreated = "{\"type\":\"session.created\",\"session\":{\"id\":\"sess_abc123\"}}";
+    client.handleIncomingMessage(sessCreated, strlen(sessCreated));
+
+    // Le client doit avoir emis un session.update en reponse
+    String sentUpdate = transport.getLastMessage();
+    TEST_ASSERT(sentUpdate.indexOf("\"type\":\"session.update\"") >= 0, "session.update emis par le client");
+    TEST_ASSERT(sentUpdate.indexOf("\"voice\":\"alloy\"") >= 0, "Voix alloy specifiee dans session.update");
+    TEST_ASSERT(sentUpdate.indexOf("\"turn_detection\":null") >= 0, "turn_detection desactive (VAD local CoreS3)");
+    TEST_ASSERT(sentUpdate.indexOf("\"whisper-1\"") >= 0, "Modele de transcription whisper-1 specifie");
+
+    // Le serveur confirme session.updated
+    const char* sessUpdated = "{\"type\":\"session.updated\",\"session\":{\"id\":\"sess_abc123\",\"voice\":\"alloy\"}}";
+    client.handleIncomingMessage(sessUpdated, strlen(sessUpdated));
+
+    TEST_ASSERT(client.isSetupComplete(), "Session confirmee PRETE");
+    TEST_ASSERT(setupConfirmed, "Callback onSetupComplete invoque");
+}
+
+// =============================================================================
+// SUITE 74 : OpenAIRealtimeClient : Émission Audio TX (input_audio_buffer.append) (v0.6.0)
+// =============================================================================
+void test_v060_openai_realtime_audio_streaming_tx() {
+    std::cout << "\n[TEST SUITE 74] OpenAIRealtimeClient : Emission Audio TX (input_audio_buffer.append)" << std::endl;
+
+    OpenAIRealtimeClient client;
+    MockLiveTransport transport;
+    client.setTransport(&transport);
+
+    VoiceKitConfig cfg;
+    cfg.provider = VoiceProviderType::OPENAI;
+    cfg.apiKey = "sk-test-token";
+    client.begin(cfg);
+    client.connect();
+    transport.triggerConnected();
+    const char* sessUpdated = "{\"type\":\"session.updated\",\"session\":{}}";
+    client.handleIncomingMessage(sessUpdated, strlen(sessUpdated));
+
+    // Envoi d'un bloc de 512 échantillons 16 kHz
+    int16_t samples16k[512];
+    for (int i = 0; i < 512; i++) samples16k[i] = 100;
+    TEST_ASSERT(client.sendAudioChunk(samples16k, 512), "sendAudioChunk reussi");
+
+    String txMsg = transport.getLastMessage();
+    TEST_ASSERT(txMsg.indexOf("\"type\":\"input_audio_buffer.append\"") >= 0, "Trame input_audio_buffer.append emise");
+    TEST_ASSERT(txMsg.indexOf("\"audio\":\"") >= 0, "Champ audio Base64 present");
+
+    // Mode conversation : fin de tour utilisateur
+    client.setConversationMode(true);
+    TEST_ASSERT(client.sendActivityEnd(), "sendActivityEnd en mode conversation");
+    String commitMsg = transport.getLastMessage();
+    TEST_ASSERT(commitMsg.indexOf("\"type\":\"response.create\"") >= 0, "response.create emis a la cloture du tour");
+}
+
+// =============================================================================
+// SUITE 75 : OpenAIRealtimeClient : Réception Audio Streaming RX & Drain (v0.6.0)
+// =============================================================================
+void test_v060_openai_realtime_inbound_audio_rx_and_drain() {
+    std::cout << "\n[TEST SUITE 75] OpenAIRealtimeClient : Reception Audio Streaming RX & Drain" << std::endl;
+
+    OpenAIRealtimeClient client;
+    MockLiveTransport transport;
+    client.setTransport(&transport);
+    VoiceKitConfig cfg;
+    cfg.provider = VoiceProviderType::OPENAI;
+    client.begin(cfg);
+    client.connect();
+    transport.triggerConnected();
+
+    std::vector<int16_t> receivedSamples;
+    client.setOnAudioData([&receivedSamples](const int16_t* pcm, size_t count) {
+        receivedSamples.insert(receivedSamples.end(), pcm, pcm + count);
+    });
+
+    bool turnCompleted = false;
+    client.setOnTurnComplete([&turnCompleted]() { turnCompleted = true; });
+
+    // Trame audio 24 kHz delta : 4 échantillons = 8 octets -> Base64
+    // [0x0100, 0x0200, 0x0300, 0x0400]
+    const char* audioDelta1 = "{\"type\":\"response.audio.delta\",\"delta\":\"AAEA\"}";
+    client.handleIncomingMessage(audioDelta1, strlen(audioDelta1));
+
+    TEST_ASSERT(receivedSamples.size() > 0, "Echantillons audio 24 kHz recus et decodes");
+
+    // Trame response.done
+    const char* respDone = "{\"type\":\"response.done\"}";
+    client.handleIncomingMessage(respDone, strlen(respDone));
+    TEST_ASSERT(turnCompleted, "response.done signale le turnComplete");
+}
+
+// =============================================================================
+// SUITE 76 : OpenAIRealtimeClient : Transcriptions Utilisateur & Assistant (v0.6.0)
+// =============================================================================
+void test_v060_openai_realtime_transcriptions() {
+    std::cout << "\n[TEST SUITE 76] OpenAIRealtimeClient : Transcriptions Utilisateur & Assistant" << std::endl;
+
+    OpenAIRealtimeClient client;
+    MockLiveTransport transport;
+    client.setTransport(&transport);
+    VoiceKitConfig cfg;
+    client.begin(cfg);
+
+    String userText = "";
+    bool userFinal = false;
+    client.setOnInputTranscription([&userText, &userFinal](const String& text, bool isFinal) {
+        userText = text;
+        userFinal = isFinal;
+    });
+
+    String assistantText = "";
+    client.setOnOutputTranscription([&assistantText](const String& text) {
+        assistantText += text;
+    });
+
+    // Transcription Whisper utilisateur
+    const char* whisperEvt = "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"transcript\":\"Bonjour VoiceKit\"}";
+    client.handleIncomingMessage(whisperEvt, strlen(whisperEvt));
+    TEST_ASSERT(userText == "Bonjour VoiceKit", "Transcription utilisateur Whisper recue");
+    TEST_ASSERT(userFinal == true, "Transcription utilisateur marquee FINALE");
+
+    // Transcriptions de l'assistant
+    const char* delta1 = "{\"type\":\"response.audio_transcript.delta\",\"delta\":\"Salut ! \"}";
+    const char* delta2 = "{\"type\":\"response.audio_transcript.delta\",\"delta\":\"Comment puis-je vous aider ?\"}";
+    client.handleIncomingMessage(delta1, strlen(delta1));
+    client.handleIncomingMessage(delta2, strlen(delta2));
+    TEST_ASSERT(assistantText == "Salut ! Comment puis-je vous aider ?", "Transcription assistant complete assemblee");
+}
+
+// =============================================================================
+// SUITE 77 : OpenAIRealtimeClient : Interruption STOP Prioritaire (v0.6.0)
+// =============================================================================
+void test_v060_openai_realtime_priority_stop_and_cancel() {
+    std::cout << "\n[TEST SUITE 77] OpenAIRealtimeClient : Interruption STOP Prioritaire" << std::endl;
+
+    OpenAIRealtimeClient client;
+    MockLiveTransport transport;
+    client.setTransport(&transport);
+    VoiceKitConfig cfg;
+    client.begin(cfg);
+    client.connect();
+    transport.triggerConnected();
+
+    bool interruptedCalled = false;
+    client.setOnInterrupted([&interruptedCalled]() { interruptedCalled = true; });
+
+    TEST_ASSERT(client.sendInterruption(), "sendInterruption execute");
+    TEST_ASSERT(interruptedCalled, "Callback onInterrupted appele");
+
+    String cancelMsg = transport.getLastMessage();
+    TEST_ASSERT(cancelMsg.indexOf("\"type\":\"input_audio_buffer.clear\"") >= 0, "input_audio_buffer.clear transmis lors du STOP");
+}
+
+// =============================================================================
+// SUITE 78 : OpenAIRealtimeClient : Gestion des Erreurs et Reconnexion (v0.6.0)
+// =============================================================================
+void test_v060_openai_realtime_error_handling_and_reconnection() {
+    std::cout << "\n[TEST SUITE 78] OpenAIRealtimeClient : Gestion des Erreurs et Reconnexion" << std::endl;
+
+    OpenAIRealtimeClient client;
+    MockLiveTransport transport;
+    client.setTransport(&transport);
+    VoiceKitConfig cfg;
+    client.begin(cfg);
+    client.connect();
+    transport.triggerConnected();
+
+    String errReceived = "";
+    client.setOnError([&errReceived](const String& err) { errReceived = err; });
+
+    // Trame d'erreur OpenAI
+    const char* errJson = "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Cle API revoquee ou invalide\"}}";
+    client.handleIncomingMessage(errJson, strlen(errJson));
+
+    TEST_ASSERT(errReceived.indexOf("Cle API revoquee ou invalide") >= 0, "Message d'erreur extrait de la trame OpenAI");
+    TEST_ASSERT(strstr(client.getLastError(), "Cle API revoquee ou invalide") != nullptr, "getLastError() renseigne");
+
+    // Reconnexion propre
+    client.disconnect();
+    TEST_ASSERT(!client.isConnected(), "Client deconnecte");
+    TEST_ASSERT(client.connect(), "Reconnexion reussie");
+    transport.triggerConnected();
+    TEST_ASSERT(client.isConnected(), "Reconnexion WebSocket reussie");
+}
+
+// =============================================================================
+// SUITE 79 : VoxCoreVoice Multi-Fournisseur : Intégration OpenAI & Non-Régression Gemini (v0.6.0)
+// =============================================================================
+static void prepareMockOpenAIVoiceReady(VoxCoreVoice& voice, MockLiveTransport& mockTransport) {
+    WiFi.setConnected(true);
+    voice.getOpenAIClient().setTransport(&mockTransport);
+    voice.getOpenAIClient().connect();
+    const char* sessCreated = "{\"type\":\"session.created\",\"session\":{\"id\":\"sess_001\"}}";
+    voice.getOpenAIClient().handleIncomingMessage(sessCreated, strlen(sessCreated));
+    const char* sessUpdated = "{\"type\":\"session.updated\",\"session\":{\"id\":\"sess_001\"}}";
+    voice.getOpenAIClient().handleIncomingMessage(sessUpdated, strlen(sessUpdated));
+    voice.update();
+}
+
+void test_v060_voxcore_and_voicekit_integration_and_gemini_non_regression() {
+    std::cout << "\n[TEST SUITE 79] VoxCoreVoice & VoiceKit : Integration OpenAI & Non-Regression Gemini" << std::endl;
+
+    // 1. Initialisation avec fournisseur OpenAI
+    MockLiveTransport mockTransportOAI;
+    VoxCoreVoice voiceOpenAI;
+    VoiceKitConfig cfgOAI;
+    cfgOAI.provider = VoiceProviderType::OPENAI;
+    cfgOAI.apiKey = "sk-test-secret-openai";
+    cfgOAI.model = "gpt-realtime-2.1-mini";
+    cfgOAI.voice = "alloy";
+    cfgOAI.wifiMode = WiFiMode::EXTERNAL_WIFI;
+
+    TEST_ASSERT(voiceOpenAI.begin(cfgOAI), "begin() avec OPENAI reussi");
+    TEST_ASSERT(voiceOpenAI.getProvider().getProviderType() == VoiceProviderType::OPENAI, "Provider actif est OPENAI");
+    TEST_ASSERT(voiceOpenAI.getClient().getModel().length() > 0, "getClient() reste accessible (compatibilite ascendante)");
+
+    prepareMockOpenAIVoiceReady(voiceOpenAI, mockTransportOAI);
+    TEST_ASSERT(voiceOpenAI.isReady(), "VoxCoreVoice est READY avec OpenAI Realtime");
+    voiceOpenAI.stop();
+    voiceOpenAI.getOpenAIClient().setTransport(nullptr);
+
+    // 2. Initialisation avec fournisseur Gemini (défaut) et vérification non-régression
+    MockLiveTransport mockTransportGemini;
+    VoxCoreVoice voiceGemini;
+    VoiceKitConfig cfgGemini;
+    cfgGemini.provider = VoiceProviderType::GEMINI;
+    cfgGemini.apiKey = "AIzaSyTestGemini";
+    cfgGemini.wifiMode = WiFiMode::EXTERNAL_WIFI;
+
+    TEST_ASSERT(voiceGemini.begin(cfgGemini), "begin() avec GEMINI reussi");
+    TEST_ASSERT(voiceGemini.getProvider().getProviderType() == VoiceProviderType::GEMINI, "Provider actif est GEMINI");
+    prepareMockVoiceReady(voiceGemini, mockTransportGemini);
+    TEST_ASSERT(voiceGemini.isReady(), "VoxCoreVoice est READY avec Gemini Live (non-regression)");
+    voiceGemini.stop();
+    voiceGemini.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.5.3.1  " << std::endl;
-    std::cout << "  Consolidation, Latence Vocale, VAD & Non-Regression      " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.0    " << std::endl;
+    std::cout << "  Architecture Multi-Fournisseurs (Gemini + OpenAI Realtime)" << std::endl;
     std::cout << "  Stabilisation FreeRTOS, Modes, VAD & Facade VoiceKit     " << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
     std::cout << "===========================================================" << std::endl;
@@ -3919,6 +4329,19 @@ int main() {
     test_v0531_latency_metrics_audit_and_edge_cases();
     test_v0531_vad_thresholds_hot_switch_and_validation();
     test_v0531_facade_modes_transitions_and_resilience();
+
+    // Nouvelles suites VoiceKit v0.6.0 (Architecture Multi-Fournisseurs & OpenAI Realtime)
+    test_v060_multiprovider_config_and_enum();
+    test_v060_audio_resampler_16to24();
+    test_v060_ivoiceprovider_contract_and_gemini_adapter();
+    test_v060_openai_realtime_connection_and_handshake();
+    test_v060_openai_realtime_session_negotiation();
+    test_v060_openai_realtime_audio_streaming_tx();
+    test_v060_openai_realtime_inbound_audio_rx_and_drain();
+    test_v060_openai_realtime_transcriptions();
+    test_v060_openai_realtime_priority_stop_and_cancel();
+    test_v060_openai_realtime_error_handling_and_reconnection();
+    test_v060_voxcore_and_voicekit_integration_and_gemini_non_regression();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

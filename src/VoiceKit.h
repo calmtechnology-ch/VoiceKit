@@ -28,7 +28,7 @@ inline const char* voiceKitModeToString(VoiceKitMode m) {
 
 /**
  * @class VoiceKit
- * @brief Façade simplifiée, haut niveau et sécurisée pour l'écosystème vocal VoiceKit v0.5.3.1.
+ * @brief Façade simplifiée, haut niveau et sécurisée pour l'écosystème vocal multi-fournisseurs VoiceKit v0.6.0.
  * 
  * Cette façade unifie et simplifie l'accès aux quatre modes vocaux majeurs :
  * 1. TTS : Synthèse vocale asynchrone PCM 24 kHz haute fidélité (`say`).

@@ -1,4 +1,5 @@
 #include "core/LiveSessionController.h"
+#include "core/GeminiVoiceProvider.h"
 #include "core/AudioTraceLog.h"
 #include "DisplayTextNormalizer.h"
 #include <cstring>
@@ -24,17 +25,17 @@ LiveSessionController::LiveSessionController() {
 }
 
 LiveSessionController::~LiveSessionController() {
-    if (_client) {
-        _client->setOnConnected(nullptr);
-        _client->setOnDisconnected(nullptr);
-        _client->setOnError(nullptr);
-        _client->setOnAudioData(nullptr);
-        _client->setOnOutputTranscription(nullptr);
-        _client->setOnText(nullptr);
-        _client->setOnInputTranscription(nullptr);
-        _client->setOnTurnComplete(nullptr);
-        _client->setOnInterrupted(nullptr);
-        _client->setOnSetupComplete(nullptr);
+    if (_provider) {
+        _provider->setOnConnected(nullptr);
+        _provider->setOnDisconnected(nullptr);
+        _provider->setOnError(nullptr);
+        _provider->setOnAudioData(nullptr);
+        _provider->setOnOutputTranscription(nullptr);
+        _provider->setOnText(nullptr);
+        _provider->setOnInputTranscription(nullptr);
+        _provider->setOnTurnComplete(nullptr);
+        _provider->setOnInterrupted(nullptr);
+        _provider->setOnSetupComplete(nullptr);
     }
 }
 
@@ -105,7 +106,7 @@ void LiveSessionController::finishTurn() {
             Serial.printf("[GEMINI] %s\n", _lastAssistantText.c_str());
         }
 
-        uint32_t pcmDecoded = _client ? _client->getPcmSamplesDispatchedTotal() : 0;
+        uint32_t pcmDecoded = _legacyClient ? _legacyClient->getPcmSamplesDispatchedTotal() : 0;
         uint32_t pcmRejectedBefore = _audioSamplesRejectedBeforePlayerTotal;
         uint32_t pcmPresented = _audioSamplesPresentedToPlayerTotal;
         uint32_t pcmAccepted = _player ? _player->getSamplesAcceptedBuffer() : 0;
@@ -128,17 +129,24 @@ void LiveSessionController::finishTurn() {
 }
 
 void LiveSessionController::printAudioEndCheck(const char* label) {
-    uint32_t pcmDecoded = _client ? _client->getPcmSamplesDispatchedTotal() : 0;
+    uint32_t pcmDecoded = _legacyClient ? _legacyClient->getPcmSamplesDispatchedTotal() : 0;
     uint32_t pcmPlayed = _player ? _player->getSamplesPlayedTotal() : 0;
     Serial.printf("[AUDIO END CHECK][%s] Decodes: %u | Joues: %u\n", label ? label : "INFO", (unsigned)pcmDecoded, (unsigned)pcmPlayed);
 }
 
-bool LiveSessionController::begin(GeminiLiveClient* client, void*, LiveAudioPlayer* player) {
+bool LiveSessionController::begin(GeminiLiveClient* client, void* streamer, LiveAudioPlayer* player) {
     if (!client || !player) return false;
-    _client = client;
+    _legacyClient = client;
+    _legacyAdapter = std::unique_ptr<IVoiceProvider>(new GeminiVoiceProvider(client));
+    return begin(_legacyAdapter.get(), streamer, player);
+}
+
+bool LiveSessionController::begin(IVoiceProvider* provider, void*, LiveAudioPlayer* player) {
+    if (!provider || !player) return false;
+    _provider = provider;
     _player = player;
 
-    _client->setOnSetupComplete([this]() {
+    _provider->setOnSetupComplete([this]() {
         _lastActivityMs = millis();
         if (_state == LiveSessionState::RECONNECTING || _reconnectAttempts > 0) {
             _reconnectCount++;
@@ -148,7 +156,7 @@ bool LiveSessionController::begin(GeminiLiveClient* client, void*, LiveAudioPlay
         transitionTo(LiveSessionState::CONNECTED, "Setup confirme");
     });
 
-    _client->setOnAudioData([this](const int16_t* pcm, size_t samples) {
+    _provider->setOnAudioData([this](const int16_t* pcm, size_t samples) {
         _audioPacketsReceivedCount++;
         _lastAudioPacketTimeMs = millis();
         _lastActivityMs = _lastAudioPacketTimeMs;
@@ -209,7 +217,7 @@ bool LiveSessionController::begin(GeminiLiveClient* client, void*, LiveAudioPlay
 
         if (_state == LiveSessionState::WAITING_RESPONSE) {
             _firstAudioLatencyMs = millis() - _waitingStartTimeMs;
-            Serial.printf("[LiveSession] Premier bloc audio Gemini Live recu en %u ms !\n", _firstAudioLatencyMs);
+            Serial.printf("[LiveSession] Premier bloc audio recu en %u ms !\n", _firstAudioLatencyMs);
             transitionTo(LiveSessionState::PLAYING, "Premier son recu");
         }
 
@@ -239,7 +247,7 @@ bool LiveSessionController::begin(GeminiLiveClient* client, void*, LiveAudioPlay
         }
     });
 
-    _client->setOnOutputTranscription([this](const String& text) {
+    _provider->setOnOutputTranscription([this](const String& text) {
         if (_turnCancelled.load(std::memory_order_acquire)) return;
         _lastActivityMs = millis();
         _hasOutputTranscription = true;
@@ -249,7 +257,7 @@ bool LiveSessionController::begin(GeminiLiveClient* client, void*, LiveAudioPlay
         }
     });
 
-    _client->setOnText([this](const String& text) {
+    _provider->setOnText([this](const String& text) {
         if (_turnCancelled.load(std::memory_order_acquire)) return;
         _lastActivityMs = millis();
         _hasModelTurnText = true;
@@ -261,7 +269,7 @@ bool LiveSessionController::begin(GeminiLiveClient* client, void*, LiveAudioPlay
         }
     });
 
-    _client->setOnTurnComplete([this]() {
+    _provider->setOnTurnComplete([this]() {
         if (!_turnActive.load(std::memory_order_acquire) || _turnCancelled.load(std::memory_order_acquire)) return;
         _lastActivityMs = millis();
         _turnCompleteReceived = true;
@@ -271,7 +279,7 @@ bool LiveSessionController::begin(GeminiLiveClient* client, void*, LiveAudioPlay
         }
     });
 
-    _client->setOnInterrupted([this]() {
+    _provider->setOnInterrupted([this]() {
         Serial.println("[LiveSession] Interruption confirmee par le serveur");
         _turnCancelled.store(true, std::memory_order_release);
         _turnActive.store(false, std::memory_order_release);
@@ -282,9 +290,9 @@ bool LiveSessionController::begin(GeminiLiveClient* client, void*, LiveAudioPlay
         }
     });
 
-    _client->setOnDisconnected([this]() {
+    _provider->setOnDisconnected([this]() {
         _disconnectCount++;
-        Serial.printf("[LiveSession] Deconnexion WebSocket Gemini Live (deconnexion #%u)\n", (unsigned)_disconnectCount);
+        Serial.printf("[LiveSession] Deconnexion WebSocket session (deconnexion #%u)\n", (unsigned)_disconnectCount);
         if (_state != LiveSessionState::DISCONNECTED && _state != LiveSessionState::ERROR) {
             if (_turnActive.load(std::memory_order_acquire)) {
                 _turnCancelled.store(true, std::memory_order_release);
@@ -298,7 +306,7 @@ bool LiveSessionController::begin(GeminiLiveClient* client, void*, LiveAudioPlay
         }
     });
 
-    _client->setOnError([this](const String& err) {
+    _provider->setOnError([this](const String& err) {
         strncpy(_lastError, err.c_str(), sizeof(_lastError) - 1);
         _lastError[sizeof(_lastError) - 1] = '\0';
         Serial.printf("[LiveSession] Erreur client : %s\n", _lastError);
@@ -351,9 +359,9 @@ void LiveSessionController::transitionTo(LiveSessionState newState, const char* 
 }
 
 bool LiveSessionController::activate() {
-    if (!_client) return false;
+    if (!_provider) return false;
 
-    if (_client->isConnected() && _client->isSetupComplete()) {
+    if (_provider->isConnected() && _provider->isSetupComplete()) {
         transitionTo(LiveSessionState::CONNECTED, "Session deja active");
         return true;
     }
@@ -371,12 +379,12 @@ bool LiveSessionController::activate() {
     _lastReconnectAttemptMs = 0;
 
     transitionTo(LiveSessionState::CONNECTING, "Activation session LIVE");
-    return _client->connect();
+    return _provider->connect();
 }
 
 void LiveSessionController::deactivate() {
-    if (_client) {
-        _client->disconnect();
+    if (_provider) {
+        _provider->disconnect();
     }
     if (_player) {
         _player->stop(AudioStopReason::USER_STOP);
@@ -403,7 +411,7 @@ void LiveSessionController::tick() {
                 _reconnectAttempts++;
                 Serial.printf("[LiveSession] Tentative de reconnexion auto (%u/%u)...\n",
                               _reconnectAttempts, (unsigned)LIVE_MAX_RECONNECT_ATTEMPTS);
-                if (_client && _client->connect()) {
+                if (_provider && _provider->connect()) {
                     transitionTo(LiveSessionState::CONNECTING, "Reconnexion initiee");
                 }
             } else {
@@ -415,7 +423,7 @@ void LiveSessionController::tick() {
 }
 
 bool LiveSessionController::sendTextMessage(const String& text) {
-    if (!_client || !_client->isConnected() || !_client->isSetupComplete()) {
+    if (!_provider || !_provider->isConnected() || !_provider->isSetupComplete()) {
         return false;
     }
 
@@ -438,16 +446,16 @@ bool LiveSessionController::sendTextMessage(const String& text) {
             _player->getAudioOutput()->resetTurnMetrics();
         }
     }
-    if (_client) {
-        _client->resetTurnRxMetrics();
+    if (_legacyClient) {
+        _legacyClient->resetTurnRxMetrics();
     }
 
     transitionTo(LiveSessionState::WAITING_RESPONSE, "Envoi message texte TTS");
-    return _client->sendTextMessage(text);
+    return _provider->sendTextMessage(text);
 }
 
 bool LiveSessionController::beginAudioTurn() {
-    if (!_client || !_client->isConnected() || !_client->isSetupComplete()) {
+    if (!_provider || !_provider->isConnected() || !_provider->isSetupComplete()) {
         return false;
     }
 
@@ -470,8 +478,8 @@ bool LiveSessionController::beginAudioTurn() {
             _player->getAudioOutput()->resetTurnMetrics();
         }
     }
-    if (_client) {
-        _client->resetTurnRxMetrics();
+    if (_legacyClient) {
+        _legacyClient->resetTurnRxMetrics();
     }
 
     transitionTo(LiveSessionState::LISTENING, "Debut tour vocal audio conversation");
@@ -491,8 +499,8 @@ void LiveSessionController::requestStop() {
     _turnActive.store(false, std::memory_order_release);
     _turnCompletedLogged = true;
 
-    if (_client && _client->isConnected()) {
-        _client->sendInterruption();
+    if (_provider && _provider->isConnected()) {
+        _provider->sendInterruption();
     }
     if (_player) {
         _player->stop(AudioStopReason::USER_STOP);

@@ -31,12 +31,23 @@ enum class AudioPacketRejectReason : uint8_t {
 
 const char* audioPacketRejectReasonToString(AudioPacketRejectReason reason);
 
+#include "core/IVoiceProvider.h"
+
+// Forward declaration
+class GeminiVoiceProvider;
+
 class LiveSessionController {
 public:
     LiveSessionController();
     ~LiveSessionController();
 
-    // Initialisation : streamer est optionnel pour la synthese pure TTS
+    // Initialisation avec IVoiceProvider (v0.6.0)
+    bool begin(IVoiceProvider* provider, void* streamer, LiveAudioPlayer* player);
+    bool begin(IVoiceProvider* provider, LiveAudioPlayer* player) {
+        return begin(provider, nullptr, player);
+    }
+
+    // Surcharge de compatibilité ascendante avec GeminiLiveClient (v0.5.x)
     bool begin(GeminiLiveClient* client, void* streamer, LiveAudioPlayer* player);
     bool begin(GeminiLiveClient* client, LiveAudioPlayer* player) {
         return begin(client, nullptr, player);
@@ -105,7 +116,9 @@ public:
 private:
     void appendTranscriptionFragment(String& target, const String& fragment, size_t maxLength = 512);
 
-    GeminiLiveClient* _client = nullptr;
+    IVoiceProvider* _provider = nullptr;
+    GeminiLiveClient* _legacyClient = nullptr;
+    std::unique_ptr<IVoiceProvider> _legacyAdapter;
     LiveAudioPlayer* _player = nullptr;
 
     LiveSessionState _state = LiveSessionState::DISCONNECTED;

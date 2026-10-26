@@ -1,35 +1,40 @@
-# VoiceKit v0.5.3.1 — Consolidation et Validation
+# VoiceKit v0.6.0 — Architecture Multi-Fournisseurs (Gemini Live & OpenAI Realtime)
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
 [![ESP32-S3](https://img.shields.io/badge/Target-M5Stack%20CoreS3%20(ESP32--S3)-blue.svg)](https://docs.m5stack.com/en/core/CoreS3)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)** et de **conversation vocale bidirectionnelle native (Mode B)** haute fidélité pour **M5Stack CoreS3** (ESP32-S3), propulsée par l'API **Gemini Live** (protocole bidirectionnel BidiGenerateContent) et construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
+Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)** et de **conversation vocale bidirectionnelle native (Mode B)** haute fidélité pour **M5Stack CoreS3** (ESP32-S3).
 
-La version **v0.5.3.1** consolide et valide l'ensemble de la bibliothèque, audite la chaîne de mesure de latence vocale et fiabilise la configuration :
-- **Audit & Fiabilisation des Métriques de Latence (7 Jalons / 6 Durées)** : Vérification rigoureuse des horodatages (`speechEndDetectedMs`, `micStoppedMs`, `activityEndSentMs`, `firstResponseReceivedMs`, `firstAudioReceivedMs`, `firstAudioPlayedMs`, `playbackFinishedMs`). Protection anti-débordement `millis()` (`if (ms == 0) ms = 1;`), rejet des inversions chronologiques (retour strict `-1`), et distinction formelle entre réception paquet et restitution DMA.
-- **Sécurisation du Seuil de Silence VAD** : Protection de `setVadSilenceDurationMs(ms)` contre les valeurs nulles (`0 ms`) qui provoqueraient une coupure immédiate indésirable. Validation des trois seuils d'usage : **800 ms** (commandes courtes), **1 000 ms** (usage équilibré), **1 200 ms** (parole naturelle par défaut).
-- **Harmonisation Documentaire Intégrale** : Alignement de toutes les versions courantes sur `v0.5.3.1` (`library.json`, `library.properties`, `VoiceHubConfig.h`, exemples), correction des références d'installation Git obsolètes (`#v0.5.0` et `v0.2.1.zip`).
-- **Démonstrateur `VoiceDiagnostics` v0.5.3.1** : 6 onglets tactiles (`SYS`, `AUDIO`, `LAT`, `NET`, `CONN`, `EVT`), contrôle interactif VAD, télémétrie structurée `[LATENCY]` et export CSV `[LATENCY_CSV]`.
-- **Sanctuaire Audio Intact & Anti-Régression** : Préservation absolue du buffer circulaire PSRAM 120 000 échantillons (~5 s), du quadruple buffer DMA (160 ms), de la tâche FreeRTOS Mode 2 et du vidage exact sans coupure de syllabe (*« alpha tango terminé »*).
-- **Validation Complète & Zéro Régression** : 976 tests unitaires réussis avec 0 échec (68 suites de tests, +64 assertions v0.5.3.1) et 100% des 8 exemples PlatformIO compilés avec succès.
+Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)** supportant à la fois **Google Gemini Live** (moteur par défaut, 100% rétrocompatible) et **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`), construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
+
+La version **v0.6.0** fait évoluer VoiceKit vers un framework vocal universel :
+- **Architecture Multi-Fournisseurs (`IVoiceProvider`)** : Interface pure unifiée pour l'authentification, la négociation de session, le streaming audio bidirectionnel, les transcriptions STT/TTS et les interruptions STOP.
+- **Intégration Native OpenAI Realtime** : Client WebSocket TLS direct ESP32-S3 (`OpenAIRealtimeClient`) avec support du modèle `gpt-realtime-2.1-mini`, authentification Bearer, négociation `session.update`, streaming PCM 24 kHz Base64 et transcriptions Whisper intégrées.
+- **Sélection par Configuration Zéro-Code** : Bascule instantanée entre Gemini et OpenAI par simple configuration (`config.provider = VoiceProviderType::OPENAI;`). Aucune modification requise dans le code métier de l'application !
+- **Rééchantillonneur Dédié 16 kHz $\to$ 24 kHz (`AudioResampler`)** : Algorithme linéaire ultra-rapide en virgule fixe entière (512 in $\to$ 768 out en moins de 15 µs sur Core 1), n'impactant aucunement la tâche audio critique.
+- **Sanctuaire Audio VoxCore Intact** : Conservation intégrale de la tâche FreeRTOS Mode 2, du buffer circulaire PSRAM 120 000 échantillons (~5 s), des buffers DMA et du protocole de vidage exact sans coupure de la syllabe finale (*« alpha tango terminé »*).
+- **Nouvel Exemple `OpenAIConversation`** : Démonstration headless complète de conversation vocale bidirectionnelle en français avec OpenAI Realtime.
+- **Validation Exhaustive & Zéro Régression** : **1 047 tests unitaires réussis avec 0 échec** (79 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
 
 ---
 
 ## Sommaire
 
 1. [Fonctionnalités Principales](#1-fonctionnalités-principales)
-2. [Structure de la Bibliothèque](#2-structure-de-la-bibliothèque)
-3. [Méthodes d'Installation](#3-méthodes-dinstallation)
+2. [Architecture Multi-Fournisseurs](#2-architecture-multi-fournisseurs)
+3. [Structure de la Bibliothèque](#3-structure-de-la-bibliothèque)
+4. [Méthodes d'Installation](#4-méthodes-dinstallation)
    - [Méthode A — PlatformIO depuis GitHub](#méthode-a--platformio-depuis-github)
    - [Méthode B — Arduino IDE](#méthode-b--arduino-ide)
    - [Méthode C — Développement Local](#méthode-c--développement-local)
-4. [Nouvelle API Simplifiée (`VoiceKit.h`)](#4-nouvelle-api-simplifiée-voicekith)
-5. [Contrôleur Réutilisable `ContinuousListeningController`](#5-contrôleur-réutilisable-continuouslisteningcontroller)
-6. [Référence de l'API Historique (`VoxCoreVoice`)](#6-référence-de-lapi-historique-voxcorevoice)
-7. [Exemples Inclus](#7-exemples-inclus)
-8. [Garanties de Non-Régression & Sécurité](#8-garanties-de-non-régression--sécurité)
+5. [Configuration & Choix du Fournisseur](#5-configuration--choix-du-fournisseur)
+6. [Nouvelle API Simplifiée (`VoiceKit.h`)](#6-nouvelle-api-simplifiée-voicekith)
+7. [Contrôleur Réutilisable `ContinuousListeningController`](#7-contrôleur-réutilisable-continuouslisteningcontroller)
+8. [Référence de l'API Historique (`VoxCoreVoice`)](#8-référence-de-lapi-historique-voxcorevoice)
+9. [Exemples Inclus](#9-exemples-inclus)
+10. [Garanties de Non-Régression & Sécurité](#10-garanties-de-non-régression--sécurité)
 
 ---
 
@@ -73,12 +78,50 @@ La version **v0.5.3.1** consolide et valide l'ensemble de la bibliothèque, audi
 
 ---
 
-## 2. Structure de la Bibliothèque
+## 2. Architecture Multi-Fournisseurs
+
+VoiceKit v0.6.0 introduit une architecture ouverte découplée reposant sur l'interface pure `IVoiceProvider` :
+
+```text
+                        ┌───────────────────────────────────────────────┐
+                        │      Application Utilisateur / Exemples        │
+                        └───────────────────────┬───────────────────────┘
+                                                │
+                                    ┌───────────▼───────────┐
+                                    │   VoiceKit / VoxCore   │
+                                    └─────┬───────────┬─────┘
+                                          │           │
+                 ┌────────────────────────┘           └────────────────────────┐
+                 ▼                                                             ▼
+    ┌─────────────────────────┐                                   ┌─────────────────────────┐
+    │   GeminiVoiceProvider   │                                   │   OpenAIRealtimeClient  │
+    │   (Google Gemini Live)  │                                   │  (OpenAI Realtime API)  │
+    └────────────┬────────────┘                                   └────────────┬────────────┘
+                 │ PCM 16k in / 24k out                                        │ PCM 24k in / 24k out
+                 │                                                ┌────────────▼────────────┐
+                 │                                                │      AudioResampler     │
+                 │                                                │   (16 kHz -> 24 kHz)    │
+                 │                                                └────────────┬────────────┘
+                 ▼                                                             ▼
+    ┌─────────────────────────┐                                   ┌─────────────────────────┐
+    │  Google Live Transport  │                                   │  OpenAI TLS Transport   │
+    │  (wss://generativelanguage...)                              │  (wss://api.openai.com) │
+    └─────────────────────────┘                                   └─────────────────────────┘
+```
+
+- **`IVoiceProvider`** : Contrat standardisé pour la connexion, l'authentification Bearer, la configuration de session, l'envoi de chunks audio PCM, la réception de flux audio descendants, la transmission de texte, l'interruption STOP et les callbacks d'événements.
+- **`GeminiVoiceProvider`** : Adaptateur sans surcoût enveloppant le client `GeminiLiveClient` existant (100% de rétrocompatibilité).
+- **`OpenAIRealtimeClient`** : Client natif WebSocket TLS direct pour `wss://api.openai.com/v1/realtime`, gestion des trames `session.update`, Base64 streaming, et transcriptions Whisper.
+- **`AudioResampler`** : Algorithme linéaire ultra-rapide à virgule fixe entière convertissant les blocs 16 kHz du micro CoreS3 vers les 24 kHz requis par OpenAI, en moins de 15 µs par bloc, sans blocage de la boucle audio.
+
+---
+
+## 3. Structure de la Bibliothèque
 
 ```text
 VoiceKit/
-├── library.json                 # Manifeste PlatformIO (v0.5.3.1)
-├── library.properties           # Manifeste Arduino IDE (v0.5.3.1)
+├── library.json                 # Manifeste PlatformIO (v0.6.0)
+├── library.properties           # Manifeste Arduino IDE (v0.6.0)
 ├── LICENSE                      # Licence MIT
 ├── README.md                    # Documentation complète
 ├── CHANGELOG.md                 # Historique des versions
@@ -87,44 +130,50 @@ VoiceKit/
 │   ├── VoiceKit.cpp             # Implémentation de la façade simplifiée
 │   ├── VoxCoreVoice.h           # En-tête public historique préservé
 │   ├── VoxCoreVoice.cpp         # Moteur principal VoiceKit / VoxCore
-│   ├── VoiceKitConfig.h         # Configuration, profils vocaux & métriques
+│   ├── VoiceKitConfig.h         # Configuration, choix du fournisseur & profils vocaux
 │   ├── Utf8Utils.h              # Utilitaires UTF-8 & échappement JSON RFC 8259
-│   ├── core/                    # Moteur interne VoxCore
+│   ├── core/                    # Moteur interne VoxCore & Fournisseurs
+│   │   ├── IVoiceProvider.h               # Interface unifiée des fournisseurs vocaux
+│   │   ├── GeminiVoiceProvider (.h/.cpp)  # Adaptateur Gemini Live -> IVoiceProvider
+│   │   ├── OpenAIRealtimeClient (.h/.cpp) # Client natif OpenAI Realtime WebSocket TLS
+│   │   ├── AudioResampler (.h/.cpp)       # Rééchantillonneur linéaire 16k -> 24k
+│   │   ├── OpenAIRoots.h                  # Bundle certificats TLS DigiCert pour OpenAI
+│   │   ├── GoogleRoots.h                  # Bundle certificats Google Trust Services
 │   │   ├── ContinuousListeningController (.h/.cpp) # Contrôleur autonome de dictée continue
-│   │   ├── VoiceActivityDetector.h                # Détecteur VAD local 16 kHz
+│   │   ├── VoiceActivityDetector.h        # Détecteur VAD local 16 kHz
 │   │   ├── GeminiLiveClient (.h/.cpp)     # Client WebSocket BidiGenerateContent
-│   │   ├── LiveSessionController (.h/.cpp)# Automate de session Gemini Live
+│   │   ├── LiveSessionController (.h/.cpp)# Automate de session
 │   │   ├── ConversationController (.h/.cpp)# Contrôleur de conversation bidirectionnelle
 │   │   ├── LiveAudioPlayer (.h/.cpp)      # Lecteur DMA PCM 24 kHz (TTS / Réponse)
 │   │   ├── LiveAudioStreamer (.h/.cpp)    # Streamer micro PCM 16 kHz (STT / Entrée)
 │   │   ├── WiFiManager (.h/.cpp)          # Gestionnaire Wi-Fi & SNTP
 │   │   ├── Utf8Utils (.h/.cpp)            # Validation & sanitisation UTF-8 RFC 3629
-│   │   ├── AudioTraceLog (.h/.cpp)        # Journaliseur d'événements audio
-│   │   └── GoogleRoots.h                  # Bundle certificats Google Trust Services
+│   │   └── AudioTraceLog (.h/.cpp)        # Journaliseur d'événements audio
 │   └── hal/                     # Couche d'abstraction matérielle
 │       ├── IAudioOutput.h                 # Interface de sortie audio
 │       ├── IAudioInput.h                  # Interface d'entrée microphone
 │       ├── M5AudioOutput (.h/.cpp)        # HAL haut-parleur M5.Speaker
 │       ├── M5AudioInput (.h/.cpp)         # HAL microphone M5.Mic (ES7210)
 │       └── HardwareManager.h              # Arbitrage I2S centralisé HP / Micro
-├── examples/                    # Exemples d'application (9 exemples)
+├── examples/                    # Exemples d'application (10 exemples)
+│   ├── OpenAIConversation/      # NOUVEAU v0.6.0 : Conversation avec OpenAI Realtime
 │   ├── VoiceDiagnostics/        # Outil officiel de diagnostic (6 onglets dont LATENCY) & CSV
 │   ├── MinimalVoiceKit/         # Démonstrateur façade simplifiée multi-modes
 │   ├── ContinuousSTT/           # Dictée continue mains libres avec interface M5Unified
 │   ├── VoiceSettingsDemo/       # Démonstrateur tactile profils & UTF-8
-│   ├── MinimalConversation/     # Application conversation bidirectionnelle (Mode B)
+│   ├── MinimalConversation/     # Application conversation bidirectionnelle (Gemini Mode B)
 │   ├── MinimalTTS/              # Exemple PlatformIO TTS sans LVGL
 │   ├── OrientationClockVoice/   # Exemple PlatformIO horloge LVGL 9 + TTS
 │   ├── MinimalSTT/              # Exemple PlatformIO dictée Push-to-Talk
 │   └── MinimalTTS_Arduino/      # Exemple autonome Arduino IDE (.ino)
 └── tests/
     ├── run_tests.bat            # Lanceur des tests automatisés MinGW
-    └── test_voicekit_all.cpp    # 68 suites de tests unitaires (976 validations, 0 échec)
+    └── test_voicekit_all.cpp    # 79 suites de tests unitaires (1 047 validations, 0 échec)
 ```
 
 ---
 
-## 3. Méthodes d'Installation
+## 4. Méthodes d'Installation
 
 ### Méthode A — PlatformIO depuis GitHub
 
@@ -153,7 +202,7 @@ build_flags =
 lib_deps =
     m5stack/M5CoreS3@1.0.0
     m5stack/M5Unified@0.2.23
-    https://github.com/Philippe-AD/VoiceKit.git#v0.5.3.1
+    https://github.com/Philippe-AD/VoiceKit.git#v0.6.0
 ```
 
 > **Note de partitionnement** : Le firmware VoiceKit et ses dépendances occupent environ 1,15 à 1,5 Mo. Utilisez une table de partitions comme `no_ota.csv` (fournie dans le dépôt) offrant au moins 2 à 3 Mo pour la partition application (`app0`).
@@ -223,12 +272,12 @@ Cette méthode permet d'utiliser VoiceKit avec l'environnement classique Arduino
 #### Prérequis
 - Arduino IDE 2.3+ avec le paquet de cartes **esp32** par Espressif (version 2.0.14+ ou 3.x).
 - Télécharger l'archive ZIP de VoiceKit depuis GitHub :  
-  `https://github.com/Philippe-AD/VoiceKit/archive/refs/tags/v0.5.3.1.zip`
+  `https://github.com/Philippe-AD/VoiceKit/archive/refs/tags/v0.6.0.zip`
 
 #### Étapes d'installation
 1. Ouvrez Arduino IDE.
 2. Menu : **Croquis** → **Inclure une bibliothèque** → **Ajouter la bibliothèque .ZIP...**
-3. Sélectionnez le fichier `VoiceKit-0.5.3.1.zip` téléchargé.
+3. Sélectionnez le fichier `VoiceKit-0.6.0.zip` téléchargé.
 4. Ouvrez le Gestionnaire de bibliothèques (**Outils** → **Gérer les bibliothèques**) et installez :
    - `M5Unified` (version >= 0.2.23)
    - `M5CoreS3` (version >= 1.0.0)
@@ -279,7 +328,39 @@ Grâce à la structure `src/` conforme au standard Arduino 1.5, **aucun paramèt
 
 ---
 
-## 4. Nouvelle API Simplifiée (`VoiceKit.h`)
+## 5. Configuration & Choix du Fournisseur
+
+VoiceKit permet de sélectionner le fournisseur vocal désiré directement via `VoiceKitConfig` :
+
+### 5.1 Configuration Google Gemini Live (Fournisseur par défaut)
+```cpp
+VoiceKitConfig config;
+config.provider = VoiceProviderType::GEMINI; // Optionnel : GEMINI est la valeur par défaut
+config.apiKey = GEMINI_API_KEY;
+config.model = "models/gemini-3.8-live";      // Modèle officiel Gemini Live
+config.voice = "Aoede";                      // Aoede, Puck, Charon, Fenrir, Kore
+config.language = "fr-FR";
+config.wifiSSID = WIFI_SSID;
+config.wifiPassword = WIFI_PASS;
+```
+
+### 5.2 Configuration OpenAI Realtime API
+```cpp
+VoiceKitConfig config;
+config.provider = VoiceProviderType::OPENAI; // Sélection OpenAI Realtime
+config.apiKey = OPENAI_API_KEY;              // Clé secrète sk-...
+config.model = "gpt-realtime-2.1-mini";       // Modèle officiel Realtime
+config.voice = "alloy";                      // alloy, echo, shimmer, etc.
+config.language = "fr-FR";                   // Instructions et transcriptions en français
+config.wifiSSID = WIFI_SSID;
+config.wifiPassword = WIFI_PASS;
+```
+
+> **Sécurité absolue des clés** : Ne committez jamais vos clés secrètes d'API dans votre dépôt Git. Utilisez un fichier séparé `secrets.h` ignoré par `.gitignore`. VoiceKit masque automatiquement toutes les clés dans les journaux console.
+
+---
+
+## 6. Nouvelle API Simplifiée (`VoiceKit.h`)
 
 La version **v0.5.0** introduit une façade unifiée et haut niveau optionnelle `VoiceKit`, accessible via `#include <VoiceKit.h>`. Elle permet de piloter l'intégralité des fonctionnalités vocales à l'aide d'un unique objet :
 
@@ -289,11 +370,11 @@ La version **v0.5.0** introduit une façade unifiée et haut niveau optionnelle 
 VoiceKit voice;
 ```
 
-### 4.1 Vue d'ensemble des méthodes
+### 6.1 Vue d'ensemble des méthodes
 
 | Méthode | Description | Retour | Caractère |
 | :--- | :--- | :---: | :---: |
-| `bool begin(config)` | Initialise le matériel, le Wi-Fi, SNTP et la session Gemini Live. | `bool` | Asynchrone / Non bloquant |
+| `bool begin(config)` | Initialise le matériel, le Wi-Fi, SNTP et la session du fournisseur choisi. | `bool` | Asynchrone / Non bloquant |
 | `void update()` | Traite la machine d'état et les contrôleurs audio. À appeler dans `loop()`. | `void` | Non bloquant (< 1 ms) |
 | `bool say(text)` | Déclenche la synthèse vocale (TTS) de la phrase donnée. | `bool` | Non bloquant |
 | `bool listen()` | Démarre la reconnaissance vocale manuelle (STT Push-to-Talk). | `bool` | Non bloquant |
@@ -303,7 +384,7 @@ VoiceKit voice;
 | `bool stopContinuousListening()` | Désactive la dictée continue et replace la façade en mode `IDLE`. | `bool` | Immédiat |
 | `bool pauseContinuousListening()` | Met en pause temporaire la dictée continue. | `bool` | Immédiat |
 | `bool resumeContinuousListening()` | Reprend la dictée continue après une pause. | `bool` | Non bloquant |
-| `bool startConversation()` | Active le mode conversationnel bidirectionnel natif Gemini Live. | `bool` | Sécurisé / Non bloquant |
+| `bool startConversation()` | Active le mode conversationnel bidirectionnel natif (Gemini Live ou OpenAI Realtime). | `bool` | Sécurisé / Non bloquant |
 | `bool stopConversation()` | Désactive le mode conversationnel et replace la façade en mode `IDLE`. | `bool` | Immédiat |
 | `void stop()` | Interrompt immédiatement toute opération en cours (TTS, écoute, conversation). | `void` | Immédiat |
 | `bool isReady() const` | Indique si le système est prêt à recevoir une commande. | `bool` | Non bloquant |
@@ -322,7 +403,7 @@ VoiceKit voice;
 | `uint32_t getVadSilenceDurationMs() const` | Retourne le seuil de silence VAD actuel en ms. Alias : `getSilenceDurationMs()`. | `uint32_t` | Non bloquant |
 | `String getLastError() const` | Retourne le dernier message d'erreur survenu. | `String` | Non bloquant |
 
-### 4.2 Événements & Callbacks Unifiés
+### 6.2 Événements & Callbacks Unifiés
 
 Les callbacks de la façade `VoiceKit` sont exécutés dans le contexte de la boucle principale `loop()` lors des appels à `voice.update()`, garantissant l'absence de blocage ou d'accès concurrent :
 
@@ -364,7 +445,7 @@ voice.onConversationFinished([]() {
 
 ---
 
-## 5. Contrôleur Réutilisable `ContinuousListeningController`
+## 7. Contrôleur Réutilisable `ContinuousListeningController`
 
 Intégré au cœur de la bibliothèque (`src/core/ContinuousListeningController.h` / `.cpp`), ce contrôleur abstrait toute la complexité d'une dictée vocale continue mains libres :
 - **Détection VAD Intégrée** : Analyse en direct les blocs PCM 16 kHz capturés par le microphone matériel.
@@ -379,7 +460,7 @@ Intégré au cœur de la bibliothèque (`src/core/ContinuousListeningController.
 
 ---
 
-## 6. Référence de l'API Historique (`VoxCoreVoice`)
+## 8. Référence de l'API Historique (`VoxCoreVoice`)
 
 Pour assurer une rétrocompatibilité ascendante stricte à 100%, la classe `VoxCoreVoice` (`VoxCoreVoice.h`) reste intégralement disponible avec toutes ses méthodes publiques historiques :
 
@@ -407,6 +488,11 @@ Pour assurer une rétrocompatibilité ascendante stricte à 100%, la classe `Vox
 - `const VoiceLatencyMetrics& getLatencyMetrics() const`
 - `void setVadSilenceDurationMs(uint32_t ms)`, `uint32_t getVadSilenceDurationMs() const`
 
+### API Fournisseurs & Modèles (v0.6.0)
+- `IVoiceProvider* getActiveProvider() const`
+- `VoiceProviderType getProviderType() const`
+- `GeminiLiveClient* getClient()` *(rétrocompatibilité)*
+
 ### API Profil Vocal & Langue
 - `bool setVoiceProfile(voice, lang, style, tone, accent)`
 - `bool setVoice(const String& voice)`, `bool setLanguage(const String& lang)`
@@ -415,40 +501,41 @@ Pour assurer une rétrocompatibilité ascendante stricte à 100%, la classe `Vox
 
 ---
 
-## 7. Exemples Inclus
+## 9. Exemples Inclus
 
-La bibliothèque fournit 9 exemples complets prêts à l'emploi :
+La bibliothèque fournit 10 exemples complets prêts à l'emploi :
 
-1. **`examples/VoiceDiagnostics/`** (PlatformIO) — **MIS À JOUR v0.5.3** :  
-   Outil officiel de diagnostic et de télémétrie vocale pour M5Stack CoreS3. Interface tactile M5Unified (320 × 240) à 6 onglets (`SYS`, `AUDIO`, `LAT`, `NET`, `CONN`, `EVT`). L'onglet `LAT` affiche la latence complète de réponse, le délai Gemini, le délai local DMA, la durée de capture microphone, les statistiques de session (min/moy/max/médiane) et le contrôle interactif du VAD (800 / 1 000 / 1 200 ms). Inclut la journalisation série structurée `[LATENCY]` et l'export CSV `[LATENCY_CSV]`.
-2. **`examples/MinimalVoiceKit/`** (PlatformIO) :  
-   Démonstrateur de référence de la façade simplifiée `VoiceKit`. Permet de tester successivement les 4 modes vocaux (TTS, STT manuel, dictée continue et conversation) sur l'écran tactile du M5Stack CoreS3 (320 × 240) avec diagnostic en temps réel sur le moniteur Série.
-3. **`examples/ContinuousSTT/`** (PlatformIO) :  
+1. **`examples/OpenAIConversation/`** (PlatformIO) — **NOUVEAU v0.6.0** :  
+   Démonstration épurée et headless de conversation vocale bidirectionnelle en français avec l'API **OpenAI Realtime** (`gpt-realtime-2.1-mini`). Acquisition microphone ES7210 16 kHz rééchantillonnée à chaud en 24 kHz via `AudioResampler`, streaming Base64, VAD local, restitution haut-parleur AW88298 24 kHz et interruption instantanée STOP sur appui tactile.
+2. **`examples/VoiceDiagnostics/`** (PlatformIO) :  
+   Outil officiel de diagnostic et de télémétrie vocale pour M5Stack CoreS3. Interface tactile M5Unified (320 × 240) à 6 onglets (`SYS`, `AUDIO`, `LAT`, `NET`, `CONN`, `EVT`). Journalisation série `[LATENCY]` et export CSV `[LATENCY_CSV]`.
+3. **`examples/MinimalVoiceKit/`** (PlatformIO) :  
+   Démonstrateur de référence de la façade simplifiée `VoiceKit`. Permet de tester successivement les 4 modes vocaux (TTS, STT manuel, dictée continue et conversation) sur l'écran tactile du M5Stack CoreS3 (320 × 240) avec diagnostic en temps réel.
+4. **`examples/ContinuousSTT/`** (PlatformIO) :  
    Application autonome de dictée vocale mains libres avec interface graphique complète M5Unified (7 états, VU-mètre RMS, compte à rebours de silence, bouton Pause/Reprendre, accents français UTF-8).
-4. **`examples/VoiceSettingsDemo/`** (PlatformIO) :  
+5. **`examples/VoiceSettingsDemo/`** (PlatformIO) :  
    Démonstrateur tactile multi-profils et validation UTF-8 pour M5Stack CoreS3. Permet de faire défiler et tester 5 scénarios complets avec accents français, allemand et anglais.
-5. **`examples/MinimalConversation/`** (PlatformIO) :  
-   Application conversationnelle vocale bidirectionnelle native (Mode B) pour M5Stack CoreS3. Bouton tactile dynamique (« PARLER » / « STOP ») et cartes d'affichage.
-6. **`examples/MinimalTTS/`** (PlatformIO) :  
+6. **`examples/MinimalConversation/`** (PlatformIO) :  
+   Application conversationnelle vocale bidirectionnelle native (Mode B) avec Gemini Live pour M5Stack CoreS3. Bouton tactile dynamique (« PARLER » / « STOP ») et cartes d'affichage.
+7. **`examples/MinimalTTS/`** (PlatformIO) :  
    Validation physique TTS minimale sans LVGL. Démonstration de synthèse vocale au démarrage puis déclenchement tactile sur l'écran.
-7. **`examples/MinimalSTT/`** (PlatformIO) :  
+8. **`examples/MinimalSTT/`** (PlatformIO) :  
    Démonstration de reconnaissance vocale Push-to-Talk STT pour M5Stack CoreS3 avec transcriptions intérimaires et finales.
-8. **`examples/OrientationClockVoice/`** (PlatformIO) :  
+9. **`examples/OrientationClockVoice/`** (PlatformIO) :  
    Horloge dynamique complète avec **LVGL 9**, accéléromètre **BMI270** (rotation 360°), horloge RTC **BM8563**, et annonce vocale de l'heure en français.
-9. **`examples/MinimalTTS_Arduino/`** (Arduino IDE) :  
-   Croquis autonome `.ino` prêt à l'emploi avec documentation pas-à-pas des menus Arduino IDE.
+10. **`examples/MinimalTTS_Arduino/`** (Arduino IDE) :  
+    Croquis autonome `.ino` prêt à l'emploi avec documentation pas-à-pas des menus Arduino IDE.
 
 ---
 
-## 8. Garanties de Non-Régression & Sécurité
+## 10. Garanties de Non-Régression & Sécurité
 
-La version **v0.5.3.1** garantit une consolidation et une non-régression absolue sur l'ensemble des modules :
+La version **v0.6.0** garantit une non-régression absolue sur l'ensemble des modules préexistants :
 - **Intégrité absolue du moteur audio VoxCore** : Aucune réduction arbitraire du buffer circulaire PSRAM (120 000 échantillons @ 24 kHz) ni des marges DMA (160 ms). Préservation intégrale de la tâche FreeRTOS Mode 2 et du vidage exact sans coupure de syllabe.
-- **Validation Repère Acoustique (« alpha tango terminé »)** : Vérification rigoureuse que les derniers mots émis par Gemini Live sont intégralement restitués sans troncature.
-- **Suppression du Heap Churn** : Remplacement des allocations `String` lors du streaming microphone Base64 par un tamponnage direct sur la pile (`encodeBase64Direct`), assurant une fluidité audio maximale.
-- **Politique Anti-Faux Zéro & Protection Rollover** : Toute métrique temporelle non observée renvoie explicitement `-1` (`N/D`), sans création artificielle de durées nulles, et les horodatages valides sont protégés contre l'ambiguïté de `millis() == 0`.
-- **Suite de tests automatisés** : 68 suites de tests unitaires et 976 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
-- **Compilations d'exemples validées à 100%** : Les 8 exemples cibles PlatformIO pour M5Stack CoreS3 compilent sans aucune erreur.
-- **Zéro identifiant en clair** : Aucun secret, SSID Wi-Fi ni clé API n'est publié dans le dépôt.
+- **Validation Repère Acoustique (« alpha tango terminé »)** : Vérification rigoureuse que les derniers mots émis (par Gemini Live comme par OpenAI) sont intégralement restitués sans troncature, y compris lors de la réception de `response.done`.
+- **Rééchantillonnage 16k $\to$ 24k en arithmétique entière** : Exécution en < 15 µs sur ESP32-S3 Core 1 sans blocage de la boucle de capture audio.
+- **Zéro identifiant en clair** : Aucun secret, SSID Wi-Fi ni clé API n'est publié dans le dépôt. Masquage systématique des clés dans les logs.
+- **Suite de tests automatisés** : 79 suites de tests unitaires et 1 047 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
+- **Compilations d'exemples validées à 100%** : Tous les exemples cibles PlatformIO compilent sans aucune erreur.
 
-Consultez le [Rapport de Livraison v0.5.3.1](RAPPORT_LIVRAISON_v0.5.3.1.md) pour les détails d'architecture, les métriques exposées et les mesures comparatives.
+Consultez le [Rapport de Livraison v0.6.0](RAPPORT_LIVRAISON_v0.6.0.md) pour les détails d'architecture, les métriques exposées et les mesures comparatives.

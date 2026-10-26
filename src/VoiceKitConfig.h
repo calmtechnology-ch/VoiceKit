@@ -21,7 +21,21 @@ enum class QueuePolicy : uint8_t {
     QUEUE_FIFO = 1,       ///< Enfile la demande dans une file bornee (maxQueueSize)
     INTERRUPT_CURRENT = 2 ///< Interrompt la parole en cours et commence immediatement
 };
+/**
+ * @brief Fournisseurs d'IA vocale en temps réel pris en charge (VoiceKit v0.6.0).
+ */
+enum class VoiceProviderType : uint8_t {
+    GEMINI = 0,   ///< Google Gemini Live API (fournisseur par défaut)
+    OPENAI = 1    ///< OpenAI Realtime API (WebSocket TLS direct)
+};
 
+inline const char* voiceProviderTypeToString(VoiceProviderType p) {
+    switch (p) {
+        case VoiceProviderType::GEMINI: return "GEMINI";
+        case VoiceProviderType::OPENAI: return "OPENAI";
+        default:                        return "GEMINI";
+    }
+}
 /**
  * @brief Etats operationnels de VoxCoreVoice.
  */
@@ -346,10 +360,13 @@ struct ConnectionMetrics {
 };
 
 /**
- * @brief Configuration d'initialisation de VoxCore VoiceKit v0.5.3.
+ * @brief Configuration d'initialisation de VoxCore VoiceKit v0.6.0.
  */
 struct VoiceKitConfig {
-    // Cle d'API Google Gemini
+    // Fournisseur d'IA vocale (v0.6.0) : GEMINI (par défaut) ou OPENAI
+    VoiceProviderType provider = VoiceProviderType::GEMINI;
+
+    // Cle d'API (Google Gemini ou OpenAI selon le fournisseur actif)
     String apiKey = "";
 
     // Modele et voix Gemini Live centralises

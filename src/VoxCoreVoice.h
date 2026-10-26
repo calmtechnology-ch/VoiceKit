@@ -11,6 +11,9 @@
 #include "hal/HardwareManager.h"
 #include "LiveAudioPlayer.h"
 #include "core/GeminiLiveClient.h"
+#include "core/IVoiceProvider.h"
+#include "core/GeminiVoiceProvider.h"
+#include "core/OpenAIRealtimeClient.h"
 #include "core/LiveSessionController.h"
 #include "core/LiveAudioStreamer.h"
 #include "core/ConversationController.h"
@@ -315,6 +318,10 @@ public:
     const LiveAudioStreamer& getStreamer() const { return _streamer; }
     GeminiLiveClient& getClient() { return _client; }
     const GeminiLiveClient& getClient() const { return _client; }
+    IVoiceProvider& getProvider() { return *_activeProvider; }
+    const IVoiceProvider& getProvider() const { return *_activeProvider; }
+    OpenAIRealtimeClient& getOpenAIClient() { return _openaiClient; }
+    const OpenAIRealtimeClient& getOpenAIClient() const { return _openaiClient; }
     LiveSessionController& getSession() { return _session; }
     const LiveSessionController& getSession() const { return _session; }
     IAudioOutput* getAudioOutput() const { return _audioOutput; }
@@ -364,6 +371,9 @@ private:
     LiveAudioPlayer _player;
     LiveAudioStreamer _streamer;
     GeminiLiveClient _client;
+    GeminiVoiceProvider _geminiProvider;
+    OpenAIRealtimeClient _openaiClient;
+    IVoiceProvider* _activeProvider = nullptr;
     LiveSessionController _session;
     WiFiManager _wifi;
     ConversationController _conversationController;

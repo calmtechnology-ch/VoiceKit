@@ -2,9 +2,24 @@
 #include <WiFi.h>
 #include <time.h>
 
-VoxCoreVoice::VoxCoreVoice() = default;
+VoxCoreVoice::VoxCoreVoice() {
+    _geminiProvider.setClient(&_client);
+    _activeProvider = &_geminiProvider;
+}
 
 VoxCoreVoice::~VoxCoreVoice() {
+    _onStateChanged = nullptr;
+    _onReady = nullptr;
+    _onError = nullptr;
+    _onSpeechStarted = nullptr;
+    _onSpeechFinished = nullptr;
+    _onTranscription = nullptr;
+    _onListeningStarted = nullptr;
+    _onListeningFinished = nullptr;
+    _onUserText = nullptr;
+    _onAssistantText = nullptr;
+    _onConversationFinished = nullptr;
+    _onConversationTurnMetrics = nullptr;
     stop();
     if (HardwareManager::getInstance().getAudioOutput() == _audioOutput) {
         HardwareManager::getInstance().setAudioOutput(nullptr);
@@ -22,11 +37,11 @@ bool VoxCoreVoice::isSystemTimeValid() {
 void VoxCoreVoice::updateConnectionMetrics() {
     _connectionMetrics.wifiConnectMs = _wifi.getWifiConnectMs();
     _connectionMetrics.sntpSyncMs = _wifi.getSntpSyncMs();
-    _connectionMetrics.wsConnectMs = _client.getWsConnectMs();
-    _connectionMetrics.setupCompleteMs = _client.getSetupCompleteMs();
+    _connectionMetrics.wsConnectMs = _activeProvider ? _activeProvider->getWsConnectMs() : 0;
+    _connectionMetrics.setupCompleteMs = _activeProvider ? _activeProvider->getSetupCompleteMs() : 0;
     _connectionMetrics.wifiAttempts = _wifi.getWifiAttempts();
     _connectionMetrics.wifiReconnects = _wifi.getWifiReconnects();
-    _connectionMetrics.geminiAttempts = _client.getConnectAttempts();
+    _connectionMetrics.geminiAttempts = _activeProvider ? _activeProvider->getConnectAttempts() : 0;
     _connectionMetrics.geminiReconnects = _session.getReconnectCount();
     _connectionMetrics.fastConnectEnabled = _config.enableFastConnect;
     _connectionMetrics.fastConnectAttempted = _wifi.isFastConnectAttempted();
@@ -72,8 +87,9 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _connectionMetrics.fastConnectEnabled = _config.enableFastConnect;
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.5.3.1 — Consolidation             ");
-    Serial.printf("  Mode Audio : %s | FastConnect : %s\n",
+    Serial.println("  VoxCore VoiceKit v0.6.0 — Multi-Fournisseurs IA       ");
+    Serial.printf("  Fournisseur : %s | Mode Audio : %s | FastConnect : %s\n",
+                  (_config.provider == VoiceProviderType::OPENAI) ? "OPENAI REALTIME" : "GEMINI LIVE",
                   (LiveAudioPlayer::getCompiledAudioMode() == 1) ? "MODE 1 (REACTIVE_CALLBACK)" : "MODE 2 (DEDICATED_AUDIO_TASK)",
                   _config.enableFastConnect ? "ACTIF" : "DESACTIVE");
     Serial.println("========================================================");
@@ -130,21 +146,33 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         return false;
     }
 
-    // 5. Initialisation du client Gemini Live (protocole BidiGenerateContent)
-    if (!_client.begin(_config.apiKey.c_str(), _config.model.c_str(), _config.voice.c_str())) {
-        _lastError = _client.getLastError();
-        Serial.printf("[VoiceKit] ERREUR : %s\n", _lastError.c_str());
-        setState(VoiceState::ERROR_STATE);
-        if (_onError) _onError(_lastError);
-        return false;
+    // 5. Initialisation du fournisseur vocal actif (Gemini Live ou OpenAI Realtime)
+    if (_config.provider == VoiceProviderType::OPENAI) {
+        _activeProvider = &_openaiClient;
+        if (!_openaiClient.begin(_config)) {
+            _lastError = _openaiClient.getLastError();
+            Serial.printf("[VoiceKit] ERREUR : %s\n", _lastError.c_str());
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+    } else {
+        _geminiProvider.setClient(&_client);
+        _activeProvider = &_geminiProvider;
+        if (!_client.begin(_config.apiKey.c_str(), _config.model.c_str(), _config.voice.c_str())) {
+            _lastError = _client.getLastError();
+            Serial.printf("[VoiceKit] ERREUR : %s\n", _lastError.c_str());
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+        _client.setLanguage(_config.language);
+        _client.setVoiceDirectives(_config.buildVoiceDirectives());
+        _client.setSystemInstruction(_config.enableConversation ? _config.conversationInstruction : _config.systemInstruction);
     }
 
-    _client.setLanguage(_config.language);
-    _client.setVoiceDirectives(_config.buildVoiceDirectives());
-    _client.setSystemInstruction(_config.enableConversation ? _config.conversationInstruction : _config.systemInstruction);
-
     // Enregistrement de l'écouteur de transcriptions entrantes utilisateur
-    _client.setOnInputTranscription([this](const String& text, bool isFinal) {
+    _activeProvider->setOnInputTranscription([this](const String& text, bool isFinal) {
         if (_conversationEnabled) {
             _conversationController.handleUserTranscription(text, isFinal);
         }
@@ -152,7 +180,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     });
 
     // 6. Initialisation du contrôleur de session LiveSessionController
-    if (!_session.begin(&_client, &_player)) {
+    if (!_session.begin(_activeProvider, &_player)) {
         _lastError = "Echec initialisation LiveSessionController";
         Serial.printf("[VoiceKit] ERREUR : %s\n", _lastError.c_str());
         setState(VoiceState::ERROR_STATE);
@@ -168,7 +196,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         }
     });
 
-    // Écouteur de transcription de sortie Gemini (Mode conversation)
+    // Écouteur de transcription de sortie (Mode conversation)
     _session.setOnOutputTranscription([this](const String& text) {
         if (_conversationEnabled) {
             _conversationController.handleAssistantTranscription(text);
@@ -182,7 +210,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     });
 
     // Initialisation du contrôleur de conversation bidirectionnelle
-    _conversationController.begin(&_client, &_session, &_streamer, &_player, _config);
+    _conversationController.begin(_activeProvider, &_session, &_streamer, &_player, _config);
 
     _conversationController.setOnStateChanged([this](VoiceState s) {
         setState(s);
@@ -256,18 +284,18 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
                 break;
             case LiveSessionState::ERROR:
                 // Restauration cohérente en cas d'erreur de reconnexion (v0.4.1.1)
-                if (_profileChangePending) {
-                    _client.setVoice(_config.voice);
-                    _client.setLanguage(_config.language);
-                    _client.setVoiceDirectives(_config.buildVoiceDirectives());
+                if (_profileChangePending && _activeProvider) {
+                    _activeProvider->setVoice(_config.voice);
+                    _activeProvider->setLanguage(_config.language);
+                    _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
                     _profileChangePending = false;
                     Serial.println("[VoiceKit] Echec reconnexion profil : profil precedent restaure");
                 }
-                if (_modeSwitchPending) {
+                if (_modeSwitchPending && _activeProvider) {
                     _conversationEnabled = _previousConversationMode;
                     _config.enableConversation = _previousConversationMode;
-                    _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
-                    _client.setVoiceDirectives(_config.buildVoiceDirectives());
+                    _activeProvider->setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+                    _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
                     _modeSwitchPending = false;
                     Serial.println("[VoiceKit] Echec reconnexion mode : mode precedent restaure");
                 }
@@ -287,8 +315,10 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         if (_state == VoiceState::LISTENING || _state == VoiceState::TRANSCRIBING) {
             return;
         }
-        _latencyMetrics.firstResponseReceivedMs = _client.getFirstResponseReceivedMs();
-        _latencyMetrics.firstAudioReceivedMs = _client.getFirstAudioReceivedMs();
+        if (_activeProvider) {
+            _latencyMetrics.firstResponseReceivedMs = _activeProvider->getFirstResponseReceivedMs();
+            _latencyMetrics.firstAudioReceivedMs = _activeProvider->getFirstAudioReceivedMs();
+        }
         _latencyMetrics.firstAudioPlayedMs = _player.getFirstPlayRawAcceptedTimeMs();
         setState(VoiceState::SPEAKING);
         if (_onSpeechStarted) {
@@ -319,18 +349,18 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     });
 
     _session.setOnError([this](const String& err) {
-        if (_profileChangePending) {
-            _client.setVoice(_config.voice);
-            _client.setLanguage(_config.language);
-            _client.setVoiceDirectives(_config.buildVoiceDirectives());
+        if (_profileChangePending && _activeProvider) {
+            _activeProvider->setVoice(_config.voice);
+            _activeProvider->setLanguage(_config.language);
+            _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
             _profileChangePending = false;
             Serial.println("[VoiceKit] Erreur session : profil vocal precedent restaure");
         }
-        if (_modeSwitchPending) {
+        if (_modeSwitchPending && _activeProvider) {
             _conversationEnabled = _previousConversationMode;
             _config.enableConversation = _previousConversationMode;
-            _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
-            _client.setVoiceDirectives(_config.buildVoiceDirectives());
+            _activeProvider->setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+            _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
             _modeSwitchPending = false;
             Serial.println("[VoiceKit] Erreur session : mode precedent restaure");
         }
@@ -378,8 +408,8 @@ void VoxCoreVoice::update() {
         _wifi.tick();
         if (_wifi.isConnected() && _wifi.isTimeSynced()) {
             if (_state == VoiceState::CONNECTING_WIFI || _state == VoiceState::IDLE || _state == VoiceState::DISCONNECTED || _state == VoiceState::ERROR_STATE) {
-                if (!_client.isConnected() && (_session.getState() == LiveSessionState::DISCONNECTED || _session.getState() == LiveSessionState::ERROR)) {
-                    Serial.println("[VoiceKit] Wi-Fi et NTP valides -> Connexion a Gemini Live...");
+                if ((!_activeProvider || !_activeProvider->isConnected()) && (_session.getState() == LiveSessionState::DISCONNECTED || _session.getState() == LiveSessionState::ERROR)) {
+                    Serial.println("[VoiceKit] Wi-Fi et NTP valides -> Connexion au service vocal...");
                     setState(VoiceState::CONNECTING_SERVICE);
                     _connectingStartTimeMs = millis();
                     _session.activate();
@@ -395,8 +425,8 @@ void VoxCoreVoice::update() {
         // En mode EXTERNAL_WIFI : connexion automatique dès que l'application hôte a établi le réseau
         if (_state == VoiceState::IDLE || _state == VoiceState::CONNECTING_WIFI || _state == VoiceState::DISCONNECTED || _state == VoiceState::ERROR_STATE) {
             if (WiFi.status() == WL_CONNECTED && isSystemTimeValid()) {
-                if (!_client.isConnected() && (_session.getState() == LiveSessionState::DISCONNECTED || _session.getState() == LiveSessionState::ERROR)) {
-                    Serial.println("[VoiceKit] Reseau hote & NTP valides -> Connexion a Gemini Live...");
+                if ((!_activeProvider || !_activeProvider->isConnected()) && (_session.getState() == LiveSessionState::DISCONNECTED || _session.getState() == LiveSessionState::ERROR)) {
+                    Serial.println("[VoiceKit] Reseau hote & NTP valides -> Connexion au service vocal...");
                     setState(VoiceState::CONNECTING_SERVICE);
                     _connectingStartTimeMs = millis();
                     _session.activate();
@@ -413,7 +443,9 @@ void VoxCoreVoice::update() {
     }
 
     // 2. Traitement régulier des moteurs VoxCore
-    _client.tick();
+    if (_activeProvider) {
+        _activeProvider->tick();
+    }
     _player.tick();
     _session.tick();
 
@@ -421,11 +453,10 @@ void VoxCoreVoice::update() {
         _conversationController.tick();
     }
 
-
     // 3. Traitement régulier du streamer audio STT
     if (_streamer.isStreaming()) {
-        if (!_client.isConnected()) {
-            _lastError = "Perte connexion Gemini Live pendant ecoute micro";
+        if (!_activeProvider || !_activeProvider->isConnected()) {
+            _lastError = "Perte connexion service vocal pendant ecoute micro";
             Serial.printf("[VoiceKit] %s\n", _lastError.c_str());
             _streamer.cancel();
             if (_conversationEnabled) {
@@ -454,7 +485,7 @@ void VoxCoreVoice::update() {
     // 4. Surveillance du timeout de transcription finale (STT)
     if (_state == VoiceState::TRANSCRIBING && _transcriptionPending) {
         if (_stopListeningTimeMs > 0 && (now - _stopListeningTimeMs > _config.sttFinalTimeoutMs)) {
-            Serial.println("[VoiceKit] Avertissement : Timeout attente transcription finale de Gemini Live");
+            Serial.println("[VoiceKit] Avertissement : Timeout attente transcription finale");
             _transcriptionPending = false;
             _player.setPlaybackAllowed(true);
             setState(VoiceState::READY);
@@ -473,26 +504,25 @@ void VoxCoreVoice::update() {
 
     // 6. Surveillance des timeouts de connexion initiale
     if (_state == VoiceState::CONNECTING_SERVICE) {
-        // Connection can start during this update, after the initial now snapshot.
-        // Read the clock again to avoid unsigned underflow and an immediate timeout.
-        if (_connectingStartTimeMs > 0 && (millis() - _connectingStartTimeMs > GEMINI_LIVE_CONNECT_TIMEOUT_MS + 2000)) {
-            Serial.println("[VoiceKit] ERREUR : Delai de connexion depasse vers Gemini Live");
-            if (_profileChangePending) {
-                _client.setVoice(_config.voice);
-                _client.setLanguage(_config.language);
-                _client.setVoiceDirectives(_config.buildVoiceDirectives());
+        uint32_t timeoutLimit = (_config.provider == VoiceProviderType::OPENAI) ? 15000 : (GEMINI_LIVE_CONNECT_TIMEOUT_MS + 2000);
+        if (_connectingStartTimeMs > 0 && (millis() - _connectingStartTimeMs > timeoutLimit)) {
+            Serial.println("[VoiceKit] ERREUR : Delai de connexion depasse vers service vocal");
+            if (_profileChangePending && _activeProvider) {
+                _activeProvider->setVoice(_config.voice);
+                _activeProvider->setLanguage(_config.language);
+                _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
                 _profileChangePending = false;
                 Serial.println("[VoiceKit] Timeout reconnexion profil : profil vocal precedent restaure");
             }
-            if (_modeSwitchPending) {
+            if (_modeSwitchPending && _activeProvider) {
                 _conversationEnabled = _previousConversationMode;
                 _config.enableConversation = _previousConversationMode;
-                _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
-                _client.setVoiceDirectives(_config.buildVoiceDirectives());
+                _activeProvider->setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+                _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
                 _modeSwitchPending = false;
                 Serial.println("[VoiceKit] Timeout reconnexion mode : mode precedent restaure");
             }
-            _lastError = "Timeout connexion Gemini Live";
+            _lastError = "Timeout connexion service vocal";
             _connectingStartTimeMs = 0;
             _pendingText = "";
             setState(VoiceState::ERROR_STATE);
@@ -594,12 +624,12 @@ bool VoxCoreVoice::dispatchSpeech(const String& text) {
     if (_latencyMetrics.turnStartedMs == 0) _latencyMetrics.turnStartedMs = 1;
     bool ok = _session.sendTextMessage(prompt);
     if (!ok) {
-        _lastError = "Echec envoi message texte vers Gemini Live";
+        _lastError = "Echec envoi message texte vers service vocal";
         setState(VoiceState::ERROR_STATE);
         if (_onError) _onError(_lastError);
         return false;
     }
-    _latencyMetrics.activityEndSentMs = _client.getActivityEndSentMs();
+    _latencyMetrics.activityEndSentMs = _activeProvider ? _activeProvider->getActivityEndSentMs() : 0;
     if (_latencyMetrics.activityEndSentMs == 0) {
         _latencyMetrics.activityEndSentMs = millis();
         if (_latencyMetrics.activityEndSentMs == 0) _latencyMetrics.activityEndSentMs = 1;
@@ -621,18 +651,18 @@ void VoxCoreVoice::stop() {
         _transcriptionPending = false;
         _finalTranscriptionReceived = false;
     }
-    if (_profileChangePending) {
-        _client.setVoice(_config.voice);
-        _client.setLanguage(_config.language);
-        _client.setVoiceDirectives(_config.buildVoiceDirectives());
+    if (_profileChangePending && _activeProvider) {
+        _activeProvider->setVoice(_config.voice);
+        _activeProvider->setLanguage(_config.language);
+        _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
         _profileChangePending = false;
         Serial.println("[VoiceKit] stop() : profil vocal precedent restaure");
     }
-    if (_modeSwitchPending) {
+    if (_modeSwitchPending && _activeProvider) {
         _conversationEnabled = _previousConversationMode;
         _config.enableConversation = _previousConversationMode;
-        _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
-        _client.setVoiceDirectives(_config.buildVoiceDirectives());
+        _activeProvider->setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+        _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
         _modeSwitchPending = false;
         Serial.println("[VoiceKit] stop() : mode conversationnel precedent restaure");
     }
@@ -719,17 +749,19 @@ bool VoxCoreVoice::setVoiceProfile(const String& voice, const String& language,
     }
 
     // 3. Cas hors-ligne / session non-connectée : application directe pour la future session
-    if (!_client.isConnected() || _session.getState() == LiveSessionState::DISCONNECTED) {
+    if (!_activeProvider || !_activeProvider->isConnected() || _session.getState() == LiveSessionState::DISCONNECTED) {
         _config.voice = voice;
         _config.language = language;
         _config.style = style;
         _config.tone = tone;
         _config.accent = accent;
 
-        _client.setVoice(voice);
-        _client.setLanguage(language);
-        _client.setVoiceDirectives(_config.buildVoiceDirectives());
-        _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+        if (_activeProvider) {
+            _activeProvider->setVoice(voice);
+            _activeProvider->setLanguage(language);
+            _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
+            _activeProvider->setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+        }
 
         Serial.printf("[VoiceKit] Profil vocal configure (hors ligne) : Voix=%s | Langue=%s | Style=%s | Ton=%s%s%s\n",
                       voice.c_str(), language.c_str(), voiceStyleToString(style), voiceToneToString(tone),
@@ -746,7 +778,7 @@ bool VoxCoreVoice::setVoiceProfile(const String& voice, const String& language,
     _pendingTone = tone;
     _pendingAccent = accent;
 
-    // Prépare le client Gemini pour la nouvelle trame de setup
+    // Prépare le fournisseur pour la nouvelle trame de configuration
     VoiceKitConfig tempCfg = _config;
     tempCfg.voice = voice;
     tempCfg.language = language;
@@ -754,10 +786,12 @@ bool VoxCoreVoice::setVoiceProfile(const String& voice, const String& language,
     tempCfg.tone = tone;
     tempCfg.accent = accent;
 
-    _client.setVoice(voice);
-    _client.setLanguage(language);
-    _client.setVoiceDirectives(tempCfg.buildVoiceDirectives());
-    _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+    if (_activeProvider) {
+        _activeProvider->setVoice(voice);
+        _activeProvider->setLanguage(language);
+        _activeProvider->setVoiceDirectives(tempCfg.buildVoiceDirectives());
+        _activeProvider->setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+    }
 
     Serial.printf("[VoiceKit] Demande de nouveau profil vocal : Voix=%s | Langue=%s | Style=%s | Ton=%s%s%s\n",
                   voice.c_str(), language.c_str(), voiceStyleToString(style), voiceToneToString(tone),
@@ -770,10 +804,12 @@ bool VoxCoreVoice::setVoiceProfile(const String& voice, const String& language,
 
     bool ok = _session.activate();
     if (!ok) {
-        // En cas d'échec immédiat d'activation, restaurer immédiatement le profil actif dans le client
-        _client.setVoice(_config.voice);
-        _client.setLanguage(_config.language);
-        _client.setVoiceDirectives(_config.buildVoiceDirectives());
+        // En cas d'échec immédiat d'activation, restaurer immédiatement le profil actif
+        if (_activeProvider) {
+            _activeProvider->setVoice(_config.voice);
+            _activeProvider->setLanguage(_config.language);
+            _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
+        }
         _profileChangePending = false;
         _lastError = "Echec activation session pour reconnexion profil";
         setState(VoiceState::ERROR_STATE);
@@ -805,7 +841,7 @@ bool VoxCoreVoice::setAccent(const String& accent) {
 }
 
 // =============================================================================
-// Implémentation Conversation Bidirectionnelle (v0.4.0 / v0.4.1.1)
+// Implémentation Conversation Bidirectionnelle (v0.4.0 / v0.4.1.1 / v0.6.0)
 // =============================================================================
 
 bool VoxCoreVoice::enableConversation(bool enable) {
@@ -829,11 +865,14 @@ bool VoxCoreVoice::enableConversation(bool enable) {
     }
 
     // 3. Cas hors-ligne / session non-connectée : application directe sans reconnexion
-    if (!_client.isConnected() || _session.getState() == LiveSessionState::DISCONNECTED) {
+    if (!_activeProvider || !_activeProvider->isConnected() || _session.getState() == LiveSessionState::DISCONNECTED) {
         _conversationEnabled = enable;
         _config.enableConversation = enable;
-        _client.setSystemInstruction(enable ? _config.conversationInstruction : _config.systemInstruction);
-        _client.setVoiceDirectives(_config.buildVoiceDirectives());
+        if (_activeProvider) {
+            _activeProvider->setSystemInstruction(enable ? _config.conversationInstruction : _config.systemInstruction);
+            _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
+            _activeProvider->setConversationMode(enable);
+        }
         Serial.printf("[VoiceKit] Mode conversation %s (hors ligne)\n", enable ? "ACTIVE" : "DESACTIVE");
         return true;
     }
@@ -844,8 +883,11 @@ bool VoxCoreVoice::enableConversation(bool enable) {
 
     _conversationEnabled = enable;
     _config.enableConversation = enable;
-    _client.setSystemInstruction(enable ? _config.conversationInstruction : _config.systemInstruction);
-    _client.setVoiceDirectives(_config.buildVoiceDirectives());
+    if (_activeProvider) {
+        _activeProvider->setSystemInstruction(enable ? _config.conversationInstruction : _config.systemInstruction);
+        _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
+        _activeProvider->setConversationMode(enable);
+    }
 
     Serial.printf("[VoiceKit] Transition vers mode %s -> reconnexion securisee pour injection instructions...\n",
                   enable ? "CONVERSATION" : "TTS/STT");
@@ -859,8 +901,11 @@ bool VoxCoreVoice::enableConversation(bool enable) {
         // En cas d'échec immédiat d'activation, restaurer le mode précédent
         _conversationEnabled = _previousConversationMode;
         _config.enableConversation = _previousConversationMode;
-        _client.setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
-        _client.setVoiceDirectives(_config.buildVoiceDirectives());
+        if (_activeProvider) {
+            _activeProvider->setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+            _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
+            _activeProvider->setConversationMode(_conversationEnabled);
+        }
         _modeSwitchPending = false;
         _lastError = "Echec activation session pour transition de mode";
         setState(VoiceState::ERROR_STATE);
@@ -909,9 +954,9 @@ bool VoxCoreVoice::startListening() {
         }
     }
 
-    // 3. Vérification de la disponibilité du client Gemini Live
-    if (!_client.isConnected() || !_client.isSetupComplete()) {
-        _lastError = "Session Gemini Live non prete";
+    // 3. Vérification de la disponibilité du fournisseur vocal actif
+    if (!_activeProvider || !_activeProvider->isConnected() || !_activeProvider->isSetupComplete()) {
+        _lastError = "Session vocale non prete";
         Serial.printf("[VoiceKit] startListening() refuse : %s\n", _lastError.c_str());
         if (_onError) _onError(_lastError);
         return false;
@@ -929,7 +974,7 @@ bool VoxCoreVoice::startListening() {
     _latencyMetrics.speechEndDetectedMs = prevSpeechEnd;
 
     // 5. Démarrage effectif du streamer (envoie activityStart et active double-buffering)
-    if (!_streamer.start(&_client)) {
+    if (!_streamer.start(_activeProvider)) {
         _lastError = _streamer.getLastError();
         Serial.printf("[VoiceKit] ERREUR startListening() : %s\n", _lastError.c_str());
         _player.setPlaybackAllowed(true);
@@ -963,8 +1008,8 @@ bool VoxCoreVoice::stopListening() {
     _latencyMetrics.micStoppedMs = _stopListeningTimeMs;
     if (_streamer.getActivityEndSentMs() > 0) {
         _latencyMetrics.activityEndSentMs = _streamer.getActivityEndSentMs();
-    } else if (_client.getActivityEndSentMs() > 0) {
-        _latencyMetrics.activityEndSentMs = _client.getActivityEndSentMs();
+    } else if (_activeProvider && _activeProvider->getActivityEndSentMs() > 0) {
+        _latencyMetrics.activityEndSentMs = _activeProvider->getActivityEndSentMs();
     }
 
     if (_onListeningFinished) {
@@ -1011,8 +1056,8 @@ bool VoxCoreVoice::isTranscribing() const {
 }
 
 void VoxCoreVoice::handleIncomingTranscription(const String& text, bool isFinal) {
-    if (_latencyMetrics.firstResponseReceivedMs == 0) {
-        _latencyMetrics.firstResponseReceivedMs = _client.getFirstResponseReceivedMs();
+    if (_latencyMetrics.firstResponseReceivedMs == 0 && _activeProvider) {
+        _latencyMetrics.firstResponseReceivedMs = _activeProvider->getFirstResponseReceivedMs();
         if (_latencyMetrics.firstResponseReceivedMs == 0) {
             _latencyMetrics.firstResponseReceivedMs = millis();
             if (_latencyMetrics.firstResponseReceivedMs == 0) _latencyMetrics.firstResponseReceivedMs = 1;
@@ -1057,4 +1102,3 @@ void VoxCoreVoice::notifySpeechEndDetected(uint32_t ms) {
         _conversationController.notifySpeechEndDetected(ms);
     }
 }
-

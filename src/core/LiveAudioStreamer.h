@@ -5,6 +5,7 @@
 #include "VoiceHubConfig.h"
 #include "VoiceHubTypes.h"
 #include "GeminiLiveClient.h"
+#include "core/IVoiceProvider.h"
 #include "hal/IAudioInput.h"
 #include "hal/IAudioOutput.h"
 
@@ -89,7 +90,10 @@ public:
 
     bool begin();
 
-    // Démarrage de la capture et du streaming sur appui PARLER (envoie activityStart)
+    // Démarrage de la capture et du streaming sur appui PARLER (v0.6.0 IVoiceProvider)
+    bool start(IVoiceProvider* provider);
+
+    // Surcharge de compatibilité ascendante avec GeminiLiveClient (v0.5.x)
     bool start(GeminiLiveClient* client);
 
     // Progression de la transmission réseau (dépile les blocs complétés)
@@ -240,7 +244,9 @@ private:
     IAudioInput* _audioInput = nullptr;
     IAudioOutput* _audioOutput = nullptr;
 
-    GeminiLiveClient* _client = nullptr;
+    IVoiceProvider* _provider = nullptr;
+    GeminiLiveClient* _legacyClient = nullptr;
+    std::unique_ptr<IVoiceProvider> _legacyAdapter;
     volatile bool _isStreaming = false;
     volatile bool _stopDrainRequested = false;
     bool _queueSaturated = false;

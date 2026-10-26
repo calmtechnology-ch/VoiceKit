@@ -1,4 +1,5 @@
 #include "core/ConversationController.h"
+#include "core/GeminiVoiceProvider.h"
 
 ConversationController::ConversationController() {
     _state = VoiceState::READY;
@@ -6,16 +7,22 @@ ConversationController::ConversationController() {
 }
 
 ConversationController::~ConversationController() {
+    _onStateChanged = nullptr;
+    _onError = nullptr;
+    _onUserText = nullptr;
+    _onAssistantText = nullptr;
+    _onConversationFinished = nullptr;
+    _onTurnMetrics = nullptr;
     requestStop();
 }
 
-bool ConversationController::begin(GeminiLiveClient* client, LiveSessionController* session,
-                                     LiveAudioStreamer* streamer, LiveAudioPlayer* player,
-                                     const VoiceKitConfig& config) {
-    if (!client || !session || !streamer || !player) {
+bool ConversationController::begin(IVoiceProvider* provider, LiveSessionController* session,
+                                   LiveAudioStreamer* streamer, LiveAudioPlayer* player,
+                                   const VoiceKitConfig& config) {
+    if (!provider || !session || !streamer || !player) {
         return false;
     }
-    _client = client;
+    _provider = provider;
     _session = session;
     _streamer = streamer;
     _player = player;
@@ -23,6 +30,16 @@ bool ConversationController::begin(GeminiLiveClient* client, LiveSessionControll
     _state = VoiceState::READY;
     _isTurnActive = false;
     return true;
+}
+
+bool ConversationController::begin(GeminiLiveClient* client, LiveSessionController* session,
+                                   LiveAudioStreamer* streamer, LiveAudioPlayer* player,
+                                   const VoiceKitConfig& config) {
+    _legacyClient = client;
+    if (!_legacyAdapter) {
+        _legacyAdapter = std::unique_ptr<IVoiceProvider>(new GeminiVoiceProvider(client));
+    }
+    return begin(_legacyAdapter.get(), session, streamer, player, config);
 }
 
 void ConversationController::setState(VoiceState newState) {
@@ -38,9 +55,9 @@ void ConversationController::setState(VoiceState newState) {
 }
 
 bool ConversationController::startTurn() {
-    if (!_client || !_client->isConnected() || !_client->isSetupComplete()) {
-        Serial.println("[Conversation] Refus startTurn : session Gemini Live non prete");
-        if (_onError) _onError("Session Gemini Live non prete");
+    if (!_provider || !_provider->isConnected() || !_provider->isSetupComplete()) {
+        Serial.println("[Conversation] Refus startTurn : session vocale non prete");
+        if (_onError) _onError("Session vocale non prete");
         return false;
     }
 
@@ -83,7 +100,7 @@ bool ConversationController::startTurn() {
     }
 
     // Démarrage de la capture et du streaming audio PCM 16 kHz
-    if (!_streamer->start(_client)) {
+    if (!_streamer->start(_provider)) {
         Serial.printf("[Conversation] ERREUR streamer start : %s\n", _streamer->getLastError());
         _isTurnActive = false;
         if (_player) _player->setPlaybackAllowed(true);
@@ -118,11 +135,11 @@ bool ConversationController::finishTurnAudio() {
             _metrics.latency.activityEndSentMs = _streamer->getActivityEndSentMs();
         }
     }
-    if (_metrics.latency.activityEndSentMs == 0 && _client && _client->getActivityEndSentMs() > 0) {
-        _metrics.latency.activityEndSentMs = _client->getActivityEndSentMs();
+    if (_metrics.latency.activityEndSentMs == 0 && _provider && _provider->getActivityEndSentMs() > 0) {
+        _metrics.latency.activityEndSentMs = _provider->getActivityEndSentMs();
     }
 
-    // Signalisation au contrôleur de session qu'on attend la réponse Gemini
+    // Signalisation au contrôleur de session qu'on attend la réponse
     if (_session) {
         _session->finishAudioCapture();
     }
@@ -160,9 +177,9 @@ void ConversationController::tick() {
     if (_state == VoiceState::WAITING_RESPONSE) {
         if (_session && _session->getState() == LiveSessionState::PLAYING) {
             _metrics.firstAudioLatencyMs = _session->getFirstAudioLatencyMs();
-            if (_client) {
-                _metrics.latency.firstResponseReceivedMs = _client->getFirstResponseReceivedMs();
-                _metrics.latency.firstAudioReceivedMs = _client->getFirstAudioReceivedMs();
+            if (_provider) {
+                _metrics.latency.firstResponseReceivedMs = _provider->getFirstResponseReceivedMs();
+                _metrics.latency.firstAudioReceivedMs = _provider->getFirstAudioReceivedMs();
             }
             if (_player) {
                 _metrics.latency.firstAudioPlayedMs = _player->getFirstPlayRawAcceptedTimeMs();
@@ -210,15 +227,15 @@ void ConversationController::handleTurnFinished(uint64_t turnId) {
     if (_streamer && _metrics.latency.activityEndSentMs == 0) {
         _metrics.latency.activityEndSentMs = _streamer->getActivityEndSentMs();
     }
-    if (_client) {
+    if (_provider) {
         if (_metrics.latency.activityEndSentMs == 0) {
-            _metrics.latency.activityEndSentMs = _client->getActivityEndSentMs();
+            _metrics.latency.activityEndSentMs = _provider->getActivityEndSentMs();
         }
         if (_metrics.latency.firstResponseReceivedMs == 0) {
-            _metrics.latency.firstResponseReceivedMs = _client->getFirstResponseReceivedMs();
+            _metrics.latency.firstResponseReceivedMs = _provider->getFirstResponseReceivedMs();
         }
         if (_metrics.latency.firstAudioReceivedMs == 0) {
-            _metrics.latency.firstAudioReceivedMs = _client->getFirstAudioReceivedMs();
+            _metrics.latency.firstAudioReceivedMs = _provider->getFirstAudioReceivedMs();
         }
     }
     if (_player) {
@@ -241,15 +258,16 @@ void ConversationController::handleTurnFinished(uint64_t turnId) {
         Serial.printf("[Conversation] Utilisateur : \"%s\"\n", _metrics.userText.c_str());
     }
     if (!_metrics.assistantText.isEmpty()) {
-        Serial.printf("[Conversation] Gemini      : \"%s\"\n", _metrics.assistantText.c_str());
+        const char* providerName = (_config.provider == VoiceProviderType::OPENAI) ? "OpenAI" : "Gemini";
+        Serial.printf("[Conversation] %-10s : \"%s\"\n", providerName, _metrics.assistantText.c_str());
     }
     Serial.println("--------------------------------------------------------------------------------");
-    Serial.println("  [LATENCY] Metriques de latence du tour vocal (v0.5.3) :                       ");
+    Serial.println("  [LATENCY] Metriques de latence du tour vocal (v0.5.3 / v0.6.0) :               ");
     if (_metrics.latency.hasSpeechEndDetected()) {
         Serial.printf("  - Fin de parole (VAD) -> Fin de capture micro : %d ms\n", _metrics.latency.getSpeechEndToMicStoppedMs());
     }
     Serial.printf("  - Fin de capture micro -> Envoi activityEnd    : %d ms\n", _metrics.latency.getMicStoppedToActivityEndMs());
-    Serial.printf("  - Envoi activityEnd -> 1er audio Gemini        : %d ms\n", _metrics.latency.getActivityEndToFirstAudioMs());
+    Serial.printf("  - Envoi activityEnd -> 1er audio IA            : %d ms\n", _metrics.latency.getActivityEndToFirstAudioMs());
     Serial.printf("  - 1er audio recu -> Debut restitution DMA      : %d ms\n", _metrics.latency.getFirstAudioToPlaybackMs());
     Serial.printf("  - Latence de reponse vocale percue             : %d ms\n", _metrics.latency.getResponseLatencyMs());
     Serial.printf("  - Duree totale du tour vocal                   : %d ms\n", _metrics.latency.getTotalTurnDurationMs());

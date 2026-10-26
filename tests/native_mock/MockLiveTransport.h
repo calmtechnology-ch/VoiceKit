@@ -7,9 +7,10 @@ public:
     MockLiveTransport() = default;
     ~MockLiveTransport() override = default;
 
-    bool connect(const char* uri, const char* certPem = nullptr) override {
+    bool connect(const char* uri, const char* certPem = nullptr, const char* extraHeaders = nullptr) override {
         _connected = true;
         _lastUri = uri ? uri : "";
+        _lastHeaders = extraHeaders ? extraHeaders : "";
         if (_onConnect) _onConnect();
         return true;
     }
@@ -45,12 +46,21 @@ public:
         if (_onError) _onError(err);
     }
 
+    void triggerConnected() {
+        _connected = true;
+        if (_onConnect) _onConnect();
+    }
+
     const std::string& getLastSent() const { return _lastSent; }
+    const std::string& getLastMessage() const { return _lastSent; }
+    const std::string& getLastHeaders() const { return _lastHeaders; }
+    const std::string& getLastUri() const { return _lastUri; }
     size_t getSendCount() const { return _sendCount; }
 
 private:
     bool _connected = false;
     std::string _lastUri;
+    std::string _lastHeaders;
     std::string _lastSent;
     size_t _sendCount = 0;
     ConnectHandler _onConnect;

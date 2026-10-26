@@ -1,18 +1,20 @@
 #pragma once
 #include <Arduino.h>
 #include <functional>
+#include <memory>
 #include "VoiceKitConfig.h"
 #include "core/GeminiLiveClient.h"
+#include "core/IVoiceProvider.h"
 #include "core/LiveSessionController.h"
 #include "core/LiveAudioStreamer.h"
 #include "core/LiveAudioPlayer.h"
 
 /**
- * @brief Contrôleur de conversation bidirectionnelle native (Mode B) pour VoiceKit v0.4.0.
+ * @brief Contrôleur de conversation bidirectionnelle native (Mode B) pour VoiceKit v0.4.0 / v0.6.0.
  * 
  * Coordonne l'acquisition vocale microphone (STT 16 kHz), la transmission en streaming
- * vers Gemini Live, la réception de la transcription utilisateur, la réception de la
- * réponse native Gemini Live (PCM 24 kHz) et sa restitution sur le haut-parleur CoreS3.
+ * vers le fournisseur vocal actif (Gemini Live ou OpenAI Realtime), la réception de la
+ * transcription utilisateur, la réception de la réponse native (PCM 24 kHz) et sa restitution sur le haut-parleur CoreS3.
  */
 class ConversationController {
 public:
@@ -26,6 +28,12 @@ public:
     ConversationController();
     ~ConversationController();
 
+    // Initialisation avec IVoiceProvider (v0.6.0 multi-fournisseurs)
+    bool begin(IVoiceProvider* provider, LiveSessionController* session,
+               LiveAudioStreamer* streamer, LiveAudioPlayer* player,
+               const VoiceKitConfig& config);
+
+    // Surcharge de compatibilité ascendante avec GeminiLiveClient (v0.5.x)
     bool begin(GeminiLiveClient* client, LiveSessionController* session,
                LiveAudioStreamer* streamer, LiveAudioPlayer* player,
                const VoiceKitConfig& config);
@@ -33,7 +41,7 @@ public:
     // Démarrage d'un tour de parole utilisateur (appui PARLER)
     bool startTurn();
 
-    // Fin de parole utilisateur (relâchement PARLER) -> bascule en attente réponse Gemini
+    // Fin de parole utilisateur (relâchement PARLER) -> bascule en attente réponse
     bool finishTurnAudio();
 
     // Interruption prioritaire (appui STOP)
@@ -67,7 +75,9 @@ public:
 private:
     void setState(VoiceState newState);
 
-    GeminiLiveClient* _client = nullptr;
+    IVoiceProvider* _provider = nullptr;
+    GeminiLiveClient* _legacyClient = nullptr;
+    std::unique_ptr<IVoiceProvider> _legacyAdapter;
     LiveSessionController* _session = nullptr;
     LiveAudioStreamer* _streamer = nullptr;
     LiveAudioPlayer* _player = nullptr;
