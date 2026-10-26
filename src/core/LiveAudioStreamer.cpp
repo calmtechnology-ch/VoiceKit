@@ -615,7 +615,7 @@ bool LiveAudioStreamer::start(GeminiLiveClient* client) {
     BaseType_t micTaskRes = xTaskCreatePinnedToCore(
         micTaskEntry,
         "live_mic_task",
-        4096,
+        LIVE_MIC_TASK_STACK_SIZE,
         this,
         3,
         &_micTaskHandle,
@@ -638,8 +638,7 @@ bool LiveAudioStreamer::start(GeminiLiveClient* client) {
     // Synchronisation explicite de démarrage des deux tâches
     EventBits_t bits = xEventGroupWaitBits(
         _taskEventGroup,
-        LIVE_MIC_TASK_STARTED_BIT | LIVE_TX_TASK_STARTED_BIT |
-        LIVE_MIC_TASK_START_FAIL_BIT | LIVE_TX_TASK_START_FAIL_BIT,
+        LIVE_MIC_TASK_STARTED_BIT | LIVE_TX_TASK_STARTED_BIT,
         pdFALSE,
         pdTRUE, // Attendre les deux
         pdMS_TO_TICKS(250)
