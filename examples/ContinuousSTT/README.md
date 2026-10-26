@@ -1,6 +1,6 @@
-# Exemple ContinuousSTT — VoiceKit v0.4.1.1
+# Exemple ContinuousSTT — VoiceKit v0.5.3.1
 
-Exemple autonome de reconnaissance vocale **STT continue mains libres (Continuous Speech-to-Text)** sur **M5Stack CoreS3**, utilisant la bibliothèque **VoiceKit v0.4.1.1** connectée à l'API bidirectionnelle **Google Gemini Live**.
+Exemple autonome de reconnaissance vocale **STT continue mains libres (Continuous Speech-to-Text)** sur **M5Stack CoreS3**, utilisant la bibliothèque **VoiceKit v0.5.3.1** connectée à l'API bidirectionnelle **Google Gemini Live**.
 
 L'application reproduit le fonctionnement d'une **dictée vocale moderne** :
 1. Écoute permanente et non intrusive dès que le moteur est prêt.

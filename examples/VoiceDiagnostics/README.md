@@ -1,14 +1,14 @@
-# VoiceDiagnostics — VoiceKit v0.5.2
+# VoiceDiagnostics — VoiceKit v0.5.3.1
 
-Exemple officiel de **diagnostic et de visualisation** pour la bibliothèque **VoiceKit v0.5.2** sur **M5Stack CoreS3**.
+Exemple officiel de **diagnostic, télémétrie et visualisation** pour la bibliothèque **VoiceKit v0.5.3.1** sur **M5Stack CoreS3**.
 
-Cette application fournit un tableau de bord tactile fluide et léger permettant d'inspecter l'état du moteur vocal, les flux audio (RMS micro, états STT/TTS), les métriques réseau (Wi-Fi, session Gemini Live), les **temps de démarrage et de connexion réels (Fast Connection v0.5.2)**, l'utilisation mémoire (RAM, PSRAM) et le journal horodaté des événements.
+Cette application fournit un tableau de bord tactile fluide et léger permettant d'inspecter l'état du moteur vocal, les flux audio (RMS micro, états STT/TTS), les métriques réseau (Wi-Fi, session Gemini Live), les **temps de démarrage et de connexion réels (Fast Connection v0.5.2)**, les **métriques de latence vocale instrumentées (7 jalons, 6 durées dérivées v0.5.3)**, l'utilisation mémoire (RAM, PSRAM) et le journal horodaté des événements.
 
 ---
 
 ## 1. Fonctionnalités et Interface Tactile (320 × 240)
 
-L'interface est construite avec **M5Unified** (sans surcharge ni dépendance LVGL) et s'articule autour de 5 onglets :
+L'interface est construite avec **M5Unified** (sans surcharge ni dépendance LVGL) et s'articule autour de 6 onglets tactiles :
 
 ### 📊 Onglet `SYS` (Système)
 - **État VoiceKit** : État opérationnel en temps réel (`READY`, `SPEAKING`, `LISTENING`, etc.).
@@ -25,6 +25,16 @@ L'interface est construite avec **M5Unified** (sans surcharge ni dépendance LVG
 - **Restitution TTS** : État du haut-parleur (`INACTIF`, `EN COURS`, `OCCUPE`).
 - **Compteurs audio** : Débuts et fins de synthèse TTS, débuts et fins d'écoute micro, transcriptions finales reçues.
 - **Métriques conversation** : Latence du premier bloc audio et perte d'échantillons du dernier tour conversationnel (affiché `N/D` si aucun tour n'a eu lieu).
+
+### ⏱️ Onglet `LAT` (Latence Vocale & Seuils VAD — v0.5.3 / v0.5.3.1)
+- **Latence rep. perçue** : Latence perçue par l'utilisateur (`getResponseLatencyMs()`), mesurée depuis la fin de parole VAD (ou relâchement bouton en mode manuel) jusqu'au premier échantillon remis au DMA. Affiché en vert (`ms`) ou `N/D`.
+- **Délai Gemini 1erPCM** : Temps d'aller-retour réseau et traitement Gemini (`getActivityEndToFirstAudioMs()`) entre l'envoi de `activityEnd` et la réception du 1er paquet PCM 24 kHz.
+- **Délai local -> DMA** : Délai local de décodage et soumission DMA (`getFirstAudioToPlaybackMs()`).
+- **Durée capture micro** : Durée de capture effective de la parole de l'utilisateur (`s_lastMicCaptureMs`).
+- **Tours mes./incomplet** : Compteur de tours complets mesurés versus tours interrompus ou incomplets (sans altérer les statistiques globales).
+- **Min / Moy / Max** : Statistiques glissantes de latence perçue sur la session (sur tampon fixe de 64 échantillons).
+- **Médiane / Seuil VAD** : Médiane glissante de session et seuil VAD actuellement actif.
+- **Contrôle interactif du seuil VAD** : Un appui tactile sur la dernière ligne permet de basculer à chaud entre les 3 seuils recommandés : **800 ms** (commandes courtes), **1 000 ms** (usage équilibré) et **1 200 ms** (parole naturelle, valeur par défaut).
 
 ### 🌐 Onglet `NET` (Réseau & Gemini Live)
 - **Connexion Wi-Fi** : Statut de liaison (`CONNECTE` ou `DECONNECTE`).
@@ -44,7 +54,7 @@ L'interface est construite avec **M5Unified** (sans surcharge ni dépendance LVG
 - **Essais WiFi/Gem** : Compteur de tentatives et échecs éventuels.
 - **FastConnect** : État du mécanisme rapide (`ACTIF ch<N>`, `REPLI SCAN`, `INITIAL`) et BSSID mémorisé en NVS.
 
-### 📝 Onglet `EVENTS` (Journal des Événements)
+### 📝 Onglet `EVT` (Journal des Événements)
 - **Historique circulaire** : Affichage chronologique des 6 derniers événements vocaux horodatés (transitions d'état, début/fin TTS, début/fin micro, réceptions de transcription STT, erreurs).
 - **Zéro allocation dynamique** : Tampon circulaire statique en mémoire fixe.
 
@@ -57,6 +67,17 @@ L'interface est construite avec **M5Unified** (sans surcharge ni dépendance LVG
 ## 2. Sortie Série Structurée et CSV
 
 L'application émet des relevés structurés sur le port série (115200 baud).
+
+### Journalisation de latence `[LATENCY_CSV]` (v0.5.3)
+À chaque fin de tour vocal ou tour conversationnel, une ligne CSV complète est émise :
+```text
+[LATENCY_CSV] <timestamp_ms>,<turn_id>,<speech_end_to_mic_stop_ms>,<mic_stop_to_activity_end_ms>,<activity_end_to_first_audio_ms>,<first_audio_to_playback_ms>,<response_latency_ms>,<total_turn_duration_ms>,<mic_capture_ms>,<rx_blocks>,<dropped_samples>
+```
+L'en-tête CSV est émis au démarrage :
+```text
+[LATENCY_CSV_HEADER] timestamp_ms,turn_id,speech_end_to_mic_stop_ms,mic_stop_to_activity_end_ms,activity_end_to_first_audio_ms,first_audio_to_playback_ms,response_latency_ms,total_turn_duration_ms,mic_capture_ms,rx_blocks,dropped_samples
+```
+> **Règle stricte des données manquantes** : Tout jalon ou calcul dérivé non disponible ou incomplet renvoie explicitement `-1`, évitant tout faux zéro ou fausse latence nulle.
 
 ### Journalisation de connexion `[CONN]` et `[CONN_CSV]` (v0.5.2)
 À chaque transition vers `READY`, une ligne récapitulative des 5 phases temporelles est produite :
@@ -73,14 +94,6 @@ L'en-tête CSV est émis au démarrage :
 ```text
 [DIAG] Voice=READY [DIAG] Mode=IDLE [DIAG] WiFi=CONNECTED [DIAG] RAM_FREE=152320 [DIAG] PSRAM_FREE=7845120 [DIAG] MIC_RMS=215 [DIAG] TTS_BUSY=0
 ```
-
-### Format CSV périodique (`ENABLE_CSV_OUTPUT 1`)
-En définissant `#define ENABLE_CSV_OUTPUT 1` dans `main.cpp` :
-```text
-[DIAG_CSV] 14250,READY,IDLE,CONNECTED,152320,7845120,215,0,0,0
-```
-
-> **Régulation audio** : Pendant la diffusion ou l'acquisition active d'audio, la fréquence d'émission série est automatiquement ralentie (3 secondes) afin de préserver la gigue DMA et d'éviter toute saturation de l'UART.
 
 ---
 
@@ -117,4 +130,5 @@ pio device monitor -b 115200
 1. **Façade unique** : Utilise exclusivement l'instance `VoiceKit voice;`. Aucun deuxième moteur n'est instancié.
 2. **Pas de tâche concurrente** : Aucune tâche FreeRTOS supplémentaire n'est créée.
 3. **Fréquence d'affichage** : Rafraîchissement cadencé à 5 Hz (200 ms) avec effacement localisé du panneau central pour supprimer tout scintillement.
-4. **Authenticité des mesures** : Toutes les données proviennent directement de l'API matérielle ESP32 ou de l'instrumentation VoiceKit. Les métriques absentes sont indiquées `N/D`.
+4. **Authenticité des mesures** : Toutes les données proviennent directement de l'API matérielle ESP32 ou de l'instrumentation VoiceKit. Les métriques absentes sont indiquées `N/D` (ou `-1` en CSV).
+

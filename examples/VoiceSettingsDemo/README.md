@@ -1,6 +1,6 @@
 # VoiceSettingsDemo — Configuration vocale et Français UTF-8
 
-Exemple autonome de **VoiceKit v0.4.1** pour **M5Stack CoreS3**.
+Exemple autonome de **VoiceKit v0.5.3.1** pour **M5Stack CoreS3**.
 
 Cet exemple démontre l'utilisation de la configuration vocale étendue et la préservation intégrale des caractères UTF-8 français, allemands et anglais avec Google Gemini Live.
 

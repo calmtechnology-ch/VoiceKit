@@ -232,7 +232,7 @@ static void drawUI() {
         // En-tête supérieur
         M5.Display.setTextColor(COLOR_FG, COLOR_BG);
         M5.Display.setCursor(10, 6);
-        M5.Display.print("VoiceDiagnostics  v0.5.3");
+        M5.Display.print("VoiceDiagnostics v0.5.3.1");
 
         // Barre d'onglets (SYS, AUDIO, LAT, NET, CONN, EVT)
         const char* tabs[6] = {"SYS", "AUDIO", "LAT", "NET", "CONN", "EVT"};

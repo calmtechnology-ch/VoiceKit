@@ -1,7 +1,7 @@
 /**
  * @file main.cpp
  * @brief Exemple MinimalSTT — Reconnaissance vocale STT (Speech-to-Text) sur M5Stack CoreS3
- *        avec VoiceKit v0.3.0 et Google Gemini Live.
+ *        avec VoiceKit v0.5.3.1 et Google Gemini Live.
  * 
  * Fonctionnement :
  * - Appui maintenu sur le bouton « DICTER » : capture et transmission progressive PCM 16 kHz.

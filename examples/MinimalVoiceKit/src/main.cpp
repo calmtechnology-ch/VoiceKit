@@ -1,6 +1,6 @@
 /**
  * @file main.cpp
- * @brief Exemple MinimalVoiceKit — Démonstration de l'API simplifiée VoiceKit v0.5.0
+ * @brief Exemple MinimalVoiceKit — Démonstration de l'API simplifiée VoiceKit v0.5.3.1
  *        pour M5Stack CoreS3 avec Google Gemini Live.
  * 
  * Cet exemple illustre l'usage de la nouvelle classe façade `VoiceKit` permettant
@@ -40,7 +40,7 @@
     #endif
 #endif
 
-// Instance unique de la façade simplifiée VoiceKit v0.5.0
+// Instance unique de la façade simplifiée VoiceKit v0.5.3.1
 static VoiceKit voice;
 
 // Modes de test dans l'interface
@@ -72,7 +72,7 @@ void setup() {
     delay(200);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.5.0 — Exemple MinimalVoiceKit             ");
+    Serial.println("  VoiceKit v0.5.3.1 — Exemple MinimalVoiceKit           ");
     Serial.println("  Demonstration de la facade VoiceKit simplifiee        ");
     Serial.println("  M5Stack CoreS3 (ES7210 Mic + AW88298 Speaker)         ");
     Serial.println("========================================================");
@@ -165,7 +165,7 @@ static void drawUI() {
     M5.Display.setFont(&fonts::Font0);
     M5.Display.setTextSize(1);
     M5.Display.setTextColor(TFT_LIGHTGRAY, TFT_BLACK);
-    M5.Display.drawString("VoiceKit v0.5.0 - MinimalVoiceKit", 8, 8);
+    M5.Display.drawString("VoiceKit v0.5.3.1 - MinimalVoiceKit", 8, 8);
 
     const char* badgeStr = "PRET";
     uint16_t badgeCol = TFT_GREEN;

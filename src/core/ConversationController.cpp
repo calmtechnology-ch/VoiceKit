@@ -57,6 +57,7 @@ bool ConversationController::startTurn() {
     // Réinitialisation du tour
     _isTurnActive = true;
     _turnStartTimeMs = millis();
+    if (_turnStartTimeMs == 0) _turnStartTimeMs = 1;
     _lastUserText = "";
     _lastAssistantText = "";
     uint32_t prevSpeechEnd = _metrics.latency.speechEndDetectedMs;
@@ -102,6 +103,7 @@ bool ConversationController::finishTurnAudio() {
     }
 
     _micStopMs = millis();
+    if (_micStopMs == 0) _micStopMs = 1;
     _metrics.micCaptureDurationMs = _micStopMs - _turnStartTimeMs;
     _metrics.latency.micStoppedMs = _micStopMs;
     _metrics.audioBlocksSent = _streamer ? _streamer->getChunksSent() : 0;
@@ -227,6 +229,7 @@ void ConversationController::handleTurnFinished(uint64_t turnId) {
     }
     if (_metrics.latency.playbackFinishedMs == 0) {
         _metrics.latency.playbackFinishedMs = millis();
+        if (_metrics.latency.playbackFinishedMs == 0) _metrics.latency.playbackFinishedMs = 1;
     }
 
     Serial.println("================================================================================");

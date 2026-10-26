@@ -143,7 +143,11 @@ public:
     const VoiceActivityDetector& getVad() const { return _vad; }
     const VadConfig& getVadConfig() const { return _vad.getConfig(); }
     void setVadConfig(const VadConfig& config) { _vad.setConfig(config); }
-    void setSilenceDurationMs(uint32_t ms) { _vad.setSilenceDurationMs(ms); }
+    void setSilenceDurationMs(uint32_t ms) {
+        if (ms > 0) {
+            _vad.setSilenceDurationMs(ms);
+        }
+    }
     void setMinSpeechDurationMs(uint32_t ms) { _vad.setMinSpeechDurationMs(ms); }
     void setMaxSegmentDurationMs(uint32_t ms) { _vad.setMaxSegmentDurationMs(ms); }
     void setAutoResumeDelayMs(uint32_t delayMs) { _autoResumeDelayMs = delayMs; }

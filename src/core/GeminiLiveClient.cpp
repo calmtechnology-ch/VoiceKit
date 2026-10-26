@@ -681,6 +681,7 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
     if (serverContent) {
         if (_waitingForResponse && _firstResponseReceivedMs == 0) {
             _firstResponseReceivedMs = millis();
+            if (_firstResponseReceivedMs == 0) _firstResponseReceivedMs = 1;
         }
 
         // Interruption signalee par le serveur
@@ -773,6 +774,7 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
                                     _lastPcmPacketTimeMs = millis();
                                     if (_waitingForResponse && _firstAudioReceivedMs == 0) {
                                         _firstAudioReceivedMs = _lastPcmPacketTimeMs;
+                                        if (_firstAudioReceivedMs == 0) _firstAudioReceivedMs = 1;
                                     }
                                     AudioTraceLog::record(AudioTraceEventType::PCM_DECODED, (uint32_t)sampleCount);
 

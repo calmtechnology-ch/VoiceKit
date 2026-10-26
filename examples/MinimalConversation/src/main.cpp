@@ -1,7 +1,7 @@
 /**
  * @file main.cpp
  * @brief Exemple MinimalConversation — Conversation vocale bidirectionnelle native (Mode B)
- *        sur M5Stack CoreS3 avec VoiceKit v0.4.0 et Google Gemini Live.
+ *        sur M5Stack CoreS3 avec VoiceKit v0.5.3.1 et Google Gemini Live.
  * 
  * Fonctionnement :
  * - Appui maintenu sur « PARLER » : capture vocale PCM 16 kHz et streaming continu.

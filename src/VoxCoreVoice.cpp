@@ -72,7 +72,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _connectionMetrics.fastConnectEnabled = _config.enableFastConnect;
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.5.2 — Fast Connection             ");
+    Serial.println("  VoxCore VoiceKit v0.5.3.1 — Consolidation             ");
     Serial.printf("  Mode Audio : %s | FastConnect : %s\n",
                   (LiveAudioPlayer::getCompiledAudioMode() == 1) ? "MODE 1 (REACTIVE_CALLBACK)" : "MODE 2 (DEDICATED_AUDIO_TASK)",
                   _config.enableFastConnect ? "ACTIF" : "DESACTIVE");
@@ -301,7 +301,10 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
             return;
         }
         _latencyMetrics.playbackFinishedMs = _player.getPlaybackFinishedTimeMs();
-        if (_latencyMetrics.playbackFinishedMs == 0) _latencyMetrics.playbackFinishedMs = millis();
+        if (_latencyMetrics.playbackFinishedMs == 0) {
+            _latencyMetrics.playbackFinishedMs = millis();
+            if (_latencyMetrics.playbackFinishedMs == 0) _latencyMetrics.playbackFinishedMs = 1;
+        }
         setState(VoiceState::READY);
         if (_onSpeechFinished) {
             _onSpeechFinished();
@@ -588,6 +591,7 @@ bool VoxCoreVoice::dispatchSpeech(const String& text) {
     Serial.printf("[VoiceKit] Prononciation : \"%s\"\n", text.c_str());
     _latencyMetrics.reset();
     _latencyMetrics.turnStartedMs = millis();
+    if (_latencyMetrics.turnStartedMs == 0) _latencyMetrics.turnStartedMs = 1;
     bool ok = _session.sendTextMessage(prompt);
     if (!ok) {
         _lastError = "Echec envoi message texte vers Gemini Live";
@@ -596,7 +600,10 @@ bool VoxCoreVoice::dispatchSpeech(const String& text) {
         return false;
     }
     _latencyMetrics.activityEndSentMs = _client.getActivityEndSentMs();
-    if (_latencyMetrics.activityEndSentMs == 0) _latencyMetrics.activityEndSentMs = millis();
+    if (_latencyMetrics.activityEndSentMs == 0) {
+        _latencyMetrics.activityEndSentMs = millis();
+        if (_latencyMetrics.activityEndSentMs == 0) _latencyMetrics.activityEndSentMs = 1;
+    }
     return true;
 }
 
@@ -918,6 +925,7 @@ bool VoxCoreVoice::startListening() {
     uint32_t prevSpeechEnd = _latencyMetrics.speechEndDetectedMs;
     _latencyMetrics.reset();
     _latencyMetrics.turnStartedMs = millis();
+    if (_latencyMetrics.turnStartedMs == 0) _latencyMetrics.turnStartedMs = 1;
     _latencyMetrics.speechEndDetectedMs = prevSpeechEnd;
 
     // 5. Démarrage effectif du streamer (envoie activityStart et active double-buffering)
@@ -951,6 +959,7 @@ bool VoxCoreVoice::stopListening() {
     bool stopped = _streamer.stop();
     _transcriptionPending = true;
     _stopListeningTimeMs = millis();
+    if (_stopListeningTimeMs == 0) _stopListeningTimeMs = 1;
     _latencyMetrics.micStoppedMs = _stopListeningTimeMs;
     if (_streamer.getActivityEndSentMs() > 0) {
         _latencyMetrics.activityEndSentMs = _streamer.getActivityEndSentMs();
@@ -1004,10 +1013,14 @@ bool VoxCoreVoice::isTranscribing() const {
 void VoxCoreVoice::handleIncomingTranscription(const String& text, bool isFinal) {
     if (_latencyMetrics.firstResponseReceivedMs == 0) {
         _latencyMetrics.firstResponseReceivedMs = _client.getFirstResponseReceivedMs();
-        if (_latencyMetrics.firstResponseReceivedMs == 0) _latencyMetrics.firstResponseReceivedMs = millis();
+        if (_latencyMetrics.firstResponseReceivedMs == 0) {
+            _latencyMetrics.firstResponseReceivedMs = millis();
+            if (_latencyMetrics.firstResponseReceivedMs == 0) _latencyMetrics.firstResponseReceivedMs = 1;
+        }
     }
     if (isFinal) {
         _latencyMetrics.playbackFinishedMs = millis();
+        if (_latencyMetrics.playbackFinishedMs == 0) _latencyMetrics.playbackFinishedMs = 1;
         Serial.printf("[VoiceKit] Transcription FINALE recue : \"%s\"\n", text.c_str());
         _finalTranscriptionReceived = true;
         _transcriptionPending = false;

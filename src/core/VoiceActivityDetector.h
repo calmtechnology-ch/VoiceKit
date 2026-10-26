@@ -273,7 +273,11 @@ public:
     const VadConfig& getConfig() const { return _config; }
     void setConfig(const VadConfig& config) { _config = config; }
     void setMinSpeechDurationMs(uint32_t ms) { _config.minSpeechDurationMs = ms; }
-    void setSilenceDurationMs(uint32_t ms) { _config.silenceDurationMs = ms; }
+    void setSilenceDurationMs(uint32_t ms) {
+        if (ms > 0) {
+            _config.silenceDurationMs = ms;
+        }
+    }
     void setMaxSegmentDurationMs(uint32_t ms) { _config.maxSegmentDurationMs = ms; }
     void setNoiseFloor(uint32_t floorRms) { _noiseFloor = (float)floorRms; }
 

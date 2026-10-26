@@ -1,6 +1,6 @@
 # MinimalConversation — Exemple de Conversation Vocale Bidirectionnelle
 
-Exemple autonome de conversation vocale bidirectionnelle native (Mode B) pour **M5Stack CoreS3** utilisant **VoiceKit v0.4.0** et l'API WebSocket **Google Gemini Live** (`models/gemini-3.8-live`).
+Exemple autonome de conversation vocale bidirectionnelle native (Mode B) pour **M5Stack CoreS3** utilisant **VoiceKit v0.5.3.1** et l'API WebSocket **Google Gemini Live** (`models/gemini-3.8-live`).
 
 ---
 

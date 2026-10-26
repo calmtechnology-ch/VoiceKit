@@ -1,6 +1,6 @@
-# Exemple MinimalVoiceKit — VoiceKit v0.5.0
+# Exemple MinimalVoiceKit — VoiceKit v0.5.3.1
 
-Cet exemple démontre l'utilisation de l'**API simplifiée `VoiceKit`** (façade optionnelle de niveau supérieur introduite dans VoiceKit v0.5.0) pour **M5Stack CoreS3**.
+Cet exemple démontre l'utilisation de l'**API simplifiée `VoiceKit`** (façade optionnelle de niveau supérieur unifiée) pour **M5Stack CoreS3**.
 
 ---
 
@@ -10,7 +10,7 @@ Avec **une seule instance de classe `VoiceKit voice;`**, cet exemple permet de t
 
 1. **TTS (Synthèse vocale mot à mot)** :
    ```cpp
-   voice.say("Bonjour ! Bienvenue sur VoiceKit v0.5.0.");
+   voice.say("Bonjour ! Bienvenue sur VoiceKit v0.5.3.1.");
    ```
 2. **STT Manuel (Push-to-Talk)** :
    ```cpp

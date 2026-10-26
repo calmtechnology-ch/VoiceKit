@@ -1,6 +1,6 @@
-# Exemple MinimalSTT — VoiceKit v0.3.0
+# Exemple MinimalSTT — VoiceKit v0.5.3.1
 
-Exemple autonome de reconnaissance vocale **STT (Speech-to-Text)** en temps réel sur **M5Stack CoreS3**, utilisant la bibliothèque **VoiceKit v0.3.0** connectée à l'API **Google Gemini Live**.
+Exemple autonome de reconnaissance vocale **STT (Speech-to-Text)** en temps réel sur **M5Stack CoreS3**, utilisant la bibliothèque **VoiceKit v0.5.3.1** connectée à l'API **Google Gemini Live**.
 
 ---
 

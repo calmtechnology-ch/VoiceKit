@@ -1,6 +1,6 @@
 /**
  * @file main.cpp
- * @brief Exemple MinimalTTS — Synthese vocale pure sur M5Stack CoreS3 avec VoiceKit v0.2.0
+ * @brief Exemple MinimalTTS — Synthese vocale pure sur M5Stack CoreS3 avec VoiceKit v0.5.3.1
  * 
  * Base technique : Moteur VoxCore (Mode 2 DEDICATED_AUDIO_TASK, WebSocket TLS mbedTLS,
  * bundle officiel Google PKI, restitution PCM 24 kHz haute fluidite sans coupure).

@@ -1,6 +1,6 @@
 /**
  * @file MinimalTTS_Arduino.ino
- * @brief Exemple autonome VoiceKit v0.2.1 pour Arduino IDE (M5Stack CoreS3)
+ * @brief Exemple autonome VoiceKit v0.5.3.1 pour Arduino IDE (M5Stack CoreS3)
  * 
  * =============================================================================
  * Configuration requise dans l'Arduino IDE :
@@ -43,14 +43,14 @@ void setup() {
     delay(500);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.2.1 — Exemple MinimalTTS (Arduino IDE)");
+    Serial.println("  VoiceKit v0.5.3.1 — Exemple MinimalTTS (Arduino IDE)");
     Serial.println("========================================================");
 
     // Affichage initial sur l'écran CoreS3
     M5.Display.fillScreen(TFT_BLACK);
     M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
     M5.Display.setTextSize(2);
-    M5.Display.drawString("VoiceKit v0.2.1", 10, 15);
+    M5.Display.drawString("VoiceKit v0.5.3.1", 10, 15);
     M5.Display.setTextSize(1);
     M5.Display.drawString("Connexion Wi-Fi & Initialisation...", 10, 50);
 

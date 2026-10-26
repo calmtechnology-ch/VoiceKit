@@ -387,7 +387,9 @@ String VoiceKit::getAccent() const {
 }
 
 void VoiceKit::setVadSilenceDurationMs(uint32_t ms) {
-    _continuousController.setSilenceDurationMs(ms);
+    if (ms > 0) {
+        _continuousController.setSilenceDurationMs(ms);
+    }
 }
 
 uint32_t VoiceKit::getVadSilenceDurationMs() const {

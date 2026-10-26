@@ -3600,12 +3600,233 @@ void test_v053_facade_latency_and_audio_integrity() {
 }
 
 // =============================================================================
+// SUITES DE TESTS VoiceKit v0.5.3.1 (Consolidation, Latence Vocale & Validation)
+// =============================================================================
+
+// SUITE 66 : VoiceLatencyMetrics — Audit des 7 jalons, ordre chronologique, cas limites et débordement millis()
+void test_v0531_latency_metrics_audit_and_edge_cases() {
+    std::cout << "\n[TEST SUITE 66] VoiceLatencyMetrics : Audit des 7 jalons, ordre chronologique et cas limites" << std::endl;
+
+    // 1. Audit complet des 7 jalons et vérification de l'ordre chronologique strict
+    VoiceLatencyMetrics m;
+    m.turnStartedMs           = 10000;
+    m.speechEndDetectedMs     = 11000; // t0 : Fin de parole détectée par VAD
+    m.micStoppedMs            = 11035; // t1 : Fin effective de capture microphone (+35 ms)
+    m.activityEndSentMs       = 11050; // t2 : Envoi notification activityEnd à Gemini (+15 ms)
+    m.firstResponseReceivedMs = 11450; // t3 : Premier événement de réponse reçu (+400 ms)
+    m.firstAudioReceivedMs    = 11500; // t4 : Premier paquet PCM reçu de Gemini (+50 ms)
+    m.firstAudioPlayedMs      = 11530; // t5 : Premier bloc remis au DMA (playRaw) (+30 ms)
+    m.playbackFinishedMs      = 13200; // t6 : Restitution acoustique achevée (+1670 ms)
+
+    TEST_ASSERT(m.hasSpeechEndDetected(), "hasSpeechEndDetected valide");
+    TEST_ASSERT(m.hasMicStopped(), "hasMicStopped valide");
+    TEST_ASSERT(m.hasActivityEndSent(), "hasActivityEndSent valide");
+    TEST_ASSERT(m.hasFirstResponseReceived(), "hasFirstResponseReceived valide");
+    TEST_ASSERT(m.hasFirstAudioReceived(), "hasFirstAudioReceived valide");
+    TEST_ASSERT(m.hasFirstAudioPlayed(), "hasFirstAudioPlayed valide");
+    TEST_ASSERT(m.hasPlaybackFinished(), "hasPlaybackFinished valide");
+
+    // Vérification exacte des 6 calculs dérivés
+    TEST_ASSERT(m.getSpeechEndToMicStoppedMs() == 35, "getSpeechEndToMicStoppedMs = 35 ms");
+    TEST_ASSERT(m.getMicStoppedToActivityEndMs() == 15, "getMicStoppedToActivityEndMs = 15 ms");
+    TEST_ASSERT(m.getActivityEndToFirstAudioMs() == 450, "getActivityEndToFirstAudioMs = 450 ms");
+    TEST_ASSERT(m.getActivityEndToFirstResponseMs() == 400, "getActivityEndToFirstResponseMs = 400 ms");
+    // Distinction explicite : paquet réseau reçu (t4) vs échantillon remis au DMA (t5)
+    TEST_ASSERT(m.getFirstAudioToPlaybackMs() == 30, "getFirstAudioToPlaybackMs distingue paquet recu et remise DMA (30 ms)");
+    TEST_ASSERT(m.getSpeechEndToPlaybackMs() == 530, "getSpeechEndToPlaybackMs = 530 ms");
+    TEST_ASSERT(m.getResponseLatencyMs() == 530, "getResponseLatencyMs avec VAD = 530 ms");
+    TEST_ASSERT(m.getTotalTurnDurationMs() == 3200, "getTotalTurnDurationMs = 3200 ms");
+
+    // 2. Détection et rejet des anomalies d'inversion chronologique (end < start)
+    VoiceLatencyMetrics inverted;
+    inverted.turnStartedMs       = 10000;
+    inverted.speechEndDetectedMs = 12000;
+    inverted.micStoppedMs        = 11500; // Anormal : arrêt micro antérieur à la fin de parole
+    TEST_ASSERT(inverted.getSpeechEndToMicStoppedMs() == -1, "Inversion chronologique speechEnd > micStopped retourne -1");
+
+    inverted.micStoppedMs        = 12050;
+    inverted.activityEndSentMs   = 12020; // Anormal : activityEnd antérieur à l'arrêt micro
+    TEST_ASSERT(inverted.getMicStoppedToActivityEndMs() == -1, "Inversion micStopped > activityEnd retourne -1");
+
+    inverted.activityEndSentMs   = 12100;
+    inverted.firstAudioReceivedMs = 12080; // Anormal : audio reçu avant envoi activityEnd
+    TEST_ASSERT(inverted.getActivityEndToFirstAudioMs() == -1, "Inversion activityEnd > firstAudio retourne -1");
+
+    inverted.firstAudioReceivedMs = 12500;
+    inverted.firstAudioPlayedMs   = 12450; // Anormal : lecture DMA antérieure à la réception
+    TEST_ASSERT(inverted.getFirstAudioToPlaybackMs() == -1, "Inversion firstAudio > playRaw retourne -1");
+
+    inverted.playbackFinishedMs = 9000; // Anormal : fin antérieure au début de tour
+    TEST_ASSERT(inverted.getTotalTurnDurationMs() == -1, "Inversion turnStarted > playbackFinished retourne -1");
+
+    // 3. Tour interrompu (STOP / Interruption réseau)
+    VoiceLatencyMetrics interrupted;
+    interrupted.turnStartedMs       = 20000;
+    interrupted.speechEndDetectedMs = 21000;
+    interrupted.micStoppedMs        = 21050;
+    interrupted.activityEndSentMs   = 21070;
+    // Interruption : aucun audio ni réponse serveur n'a été reçu
+    interrupted.firstResponseReceivedMs = 0;
+    interrupted.firstAudioReceivedMs    = 0;
+    interrupted.firstAudioPlayedMs      = 0;
+    interrupted.playbackFinishedMs      = 0;
+
+    TEST_ASSERT(interrupted.getSpeechEndToMicStoppedMs() == 50, "Tour interrompu : duree capture partielle disponible");
+    TEST_ASSERT(interrupted.getMicStoppedToActivityEndMs() == 20, "Tour interrompu : delai envoi partiel disponible");
+    TEST_ASSERT(interrupted.getActivityEndToFirstAudioMs() == -1, "Tour interrompu : delai Gemini non observe renvoie -1");
+    TEST_ASSERT(interrupted.getFirstAudioToPlaybackMs() == -1, "Tour interrompu : delai DMA non observe renvoie -1");
+    TEST_ASSERT(interrupted.getResponseLatencyMs() == -1, "Tour interrompu : latence reponse non observee renvoie -1");
+    TEST_ASSERT(interrupted.getTotalTurnDurationMs() == -1, "Tour interrompu : duree totale incomplete renvoie -1");
+
+    // 4. Remise à zéro complète
+    interrupted.reset();
+    TEST_ASSERT(!interrupted.hasSpeechEndDetected(), "reset remet speechEndDetected a 0");
+    TEST_ASSERT(!interrupted.hasMicStopped(), "reset remet micStopped a 0");
+    TEST_ASSERT(!interrupted.hasActivityEndSent(), "reset remet activityEndSent a 0");
+    TEST_ASSERT(!interrupted.hasFirstResponseReceived(), "reset remet firstResponseReceived a 0");
+    TEST_ASSERT(!interrupted.hasFirstAudioReceived(), "reset remet firstAudioReceived a 0");
+    TEST_ASSERT(!interrupted.hasFirstAudioPlayed(), "reset remet firstAudioPlayed a 0");
+    TEST_ASSERT(!interrupted.hasPlaybackFinished(), "reset remet playbackFinished a 0");
+    TEST_ASSERT(interrupted.turnStartedMs == 0, "reset remet turnStartedMs a 0");
+    TEST_ASSERT(interrupted.getResponseLatencyMs() == -1, "reset remet getResponseLatencyMs a -1");
+}
+
+// SUITE 67 : VAD — Validation approfondie des 3 seuils, valeurs incorrectes et changements à chaud
+void test_v0531_vad_thresholds_hot_switch_and_validation() {
+    std::cout << "\n[TEST SUITE 67] VAD : Validation approfondie des 3 seuils, valeurs incorrectes et switch a chaud" << std::endl;
+
+    // 1. Initialisation avec seuil par défaut à 1 200 ms
+    VoiceKit vkDefault;
+    VoiceKitConfig cfgDefault;
+    cfgDefault.apiKey = "TEST_VAD_DEF";
+    cfgDefault.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    vkDefault.begin(cfgDefault);
+    TEST_ASSERT(vkDefault.getVadSilenceDurationMs() == 1200, "Seuil de silence VAD par defaut = 1 200 ms");
+
+    // 2. Initialisation personnalisée via VoiceKitConfig
+    VoiceKit vkCustom;
+    VoiceKitConfig cfgCustom;
+    cfgCustom.apiKey = "TEST_VAD_CUST";
+    cfgCustom.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfgCustom.vadSilenceDurationMs = 800; // Spécification 800 ms (commandes courtes)
+    vkCustom.begin(cfgCustom);
+    TEST_ASSERT(vkCustom.getVadSilenceDurationMs() == 800, "Configuration initiale vadSilenceDurationMs = 800 ms appliquee");
+
+    // 3. Contrôle des 3 seuils opérationnels et alias
+    vkCustom.setVadSilenceDurationMs(1000); // 1000 ms : usage équilibré
+    TEST_ASSERT(vkCustom.getVadSilenceDurationMs() == 1000, "Seuil passe a 1 000 ms");
+    vkCustom.setSilenceDurationMs(1200);   // 1200 ms : parole naturelle
+    TEST_ASSERT(vkCustom.getSilenceDurationMs() == 1200, "Alias setSilenceDurationMs passe a 1 200 ms");
+    vkCustom.setVadSilenceDurationMs(800);  // 800 ms : commandes courtes
+    TEST_ASSERT(vkCustom.getVadSilenceDurationMs() == 800, "Seuil passe a 800 ms");
+
+    // 4. Protection contre les valeurs incorrectes (ex: 0 ms)
+    vkCustom.setVadSilenceDurationMs(0);
+    TEST_ASSERT(vkCustom.getVadSilenceDurationMs() == 800, "Valeur incorrecte 0 ms rejetee : seuil preserve a 800 ms");
+
+    ContinuousListeningController clc;
+    TEST_ASSERT(clc.getVadConfig().silenceDurationMs == 1200, "ContinuousListeningController defaut 1200 ms");
+    clc.setSilenceDurationMs(0);
+    TEST_ASSERT(clc.getVadConfig().silenceDurationMs == 1200, "clc.setSilenceDurationMs(0) rejete et preserve 1200 ms");
+
+    // 5. Changement de seuil à chaud pendant une écoute active
+    VoiceActivityDetector vad;
+    VadConfig vadCfg;
+    vadCfg.minSpeechDurationMs = 200;
+    vadCfg.silenceDurationMs = 1200; // Démarrage à 1 200 ms
+    vadCfg.maxSegmentDurationMs = 30000;
+    vadCfg.initialNoiseFloor = 200;
+    vad.setConfig(vadCfg);
+
+    // Initialisation du plancher de bruit (silence)
+    for (int i = 0; i < 15; ++i) {
+        vad.processRms(200, 32);
+    }
+    TEST_ASSERT(!vad.isSpeechActive(), "Silence initial VAD");
+
+    // Début de parole : 256 ms (> 200 ms)
+    for (int i = 0; i < 8; ++i) {
+        vad.processRms(1600, 32);
+    }
+    TEST_ASSERT(vad.isSpeechActive(), "Parole active validee");
+
+    // Changement de seuil À CHAUD en pleine parole active : bascule vers 800 ms
+    vad.setSilenceDurationMs(800);
+    TEST_ASSERT(vad.getConfig().silenceDurationMs == 800, "Changement de seuil a chaud applique a 800 ms");
+    TEST_ASSERT(vad.isSpeechActive(), "La parole reste active apres le changement a chaud");
+
+    // Pause courte de 480 ms (15 blocs de 32 ms) : ne doit PAS couper la parole
+    for (int i = 0; i < 15; ++i) {
+        vad.processRms(200, 32);
+    }
+    TEST_ASSERT(vad.isSpeechActive(), "Pause de 480 ms non coupee avec seuil a chaud de 800 ms");
+
+    // Prolongation du silence au-delà de 800 ms : 12 blocs supplémentaires (total 864 ms)
+    bool endedWithHotSwitch = false;
+    for (int i = 0; i < 12; ++i) {
+        if (vad.processRms(200, 32)) {
+            endedWithHotSwitch = true;
+            break;
+        }
+    }
+    TEST_ASSERT(endedWithHotSwitch, "Fin de parole detectee a 800 ms apres switch a chaud");
+}
+
+// SUITE 68 : Façade VoiceKit v0.5.3.1 — Validation des 4 modes, transitions et résilience
+void test_v0531_facade_modes_transitions_and_resilience() {
+    std::cout << "\n[TEST SUITE 68] Facade VoiceKit v0.5.3.1 : Non-regression des 4 modes et resilience" << std::endl;
+
+    VoiceKit vk;
+    VoiceKitConfig cfg;
+    cfg.apiKey = "TEST_V0531_FACADE";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    vk.begin(cfg);
+
+    // 1. Constante de version alignée sur v0.5.3.1
+    TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.5.3.1") == 0, "VOICEKIT_VERSION est strictement v0.5.3.1");
+
+    // 2. Mode par défaut IDLE
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode initial = IDLE");
+
+    // 3. Test refus d'opérations incompatibles
+    // Refus de listen() en mode Conversation
+    vk.startConversation();
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::CONVERSATION, "Mode CONVERSATION active");
+    TEST_ASSERT(!vk.listen(), "listen() refuse strictement en mode CONVERSATION");
+    TEST_ASSERT(!vk.startContinuousListening(), "startContinuousListening() refuse strictement en mode CONVERSATION");
+    TEST_ASSERT(!vk.say("Test"), "say() refuse strictement en mode CONVERSATION");
+
+    // Sortie propre du mode Conversation
+    vk.stopConversation();
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Retour au mode IDLE apres stopConversation");
+
+    // 4. Test d'activation de la dictée continue
+    vk.startContinuousListening();
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::CONTINUOUS_LISTENING, "Mode CONTINUOUS_LISTENING active");
+    TEST_ASSERT(!vk.startConversation(), "startConversation() refuse en CONTINUOUS_LISTENING");
+    TEST_ASSERT(!vk.listen(), "listen() refuse en CONTINUOUS_LISTENING");
+
+    // Pause et reprise
+    TEST_ASSERT(vk.pauseContinuousListening(), "pauseContinuousListening() reussi");
+    TEST_ASSERT(vk.isContinuousListeningPaused(), "Dictee continue en pause");
+    TEST_ASSERT(vk.resumeContinuousListening(), "resumeContinuousListening() reussi");
+
+    // Arrêt de la dictée continue
+    vk.stopContinuousListening();
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Retour IDLE apres stopContinuousListening");
+
+    // 5. Arrêt d'urgence instantané stop()
+    vk.stop();
+    TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "stop() maintient le mode IDLE et securise le moteur");
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.5.3    " << std::endl;
-    std::cout << "  Voice Latency Optimization, Base64 & Non-Regression      " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.5.3.1  " << std::endl;
+    std::cout << "  Consolidation, Latence Vocale, VAD & Non-Regression      " << std::endl;
     std::cout << "  Stabilisation FreeRTOS, Modes, VAD & Facade VoiceKit     " << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
     std::cout << "===========================================================" << std::endl;
@@ -3694,10 +3915,16 @@ int main() {
     test_v053_conversation_turn_latency_pipeline();
     test_v053_facade_latency_and_audio_integrity();
 
+    // Nouvelles suites VoiceKit v0.5.3.1 (Consolidation, Latence Vocale & Validation)
+    test_v0531_latency_metrics_audit_and_edge_cases();
+    test_v0531_vad_thresholds_hot_switch_and_validation();
+    test_v0531_facade_modes_transitions_and_resilience();
+
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;
     std::cout << "===========================================================" << std::endl;
 
     return (s_testsFailed == 0) ? 0 : 1;
 }
+
 

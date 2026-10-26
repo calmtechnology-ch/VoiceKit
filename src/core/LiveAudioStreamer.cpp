@@ -295,6 +295,7 @@ void LiveAudioStreamer::txTaskLoop() {
                 if (_client->sendActivityEnd()) {
                     _activityEndSent = true;
                     _activityEndSentMs = millis();
+                    if (_activityEndSentMs == 0) _activityEndSentMs = 1;
                 }
             }
         }
@@ -829,6 +830,7 @@ bool LiveAudioStreamer::stop() {
             if (_client->sendActivityEnd()) {
                 _activityEndSent = true;
                 _activityEndSentMs = millis();
+                if (_activityEndSentMs == 0) _activityEndSentMs = 1;
             }
         } else {
             Serial.println("[LiveStreamer] activityEnd annule suite a perte de blocs ou echec envoi");

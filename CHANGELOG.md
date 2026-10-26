@@ -7,6 +7,47 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.5.3.1] - 2026-10-26 (Consolidation & Validation — Fiabilisation, Documentation & Métriques)
+
+### Consolidation & Correction des Incohérences Documentaires
+- **Alignement Global des Versions** :
+  - Mise à jour de toutes les références de version vers `v0.5.3.1` (`library.json`, `library.properties`, `VoiceHubConfig.h`, `VoiceKit.h`, bannières console et exemples).
+  - Correction de `VOICEKIT_VERSION` resté à `v0.5.2` dans `src/core/VoiceHubConfig.h`.
+  - Correction des anciennes références Git obsolètes dans le `README.md` (`#v0.5.0` -> `#v0.5.3.1`, archive `v0.2.1.zip` -> `v0.5.3.1.zip`).
+  - Alignement des versions documentées dans l'ensemble des exemples (`MinimalTTS`, `MinimalSTT`, `ContinuousSTT`, `MinimalConversation`, `VoiceSettingsDemo`, `MinimalVoiceKit`, `VoiceDiagnostics`, `MinimalTTS_Arduino`).
+  - Documentation exhaustive des 6 onglets de `VoiceDiagnostics` (dont `LAT`), du cyclage interactif VAD et du format de télémétrie `[LATENCY_CSV]`.
+
+### Fiabilisation & Audit des Métriques de Latence (`VoiceLatencyMetrics`)
+- **Audit des 7 Jalons & 6 Durées Dérivées** :
+  - Vérification de l'origine exacte et de la précision temporelle de chaque jalon : `speechEndDetectedMs`, `micStoppedMs`, `activityEndSentMs`, `firstResponseReceivedMs`, `firstAudioReceivedMs`, `firstAudioPlayedMs`, `playbackFinishedMs`.
+  - Distinction formelle et rigoureuse entre `firstAudioReceivedMs` (réception réseau du 1er paquet PCM 24 kHz) et `firstAudioPlayedMs` (remise effective du 1er échantillon au DMA/AW88298).
+  - Protection contre les anomalies d'ordre chronologique : toute inversion temporelle renvoie strictement `-1` sans provoquer d'underflow entier 32 bits non signé.
+  - Préservation absolue de la politique anti-faux zéro : tout événement non observé renvoie `-1` (`N/D`) et n'est jamais remplacé artificiellement par `0`.
+- **Protection Anti-Débordement `millis()`** :
+  - Introduction d'un garde non-zéro (`if (ms == 0) ms = 1;`) lors de la capture des horodatages à la milliseconde (`turnStartedMs`, `activityEndSentMs`, `micStoppedMs`, `firstResponseReceivedMs`, `firstAudioReceivedMs`, `firstAudioPlayedMs`, `playbackFinishedMs`).
+  - Empêche un horodatage valide capturé à l'instant précis `millis() == 0` (démarrage du microcontrôleur ou rebouclage après ~49.7 jours) d'être interprété à tort comme un événement non observé (`0 == unobserved`).
+
+### Contrôle & Sécurisation du Seuil de Silence VAD
+- **Protection contre les Valeurs Invalides** :
+  - Sécurisation de `setVadSilenceDurationMs(uint32_t ms)` dans `VoiceKit`, `VoiceActivityDetector` et `ContinuousListeningController` par le filtre `if (ms > 0)`.
+  - Rejet des valeurs nulles (`0 ms`) qui provoqueraient une coupure immédiate de parole dès le premier chunk de silence ; conservation transparente du seuil antérieur valide (1 200 ms par défaut).
+- **Validation des 3 Paliers d'Usage** :
+  - 800 ms : Commandes et interactions courtes ultra-réactives.
+  - 1 000 ms : Équilibre optimal pour interactions vocales fluides.
+  - 1 200 ms : Parole naturelle avec pauses (seuil par défaut).
+- **Changement à Chaud Sécurisé** :
+  - Vérification du comportement lors de modifications dynamiques à chaud et pendant une écoute active.
+
+### Renforcement des Tests & Non-Régression
+- **Ajout de 3 Nouvelles Suites de Tests Unitaires (64 nouvelles assertions)** :
+  - **Suite 66** : Audit approfondi de `VoiceLatencyMetrics` (7 jalons, 6 durées dérivées, ordre chronologique, rejet des inversions, cas limites, distinction paquet vs DMA, garde non-zéro).
+  - **Suite 67** : Validation des 3 seuils VAD, rejet strict de la valeur 0, persistance de la configuration et bascule à chaud pendant l'écoute.
+  - **Suite 68** : Non-régression complète de la façade `VoiceKit` sur les 4 modes (TTS, STT, ContinuousSTT, Conversation), transitions inter-modes, rejet des requêtes concurrentes (`isBusy()`), unicité des callbacks et résilience aux déconnexions/reconnexions.
+- **Bilan Global des Tests** : 976 validations réussies avec 0 échec (contre 912 en v0.5.3).
+- **Compilations PlatformIO** : 100% de réussite sur les 8 exemples cibles CoreS3 (`MinimalTTS`, `MinimalSTT`, `ContinuousSTT`, `MinimalConversation`, `MinimalVoiceKit`, `VoiceSettingsDemo`, `VoiceDiagnostics`, `OrientationClockVoice`).
+
+---
+
 ## [0.5.3] - 2026-10-26 (Voice Latency Optimization — Réactivité des interactions vocales & Instrumentation)
 
 ### Instrumentation Précise de la Latence Vocale (7 Jalons / 6 Durées Dérivées)

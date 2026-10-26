@@ -713,6 +713,7 @@ bool LiveAudioPlayer::submitNextChunk() {
 
         if (_firstPlayRawAcceptedTimeMs == 0) {
             _firstPlayRawAcceptedTimeMs = millis();
+            if (_firstPlayRawAcceptedTimeMs == 0) _firstPlayRawAcceptedTimeMs = 1;
         }
         if (_playbackStartTimeMs == 0) {
             _playbackStartTimeMs = millis();
@@ -867,6 +868,7 @@ void LiveAudioPlayer::tick() {
                 if (!_playbackFinishedNotified) {
                     _playbackFinishedNotified = true;
                     _playbackFinishedTimeMs = millis();
+                    if (_playbackFinishedTimeMs == 0) _playbackFinishedTimeMs = 1;
                     _playbackEndTimeMs = _playbackFinishedTimeMs;
                     if (_playbackStartTimeMs > 0 && _playbackEndTimeMs >= _playbackStartTimeMs) {
                         _playbackDurationMs = _playbackEndTimeMs - _playbackStartTimeMs;
@@ -945,6 +947,7 @@ void LiveAudioPlayer::tick() {
                 if (!_playbackFinishedNotified) {
                     _playbackFinishedNotified = true;
                     _playbackFinishedTimeMs = millis();
+                    if (_playbackFinishedTimeMs == 0) _playbackFinishedTimeMs = 1;
                     _playbackEndTimeMs = _playbackFinishedTimeMs;
                     if (_playbackStartTimeMs > 0 && _playbackEndTimeMs >= _playbackStartTimeMs) {
                         _playbackDurationMs = _playbackEndTimeMs - _playbackStartTimeMs;
