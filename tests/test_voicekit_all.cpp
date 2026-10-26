@@ -3786,8 +3786,8 @@ void test_v0531_facade_modes_transitions_and_resilience() {
     cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
     vk.begin(cfg);
 
-    // 1. Constante de version alignée sur v0.5.3.1
-    TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.5.3.1") == 0, "VOICEKIT_VERSION est strictement v0.5.3.1");
+    // 1. Constante de version alignée sur v0.6.0
+    TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.0") == 0, "VOICEKIT_VERSION est strictement v0.6.0");
 
     // 2. Mode par défaut IDLE
     TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode initial = IDLE");
@@ -3958,10 +3958,10 @@ void test_v060_openai_realtime_connection_and_handshake() {
     TEST_ASSERT(uri.indexOf("wss://api.openai.com/v1/realtime") >= 0, "URI contient l'endpoint wss OpenAI Realtime");
     TEST_ASSERT(uri.indexOf("model=gpt-realtime-2.1-mini") >= 0, "URI specifie le modele gpt-realtime-2.1-mini");
 
-    // Vérification des en-têtes HTTP de négociation TLS
+    // Vérification des en-têtes HTTP de négociation TLS GA
     String headers = transport.getLastHeaders();
     TEST_ASSERT(headers.indexOf("Authorization: Bearer sk-test-token-voicekit") >= 0, "Header Authorization Bearer present");
-    TEST_ASSERT(headers.indexOf("OpenAI-Beta: realtime=v1") >= 0, "Header OpenAI-Beta realtime=v1 present");
+    TEST_ASSERT(headers.indexOf("OpenAI-Beta:") < 0, "Header OpenAI-Beta absent conformement a la specification GA");
 
     // Simuler l'ouverture du socket
     transport.triggerConnected();
@@ -4001,6 +4001,7 @@ void test_v060_openai_realtime_session_negotiation() {
     // Le client doit avoir emis un session.update en reponse
     String sentUpdate = transport.getLastMessage();
     TEST_ASSERT(sentUpdate.indexOf("\"type\":\"session.update\"") >= 0, "session.update emis par le client");
+    TEST_ASSERT(sentUpdate.indexOf("\"type\":\"realtime\"") >= 0, "session.type realtime specifie conformement a la GA");
     TEST_ASSERT(sentUpdate.indexOf("\"voice\":\"alloy\"") >= 0, "Voix alloy specifiee dans session.update");
     TEST_ASSERT(sentUpdate.indexOf("\"turn_detection\":null") >= 0, "turn_detection desactive (VAD local CoreS3)");
     TEST_ASSERT(sentUpdate.indexOf("\"whisper-1\"") >= 0, "Modele de transcription whisper-1 specifie");
@@ -4071,12 +4072,17 @@ void test_v060_openai_realtime_inbound_audio_rx_and_drain() {
     bool turnCompleted = false;
     client.setOnTurnComplete([&turnCompleted]() { turnCompleted = true; });
 
-    // Trame audio 24 kHz delta : 4 échantillons = 8 octets -> Base64
-    // [0x0100, 0x0200, 0x0300, 0x0400]
-    const char* audioDelta1 = "{\"type\":\"response.audio.delta\",\"delta\":\"AAEA\"}";
-    client.handleIncomingMessage(audioDelta1, strlen(audioDelta1));
+    // Trame audio 24 kHz delta format GA : response.output_audio.delta
+    const char* audioDeltaGA = "{\"type\":\"response.output_audio.delta\",\"delta\":\"AAEA\"}";
+    client.handleIncomingMessage(audioDeltaGA, strlen(audioDeltaGA));
 
-    TEST_ASSERT(receivedSamples.size() > 0, "Echantillons audio 24 kHz recus et decodes");
+    TEST_ASSERT(receivedSamples.size() > 0, "Echantillons audio 24 kHz recus et decodes (format GA)");
+
+    // Trame audio 24 kHz delta format Beta : response.audio.delta
+    size_t prevCount = receivedSamples.size();
+    const char* audioDeltaBeta = "{\"type\":\"response.audio.delta\",\"delta\":\"AAEA\"}";
+    client.handleIncomingMessage(audioDeltaBeta, strlen(audioDeltaBeta));
+    TEST_ASSERT(receivedSamples.size() > prevCount, "Echantillons audio recus et decodes (format Beta)");
 
     // Trame response.done
     const char* respDone = "{\"type\":\"response.done\"}";

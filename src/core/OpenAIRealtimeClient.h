@@ -24,7 +24,7 @@
  * 
  * Implémente l'interface IVoiceProvider pour M5Stack CoreS3 / ESP32-S3 :
  * - Point de terminaison officiel : wss://api.openai.com/v1/realtime?model=...
- * - Authentification via en-tête Authorization Bearer et OpenAI-Beta: realtime=v1
+ * - Authentification via en-tête standard Authorization Bearer
  * - Masquage absolu des clés secrètes dans tous les journaux série
  * - Négociation de session via l'événement client session.update
  * - Streaming audio bidirectionnel PCM16 mono :

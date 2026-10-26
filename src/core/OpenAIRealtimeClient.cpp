@@ -211,9 +211,9 @@ bool OpenAIRealtimeClient::connect() {
     char urlBuf[192];
     buildWebSocketUrl(urlBuf, sizeof(urlBuf));
 
-    // En-têtes HTTP de négociation WebSocket TLS conformes à la spécification OpenAI Realtime
+    // En-têtes HTTP de négociation WebSocket TLS conformes à la spécification officielle GA OpenAI Realtime
     // NOTE DE SÉCURITÉ : La clé API n'est jamais affichée dans les logs.
-    String headers = "Authorization: Bearer " + _apiKey + "\r\nOpenAI-Beta: realtime=v1\r\n";
+    String headers = "Authorization: Bearer " + _apiKey + "\r\n";
 
     Serial.printf("[OpenAIClient] Tentative connexion TLS a %s (Authorization Bearer masque)...\n", urlBuf);
     bool ok = _transport->connect(urlBuf, OPENAI_ROOTS, headers.c_str());
@@ -269,23 +269,26 @@ void OpenAIRealtimeClient::sendSessionUpdate() {
     String payload = "{";
     payload += "\"type\":\"session.update\",";
     payload += "\"session\":{";
-    payload += "\"modalities\":[\"text\",\"audio\"],";
+    payload += "\"type\":\"realtime\",";
     payload += "\"instructions\":\"" + escapeJsonString(_systemInstruction) + "\",";
-    payload += "\"voice\":\"" + escapeJsonString(_voice) + "\",";
-    payload += "\"input_audio_format\":\"pcm16\",";
-    payload += "\"output_audio_format\":\"pcm16\",";
-    payload += "\"input_audio_transcription\":{";
+    payload += "\"audio\":{";
+    payload += "\"input\":{";
+    payload += "\"turn_detection\":null,";
+    payload += "\"transcription\":{";
     payload += "\"model\":\"whisper-1\"";
     if (!langHint.isEmpty()) {
         payload += ",\"language\":\"" + escapeJsonString(langHint) + "\"";
     }
+    payload += "}";
     payload += "},";
-    // turn_detection est mis à null pour s'appuyer sur le VAD local de VoiceKit
-    payload += "\"turn_detection\":null";
+    payload += "\"output\":{";
+    payload += "\"voice\":\"" + escapeJsonString(_voice) + "\"";
+    payload += "}";
+    payload += "}";
     payload += "}";
     payload += "}";
 
-    Serial.printf("[OpenAIClient] Envoi session.update (Voix=%s, Modalities=[text,audio], turn_detection=null)...\n",
+    Serial.printf("[OpenAIClient] Envoi session.update GA (Voix=%s, turn_detection=null)...\n",
                   _voice.c_str());
     _transport->send(payload.c_str(), payload.length());
 }
@@ -469,8 +472,8 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
             if (_firstResponseReceivedMs == 0) _firstResponseReceivedMs = 1;
         }
     }
-    // 4. Paquet audio streaming PCM16 24 kHz
-    else if (strcmp(evType, "response.audio.delta") == 0) {
+    // 4. Paquet audio streaming PCM16 24 kHz (GA: response.output_audio.delta, Beta: response.audio.delta)
+    else if (strcmp(evType, "response.output_audio.delta") == 0 || strcmp(evType, "response.audio.delta") == 0) {
         if (_waitingForResponse) {
             if (_firstResponseReceivedMs == 0) _firstResponseReceivedMs = millis();
             if (_firstAudioReceivedMs == 0) _firstAudioReceivedMs = millis();
@@ -490,8 +493,8 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
             }
         }
     }
-    // 5. Transcription textuelle de la réponse assistant
-    else if (strcmp(evType, "response.audio_transcript.delta") == 0) {
+    // 5. Transcription textuelle de la réponse assistant (GA: response.output_audio_transcript.delta, Beta: response.audio_transcript.delta)
+    else if (strcmp(evType, "response.output_audio_transcript.delta") == 0 || strcmp(evType, "response.audio_transcript.delta") == 0) {
         cJSON* deltaItem = cJSON_GetObjectItemCaseSensitive(root, "delta");
         if (deltaItem && cJSON_IsString(deltaItem) && deltaItem->valuestring) {
             String textFragment(deltaItem->valuestring);
@@ -513,9 +516,24 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     // 7. Fin de réponse du modèle (signal équivalent à turnComplete)
     else if (strcmp(evType, "response.done") == 0) {
         _waitingForResponse = false;
-        Serial.println("[OpenAIClient] Reponse modele terminee (response.done)");
-        if (_onTurnComplete) {
-            _onTurnComplete();
+        cJSON* respObj = cJSON_GetObjectItemCaseSensitive(root, "response");
+        const char* statusStr = nullptr;
+        if (respObj) {
+            cJSON* stItem = cJSON_GetObjectItemCaseSensitive(respObj, "status");
+            if (stItem && cJSON_IsString(stItem) && stItem->valuestring) {
+                statusStr = stItem->valuestring;
+            }
+        }
+        if (statusStr && strcmp(statusStr, "cancelled") == 0) {
+            Serial.println("[OpenAIClient] Reponse annulee par le serveur (status: cancelled)");
+            if (_onInterrupted) {
+                _onInterrupted();
+            }
+        } else {
+            Serial.println("[OpenAIClient] Reponse modele terminee (response.done)");
+            if (_onTurnComplete) {
+                _onTurnComplete();
+            }
         }
     }
     // 8. Annulation de réponse (suite à response.cancel / interruption STOP)

@@ -179,8 +179,39 @@ Tous les exemples PlatformIO cibles pour le M5Stack CoreS3 ont été compilés a
   - L'interpolation linéaire en arithmétique entière produit 768 échantillons 16 bits en **< 15 microsecondes** sur le processeur Xtensa LX7 cadencé à 240 MHz.
   - Impact sur le jitter audio : strictement nul (< 0.05% de la période de 32 ms).
 - **Latence Réseau OpenAI Realtime** :
-  - L'API OpenAI Realtime s'exécute sur WebSocket TLS direct. Dès réception du premier événement `response.audio.delta`, les blocs audio sont immédiatement injectés dans le buffer circulaire PSRAM et joués en streaming.
+  - L'API OpenAI Realtime s'exécute sur WebSocket TLS direct. Dès réception du premier événement `response.output_audio.delta`, les blocs audio sont immédiatement injectés dans le buffer circulaire PSRAM et joués en streaming.
   - L'interruption prioritaire `response.cancel` et `input_audio_buffer.clear` s'exécute immédiatement en cas d'appui tactile ou d'interruption vocale.
+
+### 7.3 Mesures Réelles sur M5Stack CoreS3 Physique (COM4)
+Test réel exécuté sur cible physique CoreS3 le 26 octobre 2026 avec l'exemple `OpenAIConversation` :
+
+```text
+[WiFi] Connecte en 6432 ms ! IP : 192.168.1.10, RSSI : -48 dBm (Canal: 11)
+[WS] WebSocket TLS connecte
+[OpenAIClient] WebSocket TLS connecte en 2229 ms (attente session.created)
+[OpenAIClient] Evenement session.created recu -> envoi session.update
+[OpenAIClient] Envoi session.update GA (Voix=alloy, turn_detection=null)...
+[OpenAIClient] Session OpenAI Realtime prete (setupComplete en 200 ms)
+[VoiceKit] Demarrage complet READY en 12554 ms (WiFi: 6432 ms | SNTP: 0 ms | WS: 2229 ms | Setup: 200 ms)
+
+--- Tour Conversationnel Réel #1 ---
+[Conversation] Fin parole : 134 ms de capture, 2 blocs audio emis
+[OpenAIClient] Fin audio detectee -> input_audio_buffer.commit + response.create
+[LiveSession] Premier bloc audio recu en 853 ms !
+[LivePlayer] Demarrage restitution audio 24 kHz (9600 echantillons en tampon)
+[OpenAIClient] Reponse modele terminee (response.done)
+[LivePlayer] Restitution audio completee
+[STATUS] Tour #1 termine : 214 800 echantillons joues (0 rejet, 0 perte)
+
+  [LATENCY] Metriques instrumentees du tour vocal :
+  - Fin de capture micro -> Envoi activityEnd    : 62 ms
+  - Envoi activityEnd -> 1er audio IA            : 882 ms
+  - 1er audio recu -> Debut restitution DMA      : 16 ms
+  - Latence de reponse vocale percue             : 960 ms
+  - Duree totale du tour vocal                   : 10 101 ms
+```
+
+> **Bilan acoustique matériel** : 214 800 échantillons PCM 24 kHz restitués (~8.95 secondes d'élocution continue en français) sans la moindre perte, coupure ni saturation.
 
 ---
 
