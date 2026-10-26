@@ -255,14 +255,23 @@ bool GeminiLiveClient::connect() {
         return false;
     }
 
+    if (isConnected() && isSetupComplete()) {
+        Serial.println("[LiveClient] Connexion deja active et setup valide");
+        return true;
+    }
+
     _setupComplete.store(false, std::memory_order_release);
     _connected.store(false, std::memory_order_release);
-    _connectStartTimeMs = millis();
+    _connectAttempts++;
+    _wsConnectStartTimeMs = millis();
 
     // Configuration des écouteurs de transport
     _transport->setHandlers(
         [this]() {
             _connected.store(true, std::memory_order_release);
+            _wsConnectDurationMs = millis() - _wsConnectStartTimeMs;
+            _setupStartTimeMs = millis();
+            Serial.printf("[LiveClient] WebSocket TLS etabli en %u ms\n", (unsigned)_wsConnectDurationMs);
             if (_onConnected) _onConnected();
             sendSetupMessage();
         },
@@ -605,7 +614,9 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
     // 1. Confirmation de configuration (setupComplete)
     cJSON* setupComplete = cJSON_GetObjectItemCaseSensitive(root, "setupComplete");
     if (setupComplete) {
-        Serial.println("[LiveClient] Session Gemini Live initialisee avec succes (setupComplete)");
+        _setupCompleteDurationMs = millis() - _setupStartTimeMs;
+        Serial.printf("[LiveClient] Session Gemini Live initialisee avec succes (setupComplete en %u ms)\n",
+                      (unsigned)_setupCompleteDurationMs);
         _setupComplete.store(true, std::memory_order_release);
         if (_onSetupComplete) _onSetupComplete();
     }

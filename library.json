@@ -1,7 +1,7 @@
 {
   "name": "VoiceKit",
-  "version": "0.5.1",
-  "description": "Bibliothèque C++/Arduino de synthèse vocale (TTS), reconnaissance vocale (STT), dictée continue mains libres (ContinuousSTT), conversation bidirectionnelle, façade simplifiée VoiceKit, outil VoiceDiagnostics et gestion sécurisée des modes pour M5Stack CoreS3 via Gemini Live (moteur VoxCore) — v0.5.1",
+  "version": "0.5.2",
+  "description": "Bibliothèque C++/Arduino de synthèse vocale (TTS), reconnaissance vocale (STT), dictée continue mains libres (ContinuousSTT), conversation bidirectionnelle, façade simplifiée VoiceKit, outil VoiceDiagnostics, connexion rapide Fast Connection (Wi-Fi/NTP/Gemini Live) et gestion sécurisée des modes pour M5Stack CoreS3 via Gemini Live (moteur VoxCore) — v0.5.2",
   "keywords": [
     "voicekit",
     "voxcore",

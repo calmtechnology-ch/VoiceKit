@@ -1,14 +1,14 @@
-# VoiceDiagnostics — VoiceKit v0.5.1
+# VoiceDiagnostics — VoiceKit v0.5.2
 
-Exemple officiel de **diagnostic et de visualisation** pour la bibliothèque **VoiceKit v0.5.1** sur **M5Stack CoreS3**.
+Exemple officiel de **diagnostic et de visualisation** pour la bibliothèque **VoiceKit v0.5.2** sur **M5Stack CoreS3**.
 
-Cette application fournit un tableau de bord tactile fluide et léger permettant d'inspecter l'état du moteur vocal, les flux audio (RMS micro, états STT/TTS), les métriques réseau (Wi-Fi, session Gemini Live), l'utilisation mémoire (RAM, PSRAM) et le journal horodaté des événements.
+Cette application fournit un tableau de bord tactile fluide et léger permettant d'inspecter l'état du moteur vocal, les flux audio (RMS micro, états STT/TTS), les métriques réseau (Wi-Fi, session Gemini Live), les **temps de démarrage et de connexion réels (Fast Connection v0.5.2)**, l'utilisation mémoire (RAM, PSRAM) et le journal horodaté des événements.
 
 ---
 
 ## 1. Fonctionnalités et Interface Tactile (320 × 240)
 
-L'interface est construite avec **M5Unified** (sans surcharge ni dépendance LVGL) et s'articule autour de 4 onglets :
+L'interface est construite avec **M5Unified** (sans surcharge ni dépendance LVGL) et s'articule autour de 5 onglets :
 
 ### 📊 Onglet `SYS` (Système)
 - **État VoiceKit** : État opérationnel en temps réel (`READY`, `SPEAKING`, `LISTENING`, etc.).
@@ -35,6 +35,15 @@ L'interface est construite avec **M5Unified** (sans surcharge ni dépendance LVG
 - **Erreurs observées** : Compteur d'erreurs de transport ou protocole.
 - **Dernière erreur** : Intitulé abrégé du dernier incident survenu.
 
+### ⚡ Onglet `CONN` (Fast Connection — Temps Réels v0.5.2)
+- **WiFi -> IP** : Durée exacte de connexion Wi-Fi jusqu'à obtention de l'IP (avec indicateur `(FAST)` si connexion directe par BSSID/canal).
+- **SNTP -> Horloge** : Durée de synchronisation NTP jusqu'à heure valide (ou `0 ms (IMMEDIAT)` si horloge déjà valide en redémarrage chaud/RTC).
+- **WS connecté** : Temps d'établissement du transport WebSocket TLS vers l'API Gemini Live.
+- **Setup complete** : Temps d'échange de la configuration initiale Gemini jusqu'à réception de `setupComplete`.
+- **TOTAL -> READY** : Durée globale du démarrage jusqu'à l'état `VoiceKit::isReady()`.
+- **Essais WiFi/Gem** : Compteur de tentatives et échecs éventuels.
+- **FastConnect** : État du mécanisme rapide (`ACTIF ch<N>`, `REPLI SCAN`, `INITIAL`) et BSSID mémorisé en NVS.
+
 ### 📝 Onglet `EVENTS` (Journal des Événements)
 - **Historique circulaire** : Affichage chronologique des 6 derniers événements vocaux horodatés (transitions d'état, début/fin TTS, début/fin micro, réceptions de transcription STT, erreurs).
 - **Zéro allocation dynamique** : Tampon circulaire statique en mémoire fixe.
@@ -45,16 +54,27 @@ L'interface est construite avec **M5Unified** (sans surcharge ni dépendance LVG
 
 ---
 
-## 2. Sortie Série Structurée
+## 2. Sortie Série Structurée et CSV
 
-L'application émet périodiquement un relevé structuré sur le port série (115200 baud).
+L'application émet des relevés structurés sur le port série (115200 baud).
 
-### Format standard `[DIAG]` (par défaut)
+### Journalisation de connexion `[CONN]` et `[CONN_CSV]` (v0.5.2)
+À chaque transition vers `READY`, une ligne récapitulative des 5 phases temporelles est produite :
+```text
+[CONN] t_wifi=824ms t_sntp=0ms t_ws=945ms t_setup=412ms t_ready=2181ms fast=1 sntp_skip=1 ch=6 bssid=12:34:56:78:9a:bc
+[CONN_CSV] 824,0,945,412,2181,1,1,1,1,0,6,12:34:56:78:9a:bc
+```
+L'en-tête CSV est émis au démarrage :
+```text
+[CONN_CSV_HEADER] t_wifi_ms,t_sntp_ms,t_ws_ms,t_setup_ms,t_ready_ms,fast_connect,sntp_skipped,wifi_attempts,gemini_attempts,failures,channel,bssid
+```
+
+### Format standard `[DIAG]` (périodique 1 Hz)
 ```text
 [DIAG] Voice=READY [DIAG] Mode=IDLE [DIAG] WiFi=CONNECTED [DIAG] RAM_FREE=152320 [DIAG] PSRAM_FREE=7845120 [DIAG] MIC_RMS=215 [DIAG] TTS_BUSY=0
 ```
 
-### Format CSV facultatif (`ENABLE_CSV_OUTPUT 1`)
+### Format CSV périodique (`ENABLE_CSV_OUTPUT 1`)
 En définissant `#define ENABLE_CSV_OUTPUT 1` dans `main.cpp` :
 ```text
 [DIAG_CSV] 14250,READY,IDLE,CONNECTED,152320,7845120,215,0,0,0

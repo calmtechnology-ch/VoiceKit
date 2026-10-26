@@ -28,7 +28,7 @@ inline const char* voiceKitModeToString(VoiceKitMode m) {
 
 /**
  * @class VoiceKit
- * @brief Façade simplifiée, haut niveau et sécurisée pour l'écosystème vocal VoiceKit v0.5.0.1.
+ * @brief Façade simplifiée, haut niveau et sécurisée pour l'écosystème vocal VoiceKit v0.5.2.
  * 
  * Cette façade unifie et simplifie l'accès aux quatre modes vocaux majeurs :
  * 1. TTS : Synthèse vocale asynchrone PCM 24 kHz haute fidélité (`say`).
@@ -107,6 +107,11 @@ public:
      * @brief Retourne le dernier message d'erreur survenu.
      */
     String getLastError() const;
+
+    /**
+     * @brief Retourne les métriques instrumentées de démarrage et de connexion (v0.5.2 — Fast Connection).
+     */
+    const ConnectionMetrics& getConnectionMetrics() const { return _voice.getConnectionMetrics(); }
 
     /**
      * @brief Règle le volume sonore (0 à 100 %).

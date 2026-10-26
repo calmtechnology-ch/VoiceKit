@@ -19,9 +19,44 @@ bool VoxCoreVoice::isSystemTimeValid() {
     return (now >= NTP_MIN_VALID_TIMESTAMP);
 }
 
+void VoxCoreVoice::updateConnectionMetrics() {
+    _connectionMetrics.wifiConnectMs = _wifi.getWifiConnectMs();
+    _connectionMetrics.sntpSyncMs = _wifi.getSntpSyncMs();
+    _connectionMetrics.wsConnectMs = _client.getWsConnectMs();
+    _connectionMetrics.setupCompleteMs = _client.getSetupCompleteMs();
+    _connectionMetrics.wifiAttempts = _wifi.getWifiAttempts();
+    _connectionMetrics.wifiReconnects = _wifi.getWifiReconnects();
+    _connectionMetrics.geminiAttempts = _client.getConnectAttempts();
+    _connectionMetrics.geminiReconnects = _session.getReconnectCount();
+    _connectionMetrics.fastConnectEnabled = _config.enableFastConnect;
+    _connectionMetrics.fastConnectAttempted = _wifi.isFastConnectAttempted();
+    _connectionMetrics.fastConnectSuccess = _wifi.isFastConnectSuccess();
+    _connectionMetrics.sntpSkipped = _wifi.isSntpSkipped();
+    _connectionMetrics.channel = _wifi.getChannel();
+    strncpy(_connectionMetrics.bssidStr, _wifi.getBSSID(), sizeof(_connectionMetrics.bssidStr) - 1);
+    _connectionMetrics.bssidStr[sizeof(_connectionMetrics.bssidStr) - 1] = '\0';
+    if (_totalReadyMs == 0 && _initStartTimeMs > 0) {
+        _totalReadyMs = millis() - _initStartTimeMs;
+        _connectionMetrics.totalReadyMs = _totalReadyMs;
+        Serial.printf("[VoiceKit] Demarrage complet READY en %u ms (WiFi: %u ms | SNTP: %u ms | WS: %u ms | Setup: %u ms)\n",
+                      (unsigned)_totalReadyMs,
+                      (unsigned)_connectionMetrics.wifiConnectMs,
+                      (unsigned)_connectionMetrics.sntpSyncMs,
+                      (unsigned)_connectionMetrics.wsConnectMs,
+                      (unsigned)_connectionMetrics.setupCompleteMs);
+    }
+}
+
 void VoxCoreVoice::setState(VoiceState newState) {
     if (_state != newState) {
+        if (newState == VoiceState::ERROR_STATE &&
+            (_state == VoiceState::CONNECTING_WIFI || _state == VoiceState::CONNECTING_SERVICE)) {
+            _connectionMetrics.connectionFailures++;
+        }
         _state = newState;
+        if (_state == VoiceState::READY) {
+            updateConnectionMetrics();
+        }
         if (_onStateChanged) {
             _onStateChanged(_state);
         }
@@ -31,11 +66,16 @@ void VoxCoreVoice::setState(VoiceState newState) {
 bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _config = config;
     _lastError = "";
+    _initStartTimeMs = millis();
+    _totalReadyMs = 0;
+    _connectionMetrics = ConnectionMetrics();
+    _connectionMetrics.fastConnectEnabled = _config.enableFastConnect;
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.5.0.1 — TTS + STT + Conversation  ");
-    Serial.printf("  Mode Audio : %s\n",
-                  (LiveAudioPlayer::getCompiledAudioMode() == 1) ? "MODE 1 (REACTIVE_CALLBACK)" : "MODE 2 (DEDICATED_AUDIO_TASK)");
+    Serial.println("  VoxCore VoiceKit v0.5.2 — Fast Connection             ");
+    Serial.printf("  Mode Audio : %s | FastConnect : %s\n",
+                  (LiveAudioPlayer::getCompiledAudioMode() == 1) ? "MODE 1 (REACTIVE_CALLBACK)" : "MODE 2 (DEDICATED_AUDIO_TASK)",
+                  _config.enableFastConnect ? "ACTIF" : "DESACTIVE");
     Serial.println("========================================================");
 
     // 1. Initialisation HAL audio matérielle (Sortie : Haut-parleur M5Unified)
@@ -119,6 +159,14 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         if (_onError) _onError(_lastError);
         return false;
     }
+
+    _session.setNetworkCheck([this]() {
+        if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
+            return _wifi.isConnected() && _wifi.isTimeSynced();
+        } else {
+            return (WiFi.status() == WL_CONNECTED && isSystemTimeValid());
+        }
+    });
 
     // Écouteur de transcription de sortie Gemini (Mode conversation)
     _session.setOnOutputTranscription([this](const String& text) {
@@ -297,8 +345,9 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
 
     if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
         if (!_config.wifiSSID.isEmpty()) {
-            Serial.printf("[VoiceKit] Demarrage WiFiManager gere (SSID: %s)...\n", _config.wifiSSID.c_str());
-            _wifi.begin(_config.wifiSSID.c_str(), _config.wifiPassword.c_str());
+            Serial.printf("[VoiceKit] Demarrage WiFiManager gere (SSID: %s, FastConnect: %s)...\n",
+                          _config.wifiSSID.c_str(), _config.enableFastConnect ? "OUI" : "NON");
+            _wifi.begin(_config.wifiSSID.c_str(), _config.wifiPassword.c_str(), _config.enableFastConnect, _config.fastConnectTimeoutMs);
             setState(VoiceState::CONNECTING_WIFI);
         } else {
             Serial.println("[VoiceKit] AVERTISSEMENT : Mode MANAGED_WIFI sans SSID");
@@ -320,20 +369,25 @@ void VoxCoreVoice::update() {
     if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
         _wifi.tick();
         if (_wifi.isConnected() && _wifi.isTimeSynced()) {
-            if (_state == VoiceState::CONNECTING_WIFI || _state == VoiceState::IDLE) {
-                if (!_client.isConnected() && _session.getState() == LiveSessionState::DISCONNECTED) {
+            if (_state == VoiceState::CONNECTING_WIFI || _state == VoiceState::IDLE || _state == VoiceState::DISCONNECTED || _state == VoiceState::ERROR_STATE) {
+                if (!_client.isConnected() && (_session.getState() == LiveSessionState::DISCONNECTED || _session.getState() == LiveSessionState::ERROR)) {
                     Serial.println("[VoiceKit] Wi-Fi et NTP valides -> Connexion a Gemini Live...");
                     setState(VoiceState::CONNECTING_SERVICE);
                     _connectingStartTimeMs = millis();
                     _session.activate();
                 }
             }
+        } else if (!_wifi.isConnected()) {
+            if (_state != VoiceState::CONNECTING_WIFI && _state != VoiceState::DISCONNECTED && _state != VoiceState::ERROR_STATE) {
+                Serial.println("[VoiceKit] Perte Wi-Fi detectee -> transition CONNECTING_WIFI");
+                setState(VoiceState::CONNECTING_WIFI);
+            }
         }
     } else {
         // En mode EXTERNAL_WIFI : connexion automatique dès que l'application hôte a établi le réseau
-        if (_state == VoiceState::IDLE || _state == VoiceState::CONNECTING_WIFI) {
+        if (_state == VoiceState::IDLE || _state == VoiceState::CONNECTING_WIFI || _state == VoiceState::DISCONNECTED || _state == VoiceState::ERROR_STATE) {
             if (WiFi.status() == WL_CONNECTED && isSystemTimeValid()) {
-                if (!_client.isConnected() && _session.getState() == LiveSessionState::DISCONNECTED) {
+                if (!_client.isConnected() && (_session.getState() == LiveSessionState::DISCONNECTED || _session.getState() == LiveSessionState::ERROR)) {
                     Serial.println("[VoiceKit] Reseau hote & NTP valides -> Connexion a Gemini Live...");
                     setState(VoiceState::CONNECTING_SERVICE);
                     _connectingStartTimeMs = millis();
@@ -345,7 +399,7 @@ void VoxCoreVoice::update() {
             _lastError = "Perte Wi-Fi pendant connexion";
             _pendingText = "";
             _connectingStartTimeMs = 0;
-            setState(VoiceState::ERROR_STATE);
+            setState(VoiceState::CONNECTING_WIFI);
             if (_onError) _onError(_lastError);
         }
     }

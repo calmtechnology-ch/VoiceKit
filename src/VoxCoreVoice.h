@@ -321,11 +321,17 @@ public:
     IAudioInput* getAudioInput() const { return _audioInput; }
 
     /**
+     * @brief Retourne les métriques instrumentées de démarrage et de connexion (v0.5.2).
+     */
+    const ConnectionMetrics& getConnectionMetrics() const { return _connectionMetrics; }
+
+    /**
      * @brief Vérifie si l'horloge système UTC est synchronisée (timestamp >= 2024).
      */
     static bool isSystemTimeValid();
 
 private:
+    void updateConnectionMetrics();
     void setState(VoiceState newState);
     bool dispatchSpeech(const String& text);
     void handleIncomingTranscription(const String& text, bool isFinal);
@@ -333,6 +339,10 @@ private:
     VoiceKitConfig _config;
     VoiceState _state = VoiceState::UNINITIALIZED;
     String _lastError = "";
+
+    ConnectionMetrics _connectionMetrics;
+    uint32_t _initStartTimeMs = 0;
+    uint32_t _totalReadyMs = 0;
 
     std::unique_ptr<M5AudioOutput> _internalAudioOutput;
     IAudioOutput* _audioOutput = nullptr;

@@ -79,6 +79,7 @@ public:
     bool hasPlaybackHardwareError() const { return _hasPlaybackHardwareError; }
     uint32_t getDroppedSamplesCount() const { return _player ? _player->getOverflowDroppedSamples() : 0; }
     uint8_t getReconnectAttempts() const { return _reconnectAttempts; }
+    uint32_t getReconnectCount() const { return _reconnectCount; }
 
     // Enregistrement des callbacks
     using StateCallback = std::function<void(LiveSessionState state)>;
@@ -86,6 +87,7 @@ public:
     using VoidCallback = std::function<void()>;
     using ErrorCallback = std::function<void(const String& err)>;
     using TranscriptionCallback = std::function<void(const String& text)>;
+    using NetworkCheckCallback = std::function<bool()>;
 
     void setOnStateChanged(StateCallback cb) { _onStateChanged = std::move(cb); }
     void setOnTurnFinished(TurnCallback cb) { _onTurnFinished = std::move(cb); }
@@ -93,6 +95,8 @@ public:
     void setOnPlaybackFinished(VoidCallback cb) { _onPlaybackFinished = std::move(cb); }
     void setOnError(ErrorCallback cb) { _onError = std::move(cb); }
     void setOnOutputTranscription(TranscriptionCallback cb) { _onOutputTranscription = std::move(cb); }
+    void setNetworkCheck(NetworkCheckCallback cb) { _networkCheck = std::move(cb); }
+    bool isNetworkReady() const { return _networkCheck ? _networkCheck() : true; }
 
     void transitionTo(LiveSessionState newState, const char* reason = nullptr);
     void finishTurn();
@@ -153,4 +157,7 @@ private:
     VoidCallback _onPlaybackFinished;
     ErrorCallback _onError;
     TranscriptionCallback _onOutputTranscription;
+    NetworkCheckCallback _networkCheck;
+
+    uint32_t _reconnectCount = 0;
 };

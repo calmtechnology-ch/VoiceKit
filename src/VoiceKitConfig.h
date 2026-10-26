@@ -206,7 +206,34 @@ struct ConversationMetrics {
 };
 
 /**
- * @brief Configuration d'initialisation de VoxCore VoiceKit v0.4.1.
+ * @brief Métriques instrumentées de connectivité et temps de démarrage (v0.5.2 — Fast Connection).
+ */
+struct ConnectionMetrics {
+    // 5 Temps d'instrumentation requis (en millisecondes)
+    uint32_t wifiConnectMs = 0;       ///< Démarrage Wi-Fi -> IP obtenue (t_wifi)
+    uint32_t sntpSyncMs = 0;          ///< Début SNTP -> horloge valide (t_sntp, 0 si déjà synchronisée)
+    uint32_t wsConnectMs = 0;         ///< Début connexion Gemini -> WebSocket connecté (t_ws)
+    uint32_t setupCompleteMs = 0;     ///< WebSocket connecté -> confirmation setupComplete (t_setup)
+    uint32_t totalReadyMs = 0;        ///< Démarrage total (begin) -> VoiceKit::isReady() (t_ready)
+
+    // Compteurs opérationnels et fiabilité
+    uint32_t wifiAttempts = 0;        ///< Nombre de tentatives Wi-Fi
+    uint32_t wifiReconnects = 0;      ///< Nombre de reconnexions Wi-Fi réussies après perte
+    uint32_t geminiAttempts = 0;      ///< Nombre de tentatives de connexion Gemini Live
+    uint32_t geminiReconnects = 0;    ///< Nombre de reconnexions Gemini Live
+    uint32_t connectionFailures = 0;  ///< Nombre d'échecs de connexion observés
+
+    // Indicateurs d'optimisation
+    bool fastConnectEnabled = true;   ///< Connexion rapide BSSID/canal autorisée
+    bool fastConnectAttempted = false;///< Vrai si la connexion rapide BSSID/canal a été tentée
+    bool fastConnectSuccess = false;  ///< Vrai si la connexion rapide a abouti avec succès
+    bool sntpSkipped = false;         ///< Vrai si SNTP a été immédiat car l'horloge système était déjà valide
+    uint8_t channel = 0;              ///< Canal Wi-Fi utilisé (1..14)
+    char bssidStr[18] = "";           ///< BSSID au format standard "XX:XX:XX:XX:XX:XX"
+};
+
+/**
+ * @brief Configuration d'initialisation de VoxCore VoiceKit v0.5.2.
  */
 struct VoiceKitConfig {
     // Cle d'API Google Gemini
@@ -232,6 +259,10 @@ struct VoiceKitConfig {
     WiFiMode wifiMode = WiFiMode::EXTERNAL_WIFI;
     String wifiSSID = "";
     String wifiPassword = "";
+
+    // Optimisations de connexion rapide Wi-Fi (v0.5.2)
+    bool enableFastConnect = true;             ///< Active la connexion rapide au dernier BSSID/canal connu (défaut: true)
+    uint32_t fastConnectTimeoutMs = 3500;      ///< Délai max pour tentative rapide avant repli automatique vers scan normal (ms)
 
     // Volume initial du haut-parleur (0 - 100 %)
     uint8_t volume = 65;

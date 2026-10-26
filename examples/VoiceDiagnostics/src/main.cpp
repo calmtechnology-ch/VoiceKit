@@ -1,20 +1,21 @@
 /**
  * @file main.cpp
  * @brief Exemple officiel VoiceDiagnostics — Outil de diagnostic et visualisation
- *        pour le moteur vocal VoiceKit v0.5.1 sur M5Stack CoreS3.
+ *        pour le moteur vocal VoiceKit v0.5.2 sur M5Stack CoreS3.
  * 
  * Cet exemple offre une interface tactile 320x240 M5Unified (sans LVGL)
- * structurée en 4 écrans de diagnostic :
- * - SYSTEM  : État VoiceKit, mode vocal, RAM libre, PSRAM libre, Uptime, infos ESP32
- * - AUDIO   : Niveau micro RMS, capture STT, restitution TTS, compteurs audio, test TTS
- * - NETWORK : Connexion Wi-Fi, IP, RSSI, session Gemini Live, reconnexions, erreurs
- * - EVENTS  : Historique horodaté des événements, transitions, synthèse, écoute, erreurs
+ * structurée en 5 écrans de diagnostic :
+ * - SYSTEM     : État VoiceKit, mode vocal, RAM libre, PSRAM libre, Uptime, infos ESP32
+ * - AUDIO      : Niveau micro RMS, capture STT, restitution TTS, compteurs audio, test TTS
+ * - NETWORK    : Connexion Wi-Fi, IP, RSSI, session Gemini Live, reconnexions, erreurs
+ * - CONNECTION : Temps de démarrage réels (t_wifi, t_sntp, t_ws, t_setup, t_ready), FastConnect
+ * - EVENTS     : Historique horodaté des événements, transitions, synthèse, écoute, erreurs
  * 
  * Conforme aux contraintes VoiceKit :
  * - Utilisation exclusive de la façade `VoiceKit voice;` (aucun second moteur)
  * - Aucune tâche FreeRTOS supplémentaire ni traitement lourd dans les callbacks
  * - Rafraîchissement écran maîtrisé à environ 5 Hz (200 ms) sans clignotement
- * - Sortie série structurée [DIAG] et CSV facultatif avec limitation en streaming audio
+ * - Sortie série structurée [DIAG] et CSV [CONN_CSV] avec limitation en streaming audio
  * - Données authentiques sans simulation, affichage "N/D" si indisponible
  * - Protection stricte des identifiants (aucun mot de passe ni clé API affichés)
  */
@@ -62,11 +63,12 @@
 // Instance unique de la façade VoiceKit
 static VoiceKit voice;
 
-// Navigation par onglets (4 écrans)
+// Navigation par onglets (5 écrans)
 enum class Page : uint8_t {
     SYSTEM = 0,
     AUDIO,
     NETWORK,
+    CONNECTION,
     EVENTS
 };
 static Page s_currentPage = Page::SYSTEM;
@@ -184,17 +186,19 @@ static void drawUI() {
         // En-tête supérieur
         M5.Display.setTextColor(COLOR_FG, COLOR_BG);
         M5.Display.setCursor(10, 6);
-        M5.Display.print("VoiceDiagnostics  v0.5.1");
+        M5.Display.print("VoiceDiagnostics  v0.5.2");
 
-        // Barre d'onglets (SYS, AUDIO, NET, EVENTS)
-        const char* tabs[4] = {"SYS", "AUDIO", "NET", "EVENTS"};
-        for (int i = 0; i < 4; ++i) {
-            int x = 6 + i * 78;
+        // Barre d'onglets (SYS, AUDIO, NET, CONN, EVENTS)
+        const char* tabs[5] = {"SYS", "AUDIO", "NET", "CONN", "EVENTS"};
+        for (int i = 0; i < 5; ++i) {
+            int x = 6 + i * 62;
             bool active = (i == (int)s_currentPage);
             uint16_t tabColor = active ? COLOR_ACCENT : COLOR_PANEL;
-            M5.Display.fillRoundRect(x, 23, 74, 25, 4, tabColor);
+            M5.Display.fillRoundRect(x, 23, 58, 25, 4, tabColor);
             M5.Display.setTextColor(COLOR_FG, tabColor);
-            M5.Display.setCursor(x + 12, 32);
+            // Centrage approximatif du texte court
+            int offset = (i == 0 || i == 2) ? 19 : ((i == 1) ? 12 : ((i == 3) ? 16 : 10));
+            M5.Display.setCursor(x + offset, 32);
             M5.Display.print(tabs[i]);
         }
 
@@ -273,8 +277,51 @@ static void drawUI() {
         line(148, "Erreurs observees", String(s_errors), s_errors > 0 ? COLOR_WARN : COLOR_FG);
         line(166, "Derniere erreur",   s_lastErrorStr.length() > 0 ? s_lastErrorStr.substring(0, 24) : "Aucune", s_lastErrorStr.length() > 0 ? COLOR_WARN : COLOR_FG);
     }
+    else if (s_currentPage == Page::CONNECTION) {
+        // --- ÉCRAN 4 : CONNECTION ---
+        const auto& m = voice.getConnectionMetrics();
+        String wifiVal = m.wifiConnectMs > 0 ? (String(m.wifiConnectMs) + " ms" + (m.fastConnectSuccess ? " (FAST)" : "")) : "En cours...";
+        line(58,  "WiFi -> IP",        wifiVal, m.wifiConnectMs > 0 ? (m.fastConnectSuccess ? COLOR_ACCENT : COLOR_FG) : COLOR_WARN);
+        
+        String sntpVal;
+        if (m.sntpSkipped) {
+            sntpVal = "0 ms (IMMEDIAT)";
+        } else if (m.sntpSyncMs > 0) {
+            sntpVal = String(m.sntpSyncMs) + " ms";
+        } else {
+            sntpVal = "En cours...";
+        }
+        line(76,  "SNTP -> Horloge",   sntpVal, m.sntpSkipped ? COLOR_GREEN : (m.sntpSyncMs > 0 ? COLOR_FG : COLOR_WARN));
+
+        String wsVal = m.wsConnectMs > 0 ? (String(m.wsConnectMs) + " ms") : "En cours...";
+        line(94,  "WS connecte",       wsVal, m.wsConnectMs > 0 ? COLOR_FG : COLOR_WARN);
+
+        String setupVal = m.setupCompleteMs > 0 ? (String(m.setupCompleteMs) + " ms") : "En attente...";
+        line(112, "Setup complete",    setupVal, m.setupCompleteMs > 0 ? COLOR_FG : COLOR_WARN);
+
+        String readyVal = m.totalReadyMs > 0 ? (String(m.totalReadyMs) + " ms") : "En cours...";
+        line(130, "TOTAL -> READY",    readyVal, m.totalReadyMs > 0 ? COLOR_GREEN : COLOR_WARN);
+
+        String attemptsVal = String(m.wifiAttempts) + " / " + String(m.geminiAttempts) + " (Ech: " + String(m.connectionFailures) + ")";
+        line(148, "Essais WiFi/Gem",   attemptsVal, m.connectionFailures > 0 ? COLOR_WARN : COLOR_FG);
+
+        String fastVal;
+        if (m.fastConnectSuccess) {
+            fastVal = "ACTIF ch" + String(m.channel);
+        } else if (m.fastConnectAttempted) {
+            fastVal = "REPLI SCAN";
+        } else if (m.fastConnectEnabled) {
+            fastVal = "INITIAL";
+        } else {
+            fastVal = "DESACTIVE";
+        }
+        if (m.bssidStr[0] != '\0') {
+            fastVal += " " + String(m.bssidStr).substring(9);
+        }
+        line(166, "FastConnect",       fastVal, m.fastConnectSuccess ? COLOR_GREEN : COLOR_MUTED);
+    }
     else {
-        // --- ÉCRAN 4 : EVENTS ---
+        // --- ÉCRAN 5 : EVENTS ---
         size_t count = (s_eventTotal < MAX_EVENTS) ? s_eventTotal : MAX_EVENTS;
         size_t start = (s_eventTotal < MAX_EVENTS) ? 0 : s_eventHead;
         for (size_t i = 0; i < count; ++i) {
@@ -338,7 +385,7 @@ void setup() {
     delay(100);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.5.1 — Demonstration VoiceDiagnostics      ");
+    Serial.println("  VoiceKit v0.5.2 — Demonstration VoiceDiagnostics      ");
     Serial.println("  Outil de diagnostic vocal & systeme pour M5 CoreS3     ");
     Serial.println("========================================================");
 
@@ -357,6 +404,33 @@ void setup() {
         s_everConnected = true;
         s_seenReady = true;
         addEvent("Session Gemini READY", COLOR_GREEN);
+
+        // Journalisation instrumentée des temps de connexion v0.5.2
+        const auto& m = voice.getConnectionMetrics();
+        Serial.printf("[CONN] t_wifi=%lums t_sntp=%lums t_ws=%lums t_setup=%lums t_ready=%lums fast=%d sntp_skip=%d ch=%u bssid=%s\n",
+            (unsigned long)m.wifiConnectMs,
+            (unsigned long)m.sntpSyncMs,
+            (unsigned long)m.wsConnectMs,
+            (unsigned long)m.setupCompleteMs,
+            (unsigned long)m.totalReadyMs,
+            m.fastConnectSuccess ? 1 : 0,
+            m.sntpSkipped ? 1 : 0,
+            (unsigned)m.channel,
+            m.bssidStr);
+
+        Serial.printf("[CONN_CSV] %lu,%lu,%lu,%lu,%lu,%d,%d,%u,%u,%u,%u,%s\n",
+            (unsigned long)m.wifiConnectMs,
+            (unsigned long)m.sntpSyncMs,
+            (unsigned long)m.wsConnectMs,
+            (unsigned long)m.setupCompleteMs,
+            (unsigned long)m.totalReadyMs,
+            m.fastConnectSuccess ? 1 : 0,
+            m.sntpSkipped ? 1 : 0,
+            (unsigned)m.wifiAttempts,
+            (unsigned)m.geminiAttempts,
+            (unsigned)m.connectionFailures,
+            (unsigned)m.channel,
+            m.bssidStr);
     });
 
     voice.onStateChanged([](VoiceState s) {
@@ -417,13 +491,14 @@ void setup() {
 
     // Configuration de la façade VoiceKit
     VoiceKitConfig config;
-    config.apiKey       = GEMINI_KEY;
-    config.wifiMode     = WiFiMode::MANAGED_WIFI;
-    config.wifiSSID     = WIFI_SSID;
-    config.wifiPassword = WIFI_PASSWORD;
-    config.voice        = "Aoede";
-    config.language     = "fr-FR";
-    config.volume       = 65;
+    config.apiKey            = GEMINI_KEY;
+    config.wifiMode          = WiFiMode::MANAGED_WIFI;
+    config.wifiSSID          = WIFI_SSID;
+    config.wifiPassword      = WIFI_PASSWORD;
+    config.enableFastConnect = true;
+    config.voice             = "Aoede";
+    config.language          = "fr-FR";
+    config.volume            = 65;
 
     addEvent("Initialisation VoiceKit...", COLOR_MUTED);
 
@@ -433,6 +508,7 @@ void setup() {
         addEvent("Echec voice.begin", COLOR_WARN);
     }
 
+    Serial.println("[CONN_CSV_HEADER] t_wifi_ms,t_sntp_ms,t_ws_ms,t_setup_ms,t_ready_ms,fast_connect,sntp_skipped,wifi_attempts,gemini_attempts,failures,channel,bssid");
 #if ENABLE_CSV_OUTPUT
     Serial.println("[DIAG_CSV_HEADER] ms,state,mode,wifi,ram_free,psram_free,mic_rms,tts_busy,errors,reconnects");
 #endif
@@ -448,12 +524,13 @@ void loop() {
     if (M5.Touch.getCount()) {
         auto t = M5.Touch.getDetail();
         if (t.wasPressed()) {
-            // Sélection des onglets supérieurs (y in 23..48)
+            // Sélection des 5 onglets supérieurs (y in 23..48)
             if (t.y >= 23 && t.y <= 48) {
-                if (t.x >= 6 && t.x < 80)        s_currentPage = Page::SYSTEM;
-                else if (t.x >= 80 && t.x < 158) s_currentPage = Page::AUDIO;
-                else if (t.x >= 158 && t.x < 236)s_currentPage = Page::NETWORK;
-                else if (t.x >= 236 && t.x < 314)s_currentPage = Page::EVENTS;
+                if (t.x < 68)        s_currentPage = Page::SYSTEM;
+                else if (t.x < 130)  s_currentPage = Page::AUDIO;
+                else if (t.x < 192)  s_currentPage = Page::NETWORK;
+                else if (t.x < 254)  s_currentPage = Page::CONNECTION;
+                else                 s_currentPage = Page::EVENTS;
                 s_forceFullRedraw = true;
             }
             // Boutons d'action inférieurs (y in 194..234)

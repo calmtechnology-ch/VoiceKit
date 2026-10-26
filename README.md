@@ -1,4 +1,4 @@
-# VoiceKit v0.5.1 — Intégration de l'Exemple Officiel VoiceDiagnostics
+# VoiceKit v0.5.2 — Fast Connection & Diagnostic Vocal Avancé
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -7,11 +7,14 @@
 
 Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)** et de **conversation vocale bidirectionnelle native (Mode B)** haute fidélité pour **M5Stack CoreS3** (ESP32-S3), propulsée par l'API **Gemini Live** (protocole bidirectionnel BidiGenerateContent) et construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
 
-La version **v0.5.1** introduit un nouvel exemple officiel d'instrumentation et de visualisation vocale :
-- **Nouvelle Démonstration Officielle `VoiceDiagnostics`** : Tableau de bord tactile complet 320 × 240 M5Unified (sans LVGL) organisé en 4 onglets (`SYS`, `AUDIO`, `NET`, `EVENTS`), permettant d'inspecter en direct l'état de la façade VoiceKit, la mémoire RAM/PSRAM, le signal RMS du microphone, les compteurs TTS/STT, la connectivité Wi-Fi / Gemini Live, avec un historique circulaire des événements sans allocation dynamique et deux boutons d'action (`TEST TTS` en français et `STOP AUDIO`).
-- **Journal Série Structuré & Mode CSV** : Sortie de diagnostic périodique standardisée `[DIAG]` et mode CSV optionnel (`ENABLE_CSV_OUTPUT`), avec régulation automatique de l'UART pendant le streaming audio pour préserver les transferts DMA et WebSocket.
-- **Façade Unifiée et Intégrité VoxCore** : Aucune tâche FreeRTOS superflue, aucun traitement bloquant dans les callbacks audio, utilisation exclusive de la façade `VoiceKit voice;`, et zéro modification du moteur VoxCore v0.5.0.1.
-- **9 Exemples Officiels Inclus** : Compatibilité et non-régression intégrales vérifiées sur l'ensemble des modules et exemples existants.
+La version **v0.5.2** introduit l'accélération matérielle de démarrage **Fast Connection**, l'instrumentation des phases de connexion et l'enrichissement de l'outil de diagnostic :
+- **Connexion Wi-Fi Rapide (FastConnect)** : Mémorisation en mémoire non volatile (NVS / `Preferences`) du dernier BSSID et du canal radio de votre point d'accès. La connexion directe par canal réduit le temps d'obtention d'IP de **2384 ms à 946 ms (-60.3%)** sur CoreS3, avec repli automatique transparent vers le balayage multi-canaux classique en cas d'échec (timeout 3.5 s).
+- **Synchronisation SNTP Optimisée & Respect TLS** : Détection immédiate d'une horloge RTC/système déjà valide (redémarrage à chaud ou réveil). Bypassement de l'attente bloquante (`0 ms`), tout en préservant à 100% la validation stricte des certificats TLS GoogleRoots.
+- **Robustesse Gemini Live & Reconnexions** : Conditionnement strict de toute tentative de reconnexion WebSocket à la connectivité réseau effective (`isNetworkReady()`), prévenant l'épuisement prématuré des tentatives lors d'une coupure Wi-Fi. Suppression des reconnexions redondantes si la session est déjà prête.
+- **Instrumentation Temporelle Complète (5 Phases)** : Mesure à la milliseconde de chaque jalon : Wi-Fi (`t_wifi`), SNTP (`t_sntp`), WebSocket TLS (`t_ws`), Configuration Gemini (`t_setup`) et initialisation totale (`t_ready`), exposée via la nouvelle structure `ConnectionMetrics` et la méthode `voice.getConnectionMetrics()`.
+- **Démonstration `VoiceDiagnostics` v0.5.2** : Ajout d'un 5e écran tactile dédié `CONNECTION` (`CONN`) affichant les métriques réelles, les indicateurs `(FAST)` et `(IMMEDIAT)`, les échecs et tentatives, ainsi qu'une journalisation série structurée `[CONN]` et CSV `[CONN_CSV]`.
+- **Performances Globales Mesurées sur CoreS3** : Démarrage total de la façade jusqu'à `VoiceKit::isReady()` réduit de **5002 ms à 3182 ms (-36.4%)**.
+- **Non-Régression Totale** : 8 exemples officiels compilés sous PlatformIO, 60 suites de tests (833 assertions) validées à 100%, et préservation absolue des tampons audio PCM et des APIs publiques v0.5.1.
 
 ---
 
@@ -314,6 +317,7 @@ VoiceKit voice;
 | `bool isConversationActive() const` | Indique si le mode conversationnel est actif. | `bool` | Non bloquant |
 | `VoiceState getState() const` | Retourne l'état opérationnel interne du moteur VoxCore. | `VoiceState` | Non bloquant |
 | `VoiceKitMode getMode() const` | Retourne le mode de la façade (`IDLE`, `CONTINUOUS_LISTENING`, `CONVERSATION`). | `VoiceKitMode` | Non bloquant |
+| `const ConnectionMetrics& getConnectionMetrics() const` | Retourne les métriques et temps de connexion mesurés (Wi-Fi, SNTP, WS, Setup, Total READY). | `const ConnectionMetrics&` | Non bloquant |
 | `String getLastError() const` | Retourne le dernier message d'erreur survenu. | `String` | Non bloquant |
 
 ### 4.2 Événements & Callbacks Unifiés

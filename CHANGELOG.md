@@ -7,6 +7,66 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.5.2] - 2026-10-26 (Fast Connection — Optimisation des temps de démarrage Wi-Fi & Gemini Live)
+
+### Optimisation WiFiManager & FastConnect
+- **Connexion Wi-Fi Rapide Facultative (FastConnect)** :
+  - Mémorisation persistante en NVS (`Preferences`) du dernier canal RF et du BSSID du point d'accès Wi-Fi.
+  - Connexion directe via `WiFi.begin(ssid, pass, channel, bssid)` évitant le balayage complet des 13 canaux RF.
+  - Réduction mesurée du temps d'obtention IP sur CoreS3 de 2384 ms à 946 ms (-60.3%).
+  - Repli automatique et transparent vers le scan multi-canaux classique en cas d'échec ou d'expiration du délai FastConnect (3.5 s).
+  - Sauvegarde automatique des nouvelles coordonnées réseau à chaque association réussie sans altération des identifiants enregistrés.
+- **Réduction de la Première Reconnexion & Backoff Progressif** :
+  - Première tentative de reconnexion accélérée à 1.5 s (au lieu de 2.0 s) dès détection de perte réseau.
+  - Backoff progressif avec multiplicateur 2x plafonné à 30 s (1.5s, 3s, 6s, 12s, 24s, 30s max).
+  - Verrou d'exclusion mutuelle évitant tout lancement de reconnexions concurrentes.
+
+### Optimisation de la Synchronisation SNTP
+- **Détection d'Horloge Système Déjà Valide** :
+  - Évaluation de l'horloge système (`time(nullptr) >= 1700000000`, seuil 2024+) dès l'obtention de l'adresse IP.
+  - Si l'horloge est déjà valide (redémarrage à chaud, maintien RTC ou réveil), l'attente bloquante SNTP est évitée (`sntpSyncMs = 0 ms`, gain direct de ~1000 ms), tout en maintenant la synchronisation en arrière-plan.
+  - Si l'horloge n'est pas encore initialisée (démarrage à froid), maintien strict de la boucle d'attente SNTP avec timeout (5.0 s) pour garantir l'intégrité de la vérification de validité temporelle des certificats TLS.
+- **Sécurité TLS Inviolée** :
+  - Aucune désactivation de la validation des certificats TLS GoogleRoots.
+
+### Optimisation Gemini Live & Session Controller
+- **Conditionnement Strict de la Reconnexion au Réseau** :
+  - Intégration d'un prédicat `isNetworkReady()` dans `LiveSessionController` vérifiant la connectivité IP avant toute tentative de connexion WebSocket.
+  - Évite l'épuisement prématuré des tentatives de reconnexion (`_maxReconnectAttempts = 3`) lorsque le Wi-Fi est temporairement coupé.
+  - Reconnexion immédiate à Gemini dès le rétablissement de la liaison réseau.
+- **Suppression des Reconnexions Inutiles** :
+  - Protection contre les appels redondants à `connect()` si la session est déjà connectée et prête (`setupComplete`).
+  - Maintien absolu de la confirmation `setupComplete` avant d'émettre l'état `READY`.
+
+### Instrumentation & Mesures des 5 Phases de Démarrage
+- **Structure de Données `ConnectionMetrics`** :
+  - `t_wifi_ms` (`wifiConnectMs`) : Démarrage Wi-Fi → adresse IP obtenue.
+  - `t_sntp_ms` (`sntpSyncMs`) : Début SNTP → horloge système valide.
+  - `t_ws_ms` (`wsConnectMs`) : Début connexion Gemini → WebSocket connecté.
+  - `t_setup_ms` (`setupCompleteMs`) : WebSocket connecté → confirmation `setupComplete`.
+  - `t_total_ready_ms` (`totalReadyMs`) : Démarrage total de la façade → `VoiceKit::isReady()`.
+  - Compteurs d'essais et d'échecs (`wifiAttempts`, `geminiAttempts`, `connectionFailures`).
+  - Indicateurs FastConnect (`fastConnectSuccess`, `sntpSkipped`, `channel`, `bssidStr`).
+  - Nouvelle méthode publique : `const ConnectionMetrics& VoiceKit::getConnectionMetrics() const;`.
+
+### Évolution de l'Exemple Officiel VoiceDiagnostics
+- **5e Écran Tactile Dédié `CONNECTION` (`CONN`)** :
+  - Affichage en temps réel des 5 durées mesurées avec indicateurs visuels `(FAST)` et `(IMMEDIAT)`.
+  - Visualisation des tentatives, échecs et canal/BSSID actifs.
+- **Journalisation Série Structurée et CSV** :
+  - Ligne de synthèse horodatée `[CONN]` à chaque transition vers `READY`.
+  - Format CSV directement exploitable `[CONN_CSV]` avec en-tête `[CONN_CSV_HEADER]`.
+
+### Validation Matérielle & Non-Régression Totale
+- **Mesures Authentiques sur CoreS3 (COM4)** :
+  - Démarrage à froid (scan complet) : 5002 ms jusqu'à `READY`.
+  - Démarrage rapide (FastConnect + RTC valide) : **3182 ms** jusqu'à `READY` (**gain net de 1820 ms / -36.4%**).
+  - Liaison Wi-Fi seule : 2384 ms -> **946 ms** (**gain de 1438 ms / -60.3%**).
+- **Compilation PlatformIO** : 8 exemples officiels compilés avec succès à 100%.
+- **Banc de Tests Automatisés** : 60 suites de tests (Suites 56 à 60 ajoutées), 833 assertions réussies, 0 échec.
+
+---
+
 ## [0.5.1] - 2026-10-25 (Intégration de VoiceDiagnostics aux exemples officiels)
 
 ### Nouvel Exemple Officiel `VoiceDiagnostics`

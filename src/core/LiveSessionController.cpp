@@ -140,6 +140,9 @@ bool LiveSessionController::begin(GeminiLiveClient* client, void*, LiveAudioPlay
 
     _client->setOnSetupComplete([this]() {
         _lastActivityMs = millis();
+        if (_state == LiveSessionState::RECONNECTING || _reconnectAttempts > 0) {
+            _reconnectCount++;
+        }
         _reconnectAttempts = 0;
         Serial.println("[LiveSession] Setup termine : session Live prete");
         transitionTo(LiveSessionState::CONNECTED, "Setup confirme");
@@ -350,6 +353,11 @@ void LiveSessionController::transitionTo(LiveSessionState newState, const char* 
 bool LiveSessionController::activate() {
     if (!_client) return false;
 
+    if (_client->isConnected() && _client->isSetupComplete()) {
+        transitionTo(LiveSessionState::CONNECTED, "Session deja active");
+        return true;
+    }
+
     _lastError[0] = '\0';
     _lastAssistantText = "";
     _disconnectCount = 0;
@@ -382,7 +390,14 @@ void LiveSessionController::tick() {
     const uint32_t now = millis();
 
     if (_state == LiveSessionState::RECONNECTING) {
-        if (now - _lastReconnectAttemptMs >= LIVE_RECONNECT_INTERVAL_MS) {
+        // Optimisation v0.5.2 : Ne lancer une reconnexion que si le réseau est opérationnel
+        if (!isNetworkReady()) {
+            _lastReconnectAttemptMs = now;
+            return;
+        }
+
+        uint32_t reconnectInterval = (_reconnectAttempts == 0) ? 1000 : ((_reconnectAttempts == 1) ? 2000 : 4000);
+        if (now - _lastReconnectAttemptMs >= reconnectInterval) {
             _lastReconnectAttemptMs = now;
             if (_reconnectAttempts < LIVE_MAX_RECONNECT_ATTEMPTS) {
                 _reconnectAttempts++;

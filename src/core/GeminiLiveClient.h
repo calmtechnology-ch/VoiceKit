@@ -139,8 +139,12 @@ public:
     bool isTurnCompleteReceived() const { return _turnCompleteReceived; }
     bool isTurnCompleteBeforeLastPcm() const { return _turnCompleteBeforeLastPcm; }
     uint32_t getPostTurnCompletePcmSamples() const { return _postTurnCompletePcmSamples; }
-    uint32_t getPostTurnCompletePcmBlocks() const { return _postTurnCompletePcmBlocks; }
     uint32_t getTurnAudioPartsCount() const { return _turnAudioPartsCount; }
+
+    // Instrumentation temps de démarrage Gemini Live (v0.5.2)
+    uint32_t getWsConnectMs() const { return _wsConnectDurationMs; }
+    uint32_t getSetupCompleteMs() const { return _setupCompleteDurationMs; }
+    uint32_t getConnectAttempts() const { return _connectAttempts; }
 
     // Envoi de la réponse structurée à un toolCall Gemini Live
     bool sendToolResponse(const String& callId, const String& funcName, const String& resultJson);
@@ -225,4 +229,11 @@ private:
     uint32_t _postTurnCompletePcmSamples = 0;
     uint32_t _postTurnCompletePcmBlocks = 0;
     uint32_t _turnAudioPartsCount = 0;
+
+    // Instrumentation temps de démarrage Gemini Live (v0.5.2)
+    uint32_t _wsConnectStartTimeMs = 0;
+    uint32_t _wsConnectDurationMs = 0;
+    uint32_t _setupStartTimeMs = 0;
+    uint32_t _setupCompleteDurationMs = 0;
+    uint32_t _connectAttempts = 0;
 };

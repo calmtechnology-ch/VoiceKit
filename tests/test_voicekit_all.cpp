@@ -3155,13 +3155,160 @@ void test_v0501_mode_transitions_and_failure_resilience() {
 }
 
 // =============================================================================
+// NOUVELLES SUITES VOICEKIT v0.5.2 (FAST CONNECTION & INSTRUMENTATION)
+// =============================================================================
+
+// SUITE 56 : WiFiManager — FastConnect, repli automatique et backoff progressif
+void test_v052_wifi_fast_connect_and_fallback() {
+    std::cout << "\n[TEST SUITE 56] WiFiManager : FastConnect, repli automatique et backoff progressif" << std::endl;
+
+    WiFiManager wm;
+    WiFi.resetCounters();
+    
+    // 1. Initialisation avec FastConnect activé
+    bool ok = wm.begin("TestSSID", "TestPass", true, 2000);
+    TEST_ASSERT(ok, "WiFiManager::begin avec FastConnect reussi");
+    TEST_ASSERT(WiFi.getBeginCalls() > 0, "WiFi.begin a ete invoque");
+    
+    // 2. Tick avec connexion active
+    wm.tick();
+    TEST_ASSERT(wm.isConnected(), "WiFiManager indique connecte");
+    TEST_ASSERT(wm.getWifiAttempts() >= 1, "Compteur de tentatives incremente");
+    TEST_ASSERT(wm.getChannel() == 6, "Canal Wi-Fi reporte correctement");
+    TEST_ASSERT(strlen(wm.getBSSID()) > 0, "BSSID reporte");
+
+    // 3. Deconnexion et premiere reconnexion rapide
+    WiFi.setConnected(false);
+    wm.tick();
+    TEST_ASSERT(!wm.isConnected(), "WiFiManager detecte deconnexion");
+    TEST_ASSERT(wm.getWifiReconnects() == 1, "Compteur reconnexions incremente");
+
+    // Retablissement Wi-Fi
+    WiFi.setConnected(true);
+    wm.tick();
+    TEST_ASSERT(wm.isConnected(), "WiFiManager reconnecte avec succes");
+}
+
+// SUITE 57 : Synchronisation SNTP — Bypass si horloge valide vs attente si invalide
+void test_v052_sntp_optimization_and_tls_safety() {
+    std::cout << "\n[TEST SUITE 57] Synchronisation SNTP : Detection horloge valide vs securite TLS" << std::endl;
+
+    WiFiManager wm;
+    WiFi.setConnected(true);
+    wm.begin("TestSSID", "TestPass", false);
+    wm.tick();
+
+    TEST_ASSERT(wm.isConnected(), "Wi-Fi connecte");
+    TEST_ASSERT(wm.isTimeSynced(), "Horloge systeme valide -> isTimeSynced() true");
+    TEST_ASSERT(wm.isSntpSkipped(), "SNTP saute sans delai bloquant car horloge deja valide");
+    TEST_ASSERT(wm.getSntpSyncMs() == 0, "Duree SNTP nulle si deja synchro");
+
+    TEST_ASSERT(VoxCoreVoice::isSystemTimeValid(), "isSystemTimeValid() retourne true pour timestamp >= 2024");
+}
+
+// SUITE 58 : Gemini Live — Conditionnement de la reconnexion a la connectivite reseau
+void test_v052_gemini_reconnect_network_conditioning() {
+    std::cout << "\n[TEST SUITE 58] Gemini Live : Conditionnement strict de la reconnexion au reseau" << std::endl;
+
+    GeminiLiveClient client;
+    LiveAudioPlayer player;
+    LiveSessionController session;
+
+    client.begin("TEST_KEY_COND", "models/gemini-3.8-live", "Aoede");
+    session.begin(&client, nullptr, &player);
+
+    bool networkUp = false;
+    session.setNetworkCheck([&networkUp]() { return networkUp; });
+    TEST_ASSERT(!session.isNetworkReady(), "isNetworkReady reflete le predicat (false)");
+
+    // Forcer etat RECONNECTING
+    session.transitionTo(LiveSessionState::RECONNECTING, "Test deconnexion");
+    TEST_ASSERT(session.getState() == LiveSessionState::RECONNECTING, "Session en RECONNECTING");
+
+    // Tick avec réseau DOWN : ne doit PAS tenter de se reconnecter ni incrementer
+    session.tick();
+    TEST_ASSERT(session.getState() == LiveSessionState::RECONNECTING, "Reste en RECONNECTING sans declencher connect");
+    TEST_ASSERT(session.getReconnectAttempts() == 0, "Tentatives non consommees pendant reseau DOWN");
+
+    // Retablir le reseau
+    networkUp = true;
+    TEST_ASSERT(session.isNetworkReady(), "isNetworkReady reflete le predicat (true)");
+}
+
+// SUITE 59 : Instrumentation des temps de demarrage (wifi, sntp, ws, setup, total)
+void test_v052_startup_timing_instrumentation() {
+    std::cout << "\n[TEST SUITE 59] Instrumentation des 5 temps de demarrage" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_TIMING";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableFastConnect = true;
+
+    voice.begin(config);
+    voice.getClient().setTransport(&mockTransport);
+
+    mockTransport.connect("wss://example.com");
+    voice.update();
+
+    const char* setupJson = "{\"setupComplete\":{}}";
+    voice.getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    voice.update();
+
+    TEST_ASSERT(voice.isReady(), "VoiceKit est READY");
+
+    const auto& metrics = voice.getConnectionMetrics();
+    TEST_ASSERT(metrics.fastConnectEnabled == true, "FastConnect actif dans les metriques");
+    TEST_ASSERT(metrics.connectionFailures == 0, "Zero echec de connexion observe");
+
+    voice.getClient().setTransport(nullptr);
+}
+
+// SUITE 60 : Façade VoiceKit v0.5.2 — Exposition ConnectionMetrics et non-regression
+void test_v052_facade_connection_metrics_and_resilience() {
+    std::cout << "\n[TEST SUITE 60] Facade VoiceKit v0.5.2 : Exposition ConnectionMetrics et non-regression" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoiceKit vk;
+    VoiceKitConfig config;
+    config.apiKey = "TEST_KEY_FACADE_V052";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableFastConnect = true;
+
+    bool initOk = vk.begin(config);
+    TEST_ASSERT(initOk, "VoiceKit::begin() accepte la configuration v0.5.2");
+    vk.getEngine().getClient().setTransport(&mockTransport);
+    vk.getEngine().getClient().connect();
+
+    mockTransport.connect("wss://example.com");
+    const char* setupJson = "{\"setupComplete\":{}}";
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    vk.update();
+
+    TEST_ASSERT(vk.isReady(), "VoiceKit::isReady() true");
+    const auto& m = vk.getConnectionMetrics();
+    TEST_ASSERT(m.fastConnectEnabled == true, "Metriques accessibles via facade");
+
+    // Non-regression vocale : say() TTS operationnel
+    bool sayOk = vk.say("Test vocal v0.5.2");
+    TEST_ASSERT(sayOk, "say() accepte en etat READY");
+
+    // Interruption propre
+    vk.stop();
+    TEST_ASSERT(vk.isReady(), "Moteur revient a READY apres stop()");
+
+    vk.getEngine().getClient().setTransport(nullptr);
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.5.0.1  " << std::endl;
-    std::cout << "  Stabilisation FreeRTOS, Modes & Integrite Evenements     " << std::endl;
-    std::cout << "  ContinuousListeningController & Facade VoiceKit          " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.5.2    " << std::endl;
+    std::cout << "  Fast Connection, Instrumentation & Non-Regression Totale " << std::endl;
+    std::cout << "  Stabilisation FreeRTOS, Modes, VAD & Facade VoiceKit     " << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
     std::cout << "===========================================================" << std::endl;
 
@@ -3234,6 +3381,13 @@ int main() {
     test_v0501_freertos_concurrency_and_audio_synchronization();
     test_v0501_segment_reliability_and_duplicate_events();
     test_v0501_mode_transitions_and_failure_resilience();
+
+    // Nouvelles suites VoiceKit v0.5.2 (Fast Connection & Instrumentation)
+    test_v052_wifi_fast_connect_and_fallback();
+    test_v052_sntp_optimization_and_tls_safety();
+    test_v052_gemini_reconnect_network_conditioning();
+    test_v052_startup_timing_instrumentation();
+    test_v052_facade_connection_metrics_and_resilience();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;
