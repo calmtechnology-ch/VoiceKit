@@ -483,7 +483,9 @@ void LiveSessionController::requestStop() {
         _player->stop(AudioStopReason::USER_STOP);
     }
     printAudioEndCheck("STOP");
-    transitionTo(LiveSessionState::CONNECTED, "Interruption STOP demandee");
+    if (_state != LiveSessionState::DISCONNECTED && _state != LiveSessionState::ERROR) {
+        transitionTo(LiveSessionState::CONNECTED, "Interruption STOP demandee");
+    }
 }
 
 void LiveSessionController::setVolume(unsigned volumePercent) {

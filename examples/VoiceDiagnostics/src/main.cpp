@@ -136,11 +136,14 @@ static void addEvent(const char* msg, uint16_t color = COLOR_FG) {
 // =============================================================================
 static const char* stateName(VoiceState s) {
     switch (s) {
-        case VoiceState::READY:              return "READY";
-        case VoiceState::LISTENING:          return "LISTENING";
-        case VoiceState::SPEAKING:           return "SPEAKING";
+        case VoiceState::UNINITIALIZED:      return "UNINIT";
+        case VoiceState::IDLE:               return "IDLE";
         case VoiceState::CONNECTING_WIFI:    return "WIFI";
         case VoiceState::CONNECTING_SERVICE: return "SERVICE";
+        case VoiceState::READY:              return "READY";
+        case VoiceState::SPEAKING:           return "SPEAKING";
+        case VoiceState::LISTENING:          return "LISTENING";
+        case VoiceState::TRANSCRIBING:       return "TRANSCRIBING";
         case VoiceState::DISCONNECTED:       return "DISCONNECTED";
         case VoiceState::ERROR_STATE:        return "ERROR";
         default:                             return "UNKNOWN";
@@ -211,8 +214,25 @@ static void drawUI() {
     // 2. Indicateur de statut en haut à droite
     M5.Display.setFont(&fonts::Font0);
     M5.Display.setTextSize(1);
-    const char* statusTxt = voice.isReady() ? "ONLINE" : (voice.isBusy() ? "BUSY  " : "WAIT  ");
-    uint16_t statusCol = voice.isReady() ? COLOR_GREEN : (voice.isBusy() ? COLOR_ACCENT : COLOR_WARN);
+    const char* statusTxt = "WAIT  ";
+    uint16_t statusCol = COLOR_WARN;
+
+    if (voice.isReady()) {
+        statusTxt = "ONLINE";
+        statusCol = COLOR_GREEN;
+    } else if (voice.isBusy()) {
+        statusTxt = "BUSY  ";
+        statusCol = COLOR_ACCENT;
+    } else if (voice.getState() == VoiceState::CONNECTING_WIFI) {
+        statusTxt = "WIFI  ";
+        statusCol = COLOR_ACCENT;
+    } else if (voice.getState() == VoiceState::CONNECTING_SERVICE) {
+        statusTxt = "GEMINI";
+        statusCol = COLOR_ACCENT;
+    } else if (voice.getState() == VoiceState::ERROR_STATE) {
+        statusTxt = "ERROR ";
+        statusCol = COLOR_WARN;
+    }
     M5.Display.setTextColor(statusCol, COLOR_BG);
     M5.Display.setCursor(240, 6);
     M5.Display.print(statusTxt);
@@ -398,6 +418,7 @@ void setup() {
     // Configuration de la façade VoiceKit
     VoiceKitConfig config;
     config.apiKey       = GEMINI_KEY;
+    config.wifiMode     = WiFiMode::MANAGED_WIFI;
     config.wifiSSID     = WIFI_SSID;
     config.wifiPassword = WIFI_PASSWORD;
     config.voice        = "Aoede";

@@ -290,6 +290,11 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     });
 
     // 7. Connectivité Wi-Fi
+    if (!_config.wifiSSID.isEmpty() && _config.wifiMode == WiFiMode::EXTERNAL_WIFI) {
+        Serial.println("[VoiceKit] SSID configure : activation automatique du mode MANAGED_WIFI");
+        _config.wifiMode = WiFiMode::MANAGED_WIFI;
+    }
+
     if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
         if (!_config.wifiSSID.isEmpty()) {
             Serial.printf("[VoiceKit] Demarrage WiFiManager gere (SSID: %s)...\n", _config.wifiSSID.c_str());
@@ -563,10 +568,23 @@ void VoxCoreVoice::stop() {
     }
     _session.requestStop();
     _player.setPlaybackAllowed(true);
-    setState(VoiceState::READY);
+    if (_session.getState() == LiveSessionState::CONNECTED) {
+        setState(VoiceState::READY);
+    } else if (_state != VoiceState::CONNECTING_WIFI && _state != VoiceState::CONNECTING_SERVICE) {
+        setState(VoiceState::IDLE);
+    }
 }
 
 bool VoxCoreVoice::isReady() const {
+    if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
+        if (!_wifi.isConnected()) {
+            return false;
+        }
+    } else {
+        if (WiFi.status() != WL_CONNECTED) {
+            return false;
+        }
+    }
     return (_session.getState() == LiveSessionState::CONNECTED && !isBusy() && !isConnecting());
 }
 
