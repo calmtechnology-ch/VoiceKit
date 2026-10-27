@@ -22,6 +22,7 @@ La version **v0.6.0** fait évoluer VoiceKit vers un framework vocal universel :
 
 ## Sommaire
 
+- [**Apprendre VoiceKit — Tutoriel progressif**](#apprendre-voicekit--tutoriel-progressif)
 1. [Fonctionnalités Principales](#1-fonctionnalités-principales)
 2. [Architecture Multi-Fournisseurs](#2-architecture-multi-fournisseurs)
 3. [Structure de la Bibliothèque](#3-structure-de-la-bibliothèque)
@@ -35,6 +36,20 @@ La version **v0.6.0** fait évoluer VoiceKit vers un framework vocal universel :
 8. [Référence de l'API Historique (`VoxCoreVoice`)](#8-référence-de-lapi-historique-voxcorevoice)
 9. [Exemples Inclus](#9-exemples-inclus)
 10. [Garanties de Non-Régression & Sécurité](#10-garanties-de-non-régression--sécurité)
+
+---
+
+## Apprendre VoiceKit — Tutoriel progressif
+
+Vous découvrez VoiceKit ou la programmation vocale sur ESP32-S3 ? Un **[parcours d'apprentissage progressif en français](tutorials/README.md)** est disponible dans le dossier `tutorials/`.
+
+Conçu selon le principe de *la simplicité avant la sophistication*, il vous guide pas à pas à travers 12 leçons thématiques, depuis l'installation et votre premier programme jusqu'à la synthèse vocale, la reconnaissance vocale et le dialogue interactif :
+- **[Leçon 00 — Préparer son environnement VoiceKit](tutorials/00-Installation/README.md)** : Prise en main du CoreS3, installation de PlatformIO, Wi-Fi et clé API Gemini Live.
+- **[Leçon 01 — Mon premier programme VoiceKit](tutorials/01-HelloVoiceKit/README.md)** : Initialisation de la façade `VoiceKit`, configuration et connexion à Gemini Live.
+- **[Leçon 02 — Faire parler le CoreS3](tutorials/02-TextToSpeech/README.md)** : Synthèse vocale asynchrone (`say`), suivi d'événements (`onSpeechStarted`, `onSpeechFinished`).
+- **[Leçon 03 — Contrôler la synthèse vocale](tutorials/03-SpeechControl/README.md)** : Pilotage interactif série, volume sonore (0-100 %), arrêt d'urgence (`stop`) et diagnostic.
+
+Consultez le **[sommaire complet du parcours (Leçons 00 à 11)](tutorials/README.md)** pour découvrir l'ensemble des leçons.
 
 ---
 
