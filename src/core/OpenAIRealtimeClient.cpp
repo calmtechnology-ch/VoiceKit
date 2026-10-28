@@ -160,17 +160,26 @@ void OpenAIRealtimeClient::buildWebSocketUrl(char* buf, size_t bufSize) const {
     snprintf(buf, bufSize, "wss://api.openai.com/v1/realtime?model=%s", _model.c_str());
 }
 
+void OpenAIRealtimeClient::resetTurnRxMetrics() {
+    _pcmSamplesDispatchedTotal.store(0, std::memory_order_relaxed);
+    _turnCompleteReceived.store(false, std::memory_order_release);
+    _turnCompleteBeforeLastPcm.store(false, std::memory_order_release);
+    _postTurnCompletePcmSamples.store(0, std::memory_order_relaxed);
+    _postTurnCompletePcmBlocks.store(0, std::memory_order_relaxed);
+    _firstResponseReceivedMs.store(0, std::memory_order_relaxed);
+    _firstAudioReceivedMs.store(0, std::memory_order_relaxed);
+}
+
 bool OpenAIRealtimeClient::connect() {
     disconnect();
+    resetTurnRxMetrics();
     _connectAttempts++;
     _lastError = "";
     _wsConnectStartTimeMs = millis();
     _wsConnectDurationMs = 0;
     _setupStartTimeMs = 0;
     _setupCompleteDurationMs = 0;
-    _waitingForResponse = false;
-    _firstResponseReceivedMs = 0;
-    _firstAudioReceivedMs = 0;
+    _waitingForResponse.store(false, std::memory_order_release);
 
     if (!_transport) {
 #if defined(ESP32) || defined(ARDUINO)
@@ -232,7 +241,7 @@ void OpenAIRealtimeClient::disconnect() {
     }
     _connected.store(false, std::memory_order_release);
     _setupComplete.store(false, std::memory_order_release);
-    _waitingForResponse = false;
+    _waitingForResponse.store(false, std::memory_order_release);
 }
 
 void OpenAIRealtimeClient::tick() {
@@ -299,9 +308,13 @@ bool OpenAIRealtimeClient::sendTextMessage(const String& text) {
         return false;
     }
 
-    _firstResponseReceivedMs = 0;
-    _firstAudioReceivedMs = 0;
-    _waitingForResponse = true;
+    resetTurnRxMetrics();
+    uint32_t nowMs = millis();
+    if (nowMs == 0) nowMs = 1;
+    _lastActivityEndSentMs.store(nowMs, std::memory_order_relaxed);
+    _firstResponseReceivedMs.store(0, std::memory_order_relaxed);
+    _firstAudioReceivedMs.store(0, std::memory_order_relaxed);
+    _waitingForResponse.store(true, std::memory_order_release);
 
     // 1. Injection du message textuel utilisateur dans l'historique conversationnel
     String itemMsg = "{";
@@ -326,8 +339,9 @@ bool OpenAIRealtimeClient::sendTextMessage(const String& text) {
 
 bool OpenAIRealtimeClient::sendActivityStart() {
     if (!isConnected() || !isSetupComplete()) return false;
-    // Réinitialise l'état d'attente
-    _waitingForResponse = false;
+    // Réinitialise les métriques RX du tour et l'état d'attente
+    resetTurnRxMetrics();
+    _waitingForResponse.store(false, std::memory_order_release);
     return true;
 }
 
@@ -380,8 +394,9 @@ bool OpenAIRealtimeClient::sendAudioChunk(const int16_t* samples, size_t sampleC
 bool OpenAIRealtimeClient::sendActivityEnd() {
     if (!isConnected() || !isSetupComplete()) return false;
 
-    _lastActivityEndSentMs = millis();
-    if (_lastActivityEndSentMs == 0) _lastActivityEndSentMs = 1;
+    uint32_t nowMs = millis();
+    if (nowMs == 0) nowMs = 1;
+    _lastActivityEndSentMs.store(nowMs, std::memory_order_relaxed);
 
     // 1. Validation de la fin du tampon audio utilisateur
     const char* commitMsg = "{\"type\":\"input_audio_buffer.commit\"}";
@@ -389,9 +404,9 @@ bool OpenAIRealtimeClient::sendActivityEnd() {
 
     // 2. Si le mode conversationnel est actif, demander au modèle de répondre oralement
     if (_conversationMode) {
-        _waitingForResponse = true;
-        _firstResponseReceivedMs = 0;
-        _firstAudioReceivedMs = 0;
+        _firstResponseReceivedMs.store(0, std::memory_order_relaxed);
+        _firstAudioReceivedMs.store(0, std::memory_order_relaxed);
+        _waitingForResponse.store(true, std::memory_order_release);
         const char* respMsg = "{\"type\":\"response.create\"}";
         Serial.println("[OpenAIClient] Fin audio detectee -> input_audio_buffer.commit + response.create");
         return _transport->send(respMsg, strlen(respMsg));
@@ -403,8 +418,8 @@ bool OpenAIRealtimeClient::sendActivityEnd() {
 
 bool OpenAIRealtimeClient::sendTurnComplete() {
     if (!isConnected() || !isSetupComplete()) return false;
-    if (_conversationMode && !_waitingForResponse) {
-        _waitingForResponse = true;
+    if (_conversationMode && !_waitingForResponse.load(std::memory_order_acquire)) {
+        _waitingForResponse.store(true, std::memory_order_release);
         const char* respMsg = "{\"type\":\"response.create\"}";
         return _transport->send(respMsg, strlen(respMsg));
     }
@@ -414,7 +429,7 @@ bool OpenAIRealtimeClient::sendTurnComplete() {
 bool OpenAIRealtimeClient::sendInterruption() {
     if (!isConnected()) return false;
 
-    _waitingForResponse = false;
+    _waitingForResponse.store(false, std::memory_order_release);
     Serial.println("[OpenAIClient] Interruption STOP -> response.cancel et input_audio_buffer.clear");
 
     // Annule la réponse en cours de génération / streaming
@@ -467,16 +482,19 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     }
     // 3. Début de réponse du modèle
     else if (strcmp(evType, "response.created") == 0) {
-        if (_waitingForResponse && _firstResponseReceivedMs == 0) {
-            _firstResponseReceivedMs = millis();
-            if (_firstResponseReceivedMs == 0) _firstResponseReceivedMs = 1;
+        if (_waitingForResponse.load(std::memory_order_acquire) && _firstResponseReceivedMs.load(std::memory_order_relaxed) == 0) {
+            uint32_t nowMs = millis();
+            if (nowMs == 0) nowMs = 1;
+            _firstResponseReceivedMs.store(nowMs, std::memory_order_relaxed);
         }
     }
     // 4. Paquet audio streaming PCM16 24 kHz (GA: response.output_audio.delta, Beta: response.audio.delta)
     else if (strcmp(evType, "response.output_audio.delta") == 0 || strcmp(evType, "response.audio.delta") == 0) {
-        if (_waitingForResponse) {
-            if (_firstResponseReceivedMs == 0) _firstResponseReceivedMs = millis();
-            if (_firstAudioReceivedMs == 0) _firstAudioReceivedMs = millis();
+        if (_waitingForResponse.load(std::memory_order_acquire)) {
+            uint32_t nowMs = millis();
+            if (nowMs == 0) nowMs = 1;
+            if (_firstResponseReceivedMs.load(std::memory_order_relaxed) == 0) _firstResponseReceivedMs.store(nowMs, std::memory_order_relaxed);
+            if (_firstAudioReceivedMs.load(std::memory_order_relaxed) == 0) _firstAudioReceivedMs.store(nowMs, std::memory_order_relaxed);
         }
 
         cJSON* deltaItem = cJSON_GetObjectItemCaseSensitive(root, "delta");
@@ -486,6 +504,14 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
                 if (pcmBytes.size() >= sizeof(int16_t)) {
                     const int16_t* pcmSamples = reinterpret_cast<const int16_t*>(pcmBytes.data());
                     size_t sampleCount = pcmBytes.size() / sizeof(int16_t);
+                    _pcmSamplesDispatchedTotal.fetch_add((uint32_t)sampleCount, std::memory_order_relaxed);
+                    if (_turnCompleteReceived.load(std::memory_order_acquire)) {
+                        _turnCompleteBeforeLastPcm.store(true, std::memory_order_release);
+                        _postTurnCompletePcmSamples.fetch_add((uint32_t)sampleCount, std::memory_order_relaxed);
+                        uint32_t postBlk = _postTurnCompletePcmBlocks.fetch_add(1, std::memory_order_relaxed) + 1;
+                        Serial.printf("[OpenAIClient] ALERTE ORDRE: Bloc PCM recu APRES turnComplete (%u echantillons, bloc post-turn #%u)\n",
+                                      (unsigned)sampleCount, (unsigned)postBlk);
+                    }
                     if (_onAudioData) {
                         _onAudioData(pcmSamples, sampleCount);
                     }
@@ -515,7 +541,7 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     }
     // 7. Fin de réponse du modèle (signal équivalent à turnComplete)
     else if (strcmp(evType, "response.done") == 0) {
-        _waitingForResponse = false;
+        _waitingForResponse.store(false, std::memory_order_release);
         cJSON* respObj = cJSON_GetObjectItemCaseSensitive(root, "response");
         const char* statusStr = nullptr;
         if (respObj) {
@@ -530,6 +556,7 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
                 _onInterrupted();
             }
         } else {
+            _turnCompleteReceived.store(true, std::memory_order_release);
             Serial.println("[OpenAIClient] Reponse modele terminee (response.done)");
             if (_onTurnComplete) {
                 _onTurnComplete();
@@ -538,7 +565,7 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     }
     // 8. Annulation de réponse (suite à response.cancel / interruption STOP)
     else if (strcmp(evType, "response.cancelled") == 0) {
-        _waitingForResponse = false;
+        _waitingForResponse.store(false, std::memory_order_release);
         Serial.println("[OpenAIClient] Reponse annulee par le serveur (response.cancelled)");
         if (_onInterrupted) {
             _onInterrupted();

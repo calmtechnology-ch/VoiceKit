@@ -3786,8 +3786,8 @@ void test_v0531_facade_modes_transitions_and_resilience() {
     cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
     vk.begin(cfg);
 
-    // 1. Constante de version alignée sur v0.6.0
-    TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.0") == 0, "VOICEKIT_VERSION est strictement v0.6.0");
+    // 1. Constante de version alignée sur v0.6.1
+    TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.1") == 0, "VOICEKIT_VERSION est strictement v0.6.1");
 
     // 2. Mode par défaut IDLE
     TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode initial = IDLE");
@@ -4237,11 +4237,496 @@ void test_v060_voxcore_and_voicekit_integration_and_gemini_non_regression() {
 }
 
 // =============================================================================
+// SUITE 80 : Correction A (v0.6.1) — Réinitialisation polymorphe des métriques PCM entre tours
+// =============================================================================
+static void injectGeminiPcmAndDrain(VoxCoreVoice& voice, int numBlocks, bool sendTurnComplete = true) {
+    // "AAAAAAAAAAAAAAAA" = 16 chars Base64 = 12 octets PCM = 6 échantillons 16 bits par bloc
+    const char* pcmFrame = "{\"serverContent\":{\"modelTurn\":{\"parts\":[{\"inlineData\":{\"mimeType\":\"audio/pcm;rate=24000\",\"data\":\"AAAAAAAAAAAAAAAA\"}}]}}}";
+    for (int i = 0; i < numBlocks; ++i) {
+        voice.getClient().handleIncomingMessage(pcmFrame, strlen(pcmFrame));
+    }
+    if (sendTurnComplete) {
+        const char* turnCompFrame = "{\"serverContent\":{\"turnComplete\":true}}";
+        voice.getClient().handleIncomingMessage(turnCompFrame, strlen(turnCompFrame));
+    }
+}
+
+static void drainVoicePlayback(VoxCoreVoice& voice) {
+    int safety = 0;
+    while ((voice.getPlayer().getBufferedSamples() > 0 || voice.getPlayer().isPlaying() || voice.isSpeaking()) && safety < 200) {
+        voice.update();
+        voice.getPlayer().simFinishSpeakerChunk();
+        voice.update();
+        safety++;
+    }
+}
+
+void test_v061_correction_a_turn_rx_metrics_and_order_alerts() {
+    std::cout << "\n[TEST SUITE 80] Correction A (v0.6.1) : Metriques PCM multi-tours & detection reelle hors-ordre" << std::endl;
+
+    MockLiveTransport mockTransport;
+    VoxCoreVoice voice;
+    VoiceKitConfig cfg;
+    cfg.provider = VoiceProviderType::GEMINI;
+    cfg.apiKey = "AIzaSyTestV061CorrectionA";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+
+    TEST_ASSERT(voice.begin(cfg), "Initialisation VoxCoreVoice via IVoiceProvider");
+    prepareMockVoiceReady(voice, mockTransport);
+
+    // 1. Une annonce TTS normale (5 blocs de 6 ech = 30 ech)
+    TEST_ASSERT(voice.say("Premiere annonce de controle"), "Tour 1 TTS lance");
+    injectGeminiPcmAndDrain(voice, 5, true);
+    TEST_ASSERT(voice.getProvider().getTurnDecodedSamples() == 30, "Tour 1 : 30 echantillons decodes via IVoiceProvider");
+    TEST_ASSERT(voice.getSession().getTurnDecodedSamples() == 30, "Tour 1 : LiveSessionController rapporte 30 ech decodes (et non 0)");
+    TEST_ASSERT(voice.getProvider().getPostTurnCompleteBlocks() == 0, "Tour 1 : 0 bloc apres turnComplete");
+    TEST_ASSERT(!voice.getClient().isTurnCompleteBeforeLastPcm(), "Tour 1 : aucune fausse alerte d'ordre");
+    drainVoicePlayback(voice);
+    TEST_ASSERT(voice.isReady(), "Tour 1 termine et retour a READY");
+
+    // 2. Deuxième annonce TTS successive (vérifie la correction du bug v0.6.0 où _turnCompleteReceived restait à true)
+    TEST_ASSERT(voice.say("Deuxieme annonce de controle"), "Tour 2 TTS lance");
+    TEST_ASSERT(!voice.getProvider().isTurnCompleteReceived(), "Tour 2 : _turnCompleteReceived reinitialise au debut du tour");
+    TEST_ASSERT(voice.getProvider().getTurnDecodedSamples() == 0, "Tour 2 : compteur d'echantillons remis a zero au debut du tour");
+    injectGeminiPcmAndDrain(voice, 8, true); // 8 * 6 = 48 ech
+    TEST_ASSERT(voice.getProvider().getTurnDecodedSamples() == 48, "Tour 2 : 48 echantillons decodes exactement");
+    TEST_ASSERT(voice.getSession().getTurnDecodedSamples() == 48, "Tour 2 : LiveSessionController rapporte 48 ech decodes");
+    TEST_ASSERT(voice.getProvider().getPostTurnCompleteBlocks() == 0, "Tour 2 : 0 fausse alerte de bloc apres turnComplete");
+    TEST_ASSERT(voice.getProvider().getPostTurnCompleteSamples() == 0, "Tour 2 : 0 echantillon hors-ordre signale");
+    drainVoicePlayback(voice);
+    TEST_ASSERT(voice.isReady(), "Tour 2 termine et retour a READY");
+
+    // 3. Dix annonces TTS successives
+    for (int t = 1; t <= 10; ++t) {
+        String msg = String("Annonce serie ") + String(t);
+        TEST_ASSERT(voice.say(msg), "10 tours TTS : lancement du tour");
+        injectGeminiPcmAndDrain(voice, t, true);
+        uint32_t expectedSamples = (uint32_t)(t * 6);
+        TEST_ASSERT(voice.getSession().getTurnDecodedSamples() == expectedSamples, "10 tours TTS : nombre exact d'echantillons du tour");
+        TEST_ASSERT(voice.getSession().getPostTurnCompleteBlocks() == 0, "10 tours TTS : zero fausse alerte d'ordre");
+        drainVoicePlayback(voice);
+        TEST_ASSERT(voice.isReady(), "10 tours TTS : retour propre a READY");
+    }
+
+    // 4. Arrêt STOP pendant la génération (WAITING_RESPONSE) suivi d'un nouveau tour
+    TEST_ASSERT(voice.say("Annonce interrompue en generation"), "Tour STOP generation lance");
+    TEST_ASSERT(voice.getState() == VoiceState::WAITING_RESPONSE, "Etat WAITING_RESPONSE");
+    voice.stop();
+    TEST_ASSERT(voice.isReady(), "Retour immediat a READY apres STOP generation");
+    TEST_ASSERT(voice.say("Annonce apres STOP generation"), "Relance apres STOP generation");
+    injectGeminiPcmAndDrain(voice, 4, true);
+    TEST_ASSERT(voice.getSession().getTurnDecodedSamples() == 24, "Apres STOP generation : 24 ech decodes");
+    TEST_ASSERT(voice.getSession().getPostTurnCompleteBlocks() == 0, "Apres STOP generation : 0 fausse alerte");
+    drainVoicePlayback(voice);
+
+    // 5. Arrêt STOP pendant la lecture (après réception de turnComplete mais avant fin de vidange)
+    TEST_ASSERT(voice.say("Annonce interrompue en lecture"), "Tour STOP lecture lance");
+    injectGeminiPcmAndDrain(voice, 6, true); // turnComplete reçu, audio dans le buffer
+    TEST_ASSERT(voice.getProvider().isTurnCompleteReceived(), "turnComplete bien recu avant le STOP");
+    voice.stop();
+    TEST_ASSERT(voice.isReady(), "Retour a READY apres STOP pendant lecture");
+    TEST_ASSERT(voice.say("Annonce apres STOP lecture"), "Relance apres STOP lecture");
+    TEST_ASSERT(!voice.getProvider().isTurnCompleteReceived(), "_turnCompleteReceived reinitialise malgre le STOP precedent");
+    injectGeminiPcmAndDrain(voice, 3, true);
+    TEST_ASSERT(voice.getSession().getTurnDecodedSamples() == 18, "Apres STOP lecture : 18 ech decodes");
+    TEST_ASSERT(voice.getSession().getPostTurnCompleteBlocks() == 0, "Apres STOP lecture : 0 fausse alerte");
+    drainVoicePlayback(voice);
+
+    // 6. Déconnexion pendant génération et reconnexion après erreur
+    TEST_ASSERT(voice.say("Annonce coupee par deconnexion"), "Tour avant deconnexion lance");
+    mockTransport.disconnect();
+    voice.update();
+    prepareMockVoiceReady(voice, mockTransport);
+    TEST_ASSERT(voice.isReady(), "Session reconnectee et prete");
+    TEST_ASSERT(voice.say("Annonce apres reconnexion"), "Tour apres reconnexion lance");
+    injectGeminiPcmAndDrain(voice, 5, true);
+    TEST_ASSERT(voice.getSession().getTurnDecodedSamples() == 30, "Apres reconnexion : 30 ech decodes");
+    TEST_ASSERT(voice.getSession().getPostTurnCompleteBlocks() == 0, "Apres reconnexion : 0 fausse alerte");
+    drainVoicePlayback(voice);
+
+    // 7. Réception réelle d'un bloc PCM tardif APRÈS turnComplete dans le même tour
+    TEST_ASSERT(voice.say("Annonce avec vrai bloc tardif"), "Tour avec bloc tardif lance");
+    injectGeminiPcmAndDrain(voice, 4, true); // 24 ech + turnComplete
+    TEST_ASSERT(voice.getSession().getPostTurnCompleteBlocks() == 0, "Avant bloc tardif : 0 bloc hors-ordre");
+    // Injection d'un vrai bloc PCM tardif après turnComplete
+    injectGeminiPcmAndDrain(voice, 2, false); // 2 blocs tardifs = 12 ech
+    TEST_ASSERT(voice.getSession().getPostTurnCompleteBlocks() == 2, "Vraie anomalie detectee : 2 blocs PCM recus APRES turnComplete");
+    TEST_ASSERT(voice.getSession().getPostTurnCompleteSamples() == 12, "Vraie anomalie detectee : 12 echantillons tardifs comptabilises");
+    TEST_ASSERT(voice.getClient().isTurnCompleteBeforeLastPcm(), "Flag _turnCompleteBeforeLastPcm actif sur vraie anomalie");
+    drainVoicePlayback(voice);
+    // Vérifier que le tour suivant repart proprement à zéro
+    TEST_ASSERT(voice.say("Annonce propre apres anomalie"), "Tour suivant apres vraie anomalie");
+    TEST_ASSERT(voice.getSession().getPostTurnCompleteBlocks() == 0, "Compteur hors-ordre remis a zero au tour suivant");
+    injectGeminiPcmAndDrain(voice, 3, true);
+    TEST_ASSERT(voice.getSession().getPostTurnCompleteBlocks() == 0, "Tour suivant : 0 alerte");
+    drainVoicePlayback(voice);
+
+    // 8. Modes STT et Conversation
+    TEST_ASSERT(voice.startListening(), "STT startListening()");
+    TEST_ASSERT(!voice.getProvider().isTurnCompleteReceived(), "STT : metriques RX reinitialisees au debut de l'ecoute");
+    voice.stopListening();
+    const char* finalStt = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Test STT.\"}}}";
+    voice.getClient().handleIncomingMessage(finalStt, strlen(finalStt));
+    voice.update();
+    TEST_ASSERT(voice.isReady(), "Fin tour STT");
+
+    voice.enableConversation(true);
+    prepareMockVoiceReady(voice, mockTransport);
+    for (int c = 1; c <= 3; ++c) {
+        TEST_ASSERT(voice.startListening(), "Conversation : startListening()");
+        voice.stopListening();
+        injectGeminiPcmAndDrain(voice, 4, true);
+        TEST_ASSERT(voice.getSession().getTurnDecodedSamples() == 24, "Conversation : 24 ech decodes sur le tour");
+        TEST_ASSERT(voice.getSession().getPostTurnCompleteBlocks() == 0, "Conversation : 0 fausse alerte sur tours multiples");
+        drainVoicePlayback(voice);
+    }
+    voice.stop();
+    voice.getClient().setTransport(nullptr);
+
+    // 9. Fournisseur OpenAI Realtime : multi-tours et détection hors-ordre
+    MockLiveTransport mockTransportOAI;
+    VoxCoreVoice voiceOAI;
+    VoiceKitConfig cfgOAI;
+    cfgOAI.provider = VoiceProviderType::OPENAI;
+    cfgOAI.apiKey = "sk-test-openai-v061";
+    cfgOAI.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    TEST_ASSERT(voiceOAI.begin(cfgOAI), "OpenAI : begin() reussi");
+    prepareMockOpenAIVoiceReady(voiceOAI, mockTransportOAI);
+
+    for (int t = 1; t <= 3; ++t) {
+        TEST_ASSERT(voiceOAI.say(String("Tour OpenAI ") + String(t)), "OpenAI : lancement tour TTS");
+        const char* deltaOAI = "{\"type\":\"response.output_audio.delta\",\"delta\":\"AAAAAAAAAAAAAAAA\"}";
+        voiceOAI.getOpenAIClient().handleIncomingMessage(deltaOAI, strlen(deltaOAI));
+        voiceOAI.getOpenAIClient().handleIncomingMessage(deltaOAI, strlen(deltaOAI));
+        const char* doneOAI = "{\"type\":\"response.done\"}";
+        voiceOAI.getOpenAIClient().handleIncomingMessage(doneOAI, strlen(doneOAI));
+        TEST_ASSERT(voiceOAI.getSession().getTurnDecodedSamples() == 12, "OpenAI : 12 ech decodes par tour");
+        TEST_ASSERT(voiceOAI.getSession().getPostTurnCompleteBlocks() == 0, "OpenAI : 0 fausse alerte entre tours");
+        drainVoicePlayback(voiceOAI);
+    }
+
+    // Vrai bloc tardif sur OpenAI après response.done
+    TEST_ASSERT(voiceOAI.say("Tour OpenAI tardif"), "OpenAI : tour tardif");
+    const char* doneOAI = "{\"type\":\"response.done\"}";
+    voiceOAI.getOpenAIClient().handleIncomingMessage(doneOAI, strlen(doneOAI));
+    const char* lateDeltaOAI = "{\"type\":\"response.output_audio.delta\",\"delta\":\"AAAAAAAAAAAAAAAA\"}";
+    voiceOAI.getOpenAIClient().handleIncomingMessage(lateDeltaOAI, strlen(lateDeltaOAI));
+    TEST_ASSERT(voiceOAI.getSession().getPostTurnCompleteBlocks() == 1, "OpenAI : bloc tardif apres response.done detecte");
+    TEST_ASSERT(voiceOAI.getSession().getPostTurnCompleteSamples() == 6, "OpenAI : 6 ech tardifs detectes");
+    drainVoicePlayback(voiceOAI);
+    voiceOAI.stop();
+    voiceOAI.getOpenAIClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 81 : Correction B (v0.6.1) — Ordonnancement FreeRTOS TLS & Instrumentation
+// =============================================================================
+void test_v061_correction_b_tls_scheduling_and_loop_diagnostics() {
+    std::cout << "\n[TEST SUITE 81] Correction B (v0.6.1) : Ordonnancement FreeRTOS TLS, memoire & intervalles boucle" << std::endl;
+
+    MockLiveTransport mockTransport;
+    mockTransport.setSimulatedTlsDiagnostics(0, 2, 178432, 136192, 110592);
+
+    VoxCoreVoice voice;
+    VoiceKitConfig cfg;
+    cfg.provider = VoiceProviderType::GEMINI;
+    cfg.apiKey = "AIzaSyTestV061CorrectionB";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+
+    WiFi.setConnected(true);
+    setMockMillisOffset(1700000000UL * 1000UL);
+
+    TEST_ASSERT(voice.begin(cfg), "begin() reussi");
+    voice.getClient().setTransport(&mockTransport);
+
+    // 1. Vérifier la priorité initiale de handshake TLS (égale à loopTask = 1 pour éviter la famine CPU)
+    TEST_ASSERT(voice.getProvider().getWsHandshakeTaskPriority() == 1,
+                "Priorite WebSocket pendant handshake TLS = 1 (pas de preemption bloquante de loopTask)");
+    TEST_ASSERT(voice.getProvider().getWsSteadyTaskPriority() == 2,
+                "Priorite WebSocket en regime etabli = 2 (< AudioPlayerTask prio 4)");
+
+    // 2. Simuler des appels périodiques à update() pendant la phase CONNECTING_SERVICE / TLS
+    voice.update(); // Déclenche _session.activate() -> CONNECTING_SERVICE
+    advanceMockMillis(15);
+    voice.update();
+    advanceMockMillis(28); // Intervalle max pendant TLS = 28 ms (< 100 ms cible)
+    voice.update();
+    advanceMockMillis(12);
+    voice.update();
+
+    // Fin du handshake et réception de setupComplete
+    const char* setupJson = "{\"setupComplete\":{}}";
+    voice.getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    advanceMockMillis(10);
+    voice.update();
+
+    TEST_ASSERT(voice.isReady(), "Session READY apres handshake TLS");
+
+    // 3. Vérification des métriques d'instrumentation TLS / FreeRTOS / RAM interne
+    const ConnectionMetrics& m = voice.getConnectionMetrics();
+    TEST_ASSERT(m.wsTaskCore == 0, "Coeur de la tache WebSocket diagnostique (Core 0)");
+    TEST_ASSERT(m.wsTaskPriority == 2, "Priorite active WebSocket apres connexion = 2");
+    TEST_ASSERT(m.wsHandshakeTaskPriority == 1, "Priorite handshake TLS rapportee = 1");
+    TEST_ASSERT(m.wsSteadyTaskPriority == 2, "Priorite regime etabli rapportee = 2");
+    TEST_ASSERT(m.loopTaskCore == 1, "Coeur de la boucle principale diagnostique (Core 1)");
+    TEST_ASSERT(m.loopTaskPriority == 1, "Priorite de la boucle principale diagnostiquee (prio 1)");
+    TEST_ASSERT(m.maxLoopGapDuringTlsMs == 28, "Interruption maximale apparente pendant TLS mesuree exactement (28 ms < 100 ms)");
+    TEST_ASSERT(m.maxLoopGapMs >= 28, "Intervalle maximal global de boucle mesure");
+    TEST_ASSERT(m.lastLoopGapMs == 10, "Dernier intervalle entre traitements applicatifs mesure (10 ms)");
+    TEST_ASSERT(m.freeInternalHeapDuringTls == 178432, "RAM interne libre pendant TLS rapportee");
+    TEST_ASSERT(m.minFreeInternalHeapDuringTls == 136192, "RAM interne minimale pendant TLS rapportee");
+    TEST_ASSERT(m.largestInternalBlockDuringTls == 110592, "Plus grand bloc memoire interne pendant TLS rapporte");
+
+    // 4. Vérifier que la déconnexion redescend la priorité à 1 pour protéger le prochain handshake TLS
+    mockTransport.disconnect();
+    TEST_ASSERT(mockTransport.getTaskPriority() == 1, "Priorite WebSocket redescendue a 1 lors de la deconnexion");
+
+    voice.stop();
+    voice.getClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 82 : Correction C (v0.6.1) — 10 scénarios Wi-Fi FastConnect, repli non-bloquant & durées
+// =============================================================================
+void test_v061_correction_c_wifi_10_scenarios_and_tick_durations() {
+    std::cout << "\n[TEST SUITE 82] Correction C (v0.6.1) : 10 scenarios Wi-Fi FastConnect, repli non-bloquant & durees" << std::endl;
+
+    WiFi.resetCounters();
+    WiFiManager::clearFastConnectCache();
+    setMockMillisOffset(1700000000UL * 1000UL);
+
+    // Scénario 1 : FastConnect réussi au premier essai
+    {
+        const uint8_t cachedBssid[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+        WiFiManager::setFastConnectCache("HomeNet", 6, cachedBssid);
+        WiFi.setChannel(6);
+        WiFi.setBSSID(cachedBssid);
+        WiFi.setConnected(true);
+
+        WiFiManager wm;
+        TEST_ASSERT(wm.begin("HomeNet", "SecretPass", true, 3500), "Scenario 1 : begin() avec cache BSSID");
+        TEST_ASSERT(!WiFi.isPersistent(), "Scenario 1 : WiFi.persistent(false) active pour eviter ecriture NVS bloquante");
+        TEST_ASSERT(WiFi.getFastConnectCalls() == 1, "Scenario 1 : WiFi.begin appele avec BSSID/canal");
+        TEST_ASSERT(wm.getState() == WiFiManagerState::FAST_CONNECTING, "Scenario 1 : etat initial FAST_CONNECTING");
+        wm.tick();
+        TEST_ASSERT(wm.isConnected(), "Scenario 1 : connecte des le premier essai");
+        TEST_ASSERT(wm.isFastConnectAttempted(), "Scenario 1 : fastConnectAttempted = true");
+        TEST_ASSERT(wm.isFastConnectSuccess(), "Scenario 1 : fastConnectSuccess = true");
+        TEST_ASSERT(wm.getState() == WiFiManagerState::READY, "Scenario 1 : etat READY");
+    }
+
+    // Scénario 2 : BSSID mémorisé devenu indisponible -> repli automatique vers recherche normale
+    {
+        WiFi.resetCounters();
+        const uint8_t oldBssid[6] = {0xAA, 0xBB, 0xCC, 0x00, 0x11, 0x22};
+        const uint8_t newBssid[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02};
+        WiFiManager::setFastConnectCache("HomeNet", 6, oldBssid);
+        WiFi.setSimulateFastConnectFailure(true);
+        WiFi.setSimulateNormalScanSuccess(true);
+        WiFi.setBSSID(newBssid);
+        WiFi.setChannel(6);
+
+        WiFiManager wm;
+        wm.begin("HomeNet", "SecretPass", true, 3500);
+        TEST_ASSERT(!wm.isConnected(), "Scenario 2 : BSSID memorise indisponible -> non connecte");
+        TEST_ASSERT(wm.getState() == WiFiManagerState::FAST_CONNECTING, "Scenario 2 : en attente FastConnect");
+
+        // Avancer au-delà du timeout FastConnect (3500 ms)
+        advanceMockMillis(3600);
+        wm.tick(); // Déclenche fallbackToNormalScan() -> connecte sur le nouveau BSSID
+        TEST_ASSERT(WiFi.getNormalBeginCalls() == 1, "Scenario 2 : repli vers scan normal declenche");
+        wm.tick(); // Détecte la connexion établie par le scan normal
+        TEST_ASSERT(wm.isConnected(), "Scenario 2 : connecte apres repli vers scan normal");
+        TEST_ASSERT(wm.isFastConnectAttempted(), "Scenario 2 : fastConnectAttempted conserve a true");
+        TEST_ASSERT(!wm.isFastConnectSuccess(), "Scenario 2 : fastConnectSuccess = false (repli utilise)");
+        TEST_ASSERT(String(wm.getBSSID()) == "DE:AD:BE:EF:01:02", "Scenario 2 : nouveau BSSID memorise");
+    }
+
+    // Scénario 3 : Changement de canal du routeur (canal 6 -> canal 11)
+    {
+        WiFi.resetCounters();
+        const uint8_t apBssid[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02};
+        WiFiManager::setFastConnectCache("HomeNet", 6, apBssid);
+        WiFi.setSimulateFastConnectFailure(true);
+        WiFi.setSimulateNormalScanSuccess(true);
+        WiFi.setBSSID(apBssid);
+        WiFi.setChannel(11); // Routeur passé sur le canal 11
+
+        WiFiManager wm;
+        wm.begin("HomeNet", "SecretPass", true, 3500);
+        advanceMockMillis(3600);
+        wm.tick(); // Fallback scan normal
+        wm.tick(); // Connexion établie sur canal 11
+        TEST_ASSERT(wm.isConnected(), "Scenario 3 : connecte malgre changement de canal du routeur");
+        TEST_ASSERT(wm.getChannel() == 11, "Scenario 3 : canal mis a jour vers 11");
+    }
+
+    // Scénarios 4 & 5 : Réseau Wi-Fi absent (backoff progressif sans boucle infinie) puis retour du réseau
+    {
+        WiFi.resetCounters();
+        WiFi.setConnected(false);
+        WiFiManager wm;
+        wm.begin("MissingNet", "SecretPass", false, 3500);
+        wm.tick();
+        TEST_ASSERT(!wm.isConnected(), "Scenario 4 : reseau absent");
+        uint32_t initialAttempts = wm.getWifiAttempts();
+
+        // Vérifier que des appels rapides à tick() (toutes les 10 ms) ne déclenchent PAS d'appels Wi-Fi en boucle
+        for (int i = 0; i < 20; ++i) {
+            advanceMockMillis(10);
+            wm.tick();
+        }
+        TEST_ASSERT(wm.getWifiAttempts() == initialAttempts, "Scenario 4 : aucune attente active ni boucle de reconnexion");
+
+        // Après 1500 ms -> 1ère tentative de reconnexion (délai passe à 3000 ms)
+        advanceMockMillis(1500);
+        wm.tick();
+        TEST_ASSERT(wm.getWifiAttempts() == initialAttempts + 1, "Scenario 4 : tentative apres 1500 ms");
+
+        // Après 1500 ms supplémentaires (< 3000 ms) -> pas encore de nouvelle tentative
+        advanceMockMillis(1500);
+        wm.tick();
+        TEST_ASSERT(wm.getWifiAttempts() == initialAttempts + 1, "Scenario 4 : backoff progressif 3000 ms respecte");
+
+        // Scénario 5 : Retour du réseau à l'échéance de 3000 ms
+        WiFi.setSimulateReconnectSuccess(true);
+        advanceMockMillis(1600);
+        wm.tick(); // Déclenche WiFi.reconnect()
+        wm.tick(); // Prend en compte WL_CONNECTED
+        TEST_ASSERT(wm.isConnected(), "Scenario 5 : connexion retablie des le retour du reseau");
+    }
+
+    // Scénario 6 : Perte de connexion en cours de session et reconnexion automatique
+    {
+        WiFi.resetCounters();
+        WiFi.setConnected(true);
+        WiFiManager wm;
+        wm.begin("HomeNet", "SecretPass", false, 3500);
+        wm.tick();
+        TEST_ASSERT(wm.isConnected(), "Scenario 6 : initialement connecte");
+
+        WiFi.setConnected(false);
+        wm.tick();
+        TEST_ASSERT(!wm.isConnected(), "Scenario 6 : perte Wi-Fi detectee");
+        TEST_ASSERT(wm.getWifiReconnects() == 1, "Scenario 6 : compteur wifiReconnects = 1");
+        TEST_ASSERT(wm.getState() == WiFiManagerState::DISCONNECTED_BACKOFF, "Scenario 6 : etat DISCONNECTED_BACKOFF");
+
+        WiFi.setSimulateReconnectSuccess(true);
+        advanceMockMillis(1600);
+        wm.tick();
+        wm.tick();
+        TEST_ASSERT(wm.isConnected(), "Scenario 6 : reconnexion automatique reussie");
+    }
+
+    // Scénario 7 : Redémarrage du CoreS3 (nouvelle instance WiFiManager exploitant le cache sauvegardé au scénario 3)
+    {
+        WiFi.resetCounters();
+        WiFi.setConnected(true);
+        WiFi.setChannel(11);
+        WiFiManager wmRebooted;
+        wmRebooted.begin("HomeNet", "SecretPass", true, 3500);
+        wmRebooted.tick();
+        TEST_ASSERT(WiFi.getFastConnectCalls() == 1, "Scenario 7 : FastConnect utilise le cache persistant apres redemarrage");
+        TEST_ASSERT(wmRebooted.isFastConnectSuccess(), "Scenario 7 : FastConnect reussi apres redemarrage");
+        TEST_ASSERT(wmRebooted.getChannel() == 11, "Scenario 7 : canal 11 restaure depuis le cache");
+    }
+
+    // Scénario 8 : Horloge déjà synchronisée (SNTP sans attente bloquante)
+    {
+        setMockMillisOffset(1700000000UL * 1000UL); // Timestamp valide (>= 2023-11-14)
+        WiFi.setConnected(true);
+        WiFiManager wmSync;
+        wmSync.begin("HomeNet", "SecretPass", true, 3500);
+        wmSync.tick();
+        TEST_ASSERT(wmSync.isTimeSynced(), "Scenario 8 : horloge immediatement valide");
+        TEST_ASSERT(wmSync.isSntpSkipped(), "Scenario 8 : sntpSkipped = true");
+        TEST_ASSERT(wmSync.getSntpSyncMs() == 0, "Scenario 8 : sntpSyncMs = 0 ms");
+    }
+
+    // Scénario 9 : SNTP réellement nécessaire (horloge non synchronisée au boot : 1970)
+    {
+        WiFiManager::setSimulatedSystemTimeForTest(5); // Timestamp = 5 s (1970 < NTP_MIN_VALID_TIMESTAMP)
+        WiFi.setConnected(true);
+        WiFiManager wmUnsync;
+        wmUnsync.begin("HomeNet", "SecretPass", true, 3500);
+        wmUnsync.tick();
+        TEST_ASSERT(wmUnsync.isConnected(), "Scenario 9 : Wi-Fi connecte");
+        TEST_ASSERT(!wmUnsync.isTimeSynced(), "Scenario 9 : horloge non encore synchronisee (1970)");
+        TEST_ASSERT(!wmUnsync.isSntpSkipped(), "Scenario 9 : sntpSkipped = false");
+        TEST_ASSERT(wmUnsync.getState() == WiFiManagerState::CONNECTED_WAIT_SNTP, "Scenario 9 : etat CONNECTED_WAIT_SNTP");
+
+        // Simuler 420 ms d'attente puis réception de la réponse SNTP
+        advanceMockMillis(420);
+        WiFiManager::setSimulatedSystemTimeForTest(-1); // Horloge système maintenant valide
+        WiFiManager::notifySntpSyncedForTest();
+        wmUnsync.tick();
+        TEST_ASSERT(wmUnsync.isTimeSynced(), "Scenario 9 : horloge synchronisee apres SNTP");
+        TEST_ASSERT(wmUnsync.getSntpSyncMs() >= 420, "Scenario 9 : duree SNTP reelle mesuree (>= 420 ms)");
+        TEST_ASSERT(wmUnsync.getState() == WiFiManagerState::READY, "Scenario 9 : etat READY apres SNTP");
+    }
+
+    // Scénario 10 : Fonctionnement vocal complet après plusieurs reconnexions Wi-Fi + mesure séparée des durées
+    {
+        WiFi.resetCounters();
+        MockLiveTransport mockTransport;
+        VoiceKit vk;
+        VoiceKitConfig cfg;
+        cfg.apiKey = "AIzaSyTestV061Scenario10";
+        cfg.wifiMode = WiFiMode::MANAGED_WIFI;
+        cfg.wifiSSID = "HomeNet";
+        cfg.wifiPassword = "SecretPass";
+        cfg.enableFastConnect = true;
+
+        WiFi.setConnected(true);
+        TEST_ASSERT(vk.begin(cfg), "Scenario 10 : VoiceKit::begin en MANAGED_WIFI");
+        vk.getEngine().getClient().setTransport(&mockTransport);
+        vk.update(); // Connecte Wi-Fi + lance _session.activate()
+        const char* setupJson = "{\"setupComplete\":{}}";
+        vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+        vk.update();
+        TEST_ASSERT(vk.isReady(), "Scenario 10 : VoiceKit READY initialement");
+
+        // Simuler 3 coupures et reconnexions Wi-Fi successives
+        for (int r = 1; r <= 3; ++r) {
+            WiFi.setConnected(false);
+            mockTransport.disconnect();
+            vk.update();
+            TEST_ASSERT(!vk.isReady(), "Scenario 10 : non pret pendant coupure Wi-Fi");
+
+            WiFi.setSimulateReconnectSuccess(true);
+            advanceMockMillis(1600);
+            vk.update(); // Reconnecte Wi-Fi
+            vk.update(); // Relance session ou rend Wi-Fi actif
+            prepareMockVoiceKitReady(vk, mockTransport);
+            TEST_ASSERT(vk.isReady(), "Scenario 10 : VoiceKit de nouveau READY apres reconnexion");
+        }
+
+        // Vérifier le fonctionnement vocal (annonce TTS de la phrase de contrôle obligatoire) après les reconnexions
+        const char* controlPhrase = "Cette phrase de contrôle permet de vérifier que chaque syllabe finale est parfaitement intelligible jusqu'au mot repère : alpha tango terminé.";
+        TEST_ASSERT(vk.say(controlPhrase), "Scenario 10 : say() de la phrase de controle accepte apres reconnexions");
+        injectGeminiPcmAndDrain(vk.getEngine(), 10, true);
+        TEST_ASSERT(vk.getEngine().getSession().getTurnDecodedSamples() == 60, "Scenario 10 : 60 ech decodes sans perte");
+        TEST_ASSERT(vk.getEngine().getSession().getPostTurnCompleteBlocks() == 0, "Scenario 10 : 0 fausse alerte");
+        drainVoicePlayback(vk.getEngine());
+        TEST_ASSERT(vk.isReady(), "Scenario 10 : restitution complete achevee et retour a READY");
+
+        // Vérifier les mesures séparées de WiFiManager::tick() et VoiceKit::update()
+        const ConnectionMetrics& cm = vk.getConnectionMetrics();
+        TEST_ASSERT(cm.wifiReconnects == 3, "Scenario 10 : 3 reconnexions Wi-Fi comptabilisees");
+        TEST_ASSERT(cm.maxWifiTickDurationUs < 50000, "Scenario 10 : duree WiFiManager::tick() mesuree et non bloquante");
+        TEST_ASSERT(cm.maxUpdateDurationUs < 50000, "Scenario 10 : duree VoiceKit::update() mesuree separement et non bloquante");
+
+        vk.stop();
+        vk.getEngine().getClient().setTransport(nullptr);
+    }
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.0    " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.1    " << std::endl;
     std::cout << "  Architecture Multi-Fournisseurs (Gemini + OpenAI Realtime)" << std::endl;
     std::cout << "  Stabilisation FreeRTOS, Modes, VAD & Facade VoiceKit     " << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
@@ -4348,6 +4833,11 @@ int main() {
     test_v060_openai_realtime_priority_stop_and_cancel();
     test_v060_openai_realtime_error_handling_and_reconnection();
     test_v060_voxcore_and_voicekit_integration_and_gemini_non_regression();
+
+    // Nouvelles suites VoiceKit v0.6.1 (Correctifs de stabilite : Gemini Live, WebSocket TLS et Wi-Fi)
+    test_v061_correction_a_turn_rx_metrics_and_order_alerts();
+    test_v061_correction_b_tls_scheduling_and_loop_diagnostics();
+    test_v061_correction_c_wifi_10_scenarios_and_tick_durations();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

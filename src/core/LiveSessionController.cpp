@@ -106,7 +106,7 @@ void LiveSessionController::finishTurn() {
             Serial.printf("[GEMINI] %s\n", _lastAssistantText.c_str());
         }
 
-        uint32_t pcmDecoded = _legacyClient ? _legacyClient->getPcmSamplesDispatchedTotal() : 0;
+        uint32_t pcmDecoded = getTurnDecodedSamples();
         uint32_t pcmRejectedBefore = _audioSamplesRejectedBeforePlayerTotal;
         uint32_t pcmPresented = _audioSamplesPresentedToPlayerTotal;
         uint32_t pcmAccepted = _player ? _player->getSamplesAcceptedBuffer() : 0;
@@ -129,9 +129,50 @@ void LiveSessionController::finishTurn() {
 }
 
 void LiveSessionController::printAudioEndCheck(const char* label) {
-    uint32_t pcmDecoded = _legacyClient ? _legacyClient->getPcmSamplesDispatchedTotal() : 0;
+    uint32_t pcmDecoded = getTurnDecodedSamples();
     uint32_t pcmPlayed = _player ? _player->getSamplesPlayedTotal() : 0;
     Serial.printf("[AUDIO END CHECK][%s] Decodes: %u | Joues: %u\n", label ? label : "INFO", (unsigned)pcmDecoded, (unsigned)pcmPlayed);
+}
+
+uint32_t LiveSessionController::getTurnDecodedSamples() const {
+    if (_provider) {
+        return _provider->getTurnDecodedSamples();
+    }
+    if (_legacyClient) {
+        return _legacyClient->getPcmSamplesDispatchedTotal();
+    }
+    return 0;
+}
+
+uint32_t LiveSessionController::getPostTurnCompleteBlocks() const {
+    if (_provider) {
+        return _provider->getPostTurnCompleteBlocks();
+    }
+    if (_legacyClient) {
+        return _legacyClient->getPostTurnCompleteBlocks();
+    }
+    return 0;
+}
+
+uint32_t LiveSessionController::getPostTurnCompleteSamples() const {
+    if (_provider) {
+        return _provider->getPostTurnCompleteSamples();
+    }
+    if (_legacyClient) {
+        return _legacyClient->getPostTurnCompletePcmSamples();
+    }
+    return 0;
+}
+
+void LiveSessionController::resetTurnSessionMetrics() {
+    _audioPacketsReceivedCount = 0;
+    _audioPacketsPresentedToPlayerCount = 0;
+    _audioSamplesPresentedToPlayerTotal = 0;
+    _audioPacketsDispatchedCount = 0;
+    _audioPacketsWithSaturationCount = 0;
+    _audioPacketsRejectedBeforePlayerCount = 0;
+    _audioSamplesRejectedBeforePlayerTotal = 0;
+    _lastRejectReason = AudioPacketRejectReason::NONE;
 }
 
 bool LiveSessionController::begin(GeminiLiveClient* client, void* streamer, LiveAudioPlayer* player) {
@@ -440,13 +481,17 @@ bool LiveSessionController::sendTextMessage(const String& text) {
     _waitingStartTimeMs = millis();
     _lastActivityMs = _waitingStartTimeMs;
 
+    resetTurnSessionMetrics();
+
     if (_player) {
         _player->reset();
         if (_player->getAudioOutput()) {
             _player->getAudioOutput()->resetTurnMetrics();
         }
     }
-    if (_legacyClient) {
+    if (_provider) {
+        _provider->resetTurnRxMetrics();
+    } else if (_legacyClient) {
         _legacyClient->resetTurnRxMetrics();
     }
 
@@ -472,13 +517,17 @@ bool LiveSessionController::beginAudioTurn() {
     _waitingStartTimeMs = millis();
     _lastActivityMs = _waitingStartTimeMs;
 
+    resetTurnSessionMetrics();
+
     if (_player) {
         _player->reset();
         if (_player->getAudioOutput()) {
             _player->getAudioOutput()->resetTurnMetrics();
         }
     }
-    if (_legacyClient) {
+    if (_provider) {
+        _provider->resetTurnRxMetrics();
+    } else if (_legacyClient) {
         _legacyClient->resetTurnRxMetrics();
     }
 

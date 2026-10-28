@@ -120,6 +120,7 @@ bool GeminiLiveClient::connect() {
 
     _setupComplete.store(false, std::memory_order_release);
     _connected.store(false, std::memory_order_release);
+    resetTurnRxMetrics();
     _connectAttempts++;
     _wsConnectStartTimeMs = millis();
 
@@ -262,6 +263,8 @@ void GeminiLiveClient::sendSetupMessage() {
 
 bool GeminiLiveClient::sendActivityStart() {
     if (!isConnected() || !_setupComplete) return false;
+    resetTurnRxMetrics();
+    _waitingForResponse.store(false, std::memory_order_release);
     const char* msg = "{\"realtimeInput\":{\"activityStart\":{}}}";
     Serial.println("[LiveClient] Signalisation debut d'activite vocale (activityStart)");
     return _transport->send(msg, strlen(msg));
@@ -328,10 +331,12 @@ bool GeminiLiveClient::sendAudioChunk(const int16_t* samples, size_t sampleCount
 
 bool GeminiLiveClient::sendActivityEnd() {
     if (!isConnected() || !_setupComplete) return false;
-    _lastActivityEndSentMs = millis();
-    _firstResponseReceivedMs = 0;
-    _firstAudioReceivedMs = 0;
-    _waitingForResponse = true;
+    uint32_t nowMs = millis();
+    if (nowMs == 0) nowMs = 1;
+    _lastActivityEndSentMs.store(nowMs, std::memory_order_relaxed);
+    _firstResponseReceivedMs.store(0, std::memory_order_relaxed);
+    _firstAudioReceivedMs.store(0, std::memory_order_relaxed);
+    _waitingForResponse.store(true, std::memory_order_release);
     const char* msg = "{\"realtimeInput\":{\"activityEnd\":{}}}";
     Serial.println("[LiveClient] Signalisation fin d'activite vocale (activityEnd)");
     return _transport->send(msg, strlen(msg));
@@ -347,17 +352,20 @@ bool GeminiLiveClient::sendTurnComplete() {
 
 bool GeminiLiveClient::sendInterruption() {
     if (!isConnected()) return false;
-    _waitingForResponse = false;
+    _waitingForResponse.store(false, std::memory_order_release);
     const char* intMsg = "{\"clientContent\":{\"turns\":[{\"role\":\"user\",\"parts\":[]}],\"turnComplete\":true}}";
     return _transport->send(intMsg, strlen(intMsg));
 }
 
 bool GeminiLiveClient::sendTextMessage(const String& text) {
     if (!isConnected() || !_setupComplete) return false;
-    _lastActivityEndSentMs = millis();
-    _firstResponseReceivedMs = 0;
-    _firstAudioReceivedMs = 0;
-    _waitingForResponse = true;
+    resetTurnRxMetrics();
+    uint32_t nowMs = millis();
+    if (nowMs == 0) nowMs = 1;
+    _lastActivityEndSentMs.store(nowMs, std::memory_order_relaxed);
+    _firstResponseReceivedMs.store(0, std::memory_order_relaxed);
+    _firstAudioReceivedMs.store(0, std::memory_order_relaxed);
+    _waitingForResponse.store(true, std::memory_order_release);
 
     String msg = "{\"clientContent\":{\"turns\":[{\"role\":\"user\",\"parts\":[{\"text\":\"";
     msg += escapeJsonString(text);
@@ -494,21 +502,21 @@ bool GeminiLiveClient::decodeBase64(const char* input, size_t inLen, std::vector
 }
 
 void GeminiLiveClient::resetTurnRxMetrics() {
-    _audioWsMessagesCount = 0;
-    _b64BlocksDecodedCount = 0;
-    _b64DecodeFailedCount = 0;
-    _pcmBlocksInvalidCount = 0;
-    _pcmBytesDecodedTotal = 0;
-    _pcmSamplesDispatchedTotal = 0;
-    _lastPcmPacketTimeMs = 0;
-    _turnCompleteTimeMs = 0;
-    _turnCompleteReceived = false;
-    _turnCompleteBeforeLastPcm = false;
-    _postTurnCompletePcmSamples = 0;
-    _postTurnCompletePcmBlocks = 0;
-    _turnAudioPartsCount = 0;
-    _firstResponseReceivedMs = 0;
-    _firstAudioReceivedMs = 0;
+    _audioWsMessagesCount.store(0, std::memory_order_relaxed);
+    _b64BlocksDecodedCount.store(0, std::memory_order_relaxed);
+    _b64DecodeFailedCount.store(0, std::memory_order_relaxed);
+    _pcmBlocksInvalidCount.store(0, std::memory_order_relaxed);
+    _pcmBytesDecodedTotal.store(0, std::memory_order_relaxed);
+    _pcmSamplesDispatchedTotal.store(0, std::memory_order_relaxed);
+    _lastPcmPacketTimeMs.store(0, std::memory_order_relaxed);
+    _turnCompleteTimeMs.store(0, std::memory_order_relaxed);
+    _turnCompleteReceived.store(false, std::memory_order_release);
+    _turnCompleteBeforeLastPcm.store(false, std::memory_order_release);
+    _postTurnCompletePcmSamples.store(0, std::memory_order_relaxed);
+    _postTurnCompletePcmBlocks.store(0, std::memory_order_relaxed);
+    _turnAudioPartsCount.store(0, std::memory_order_relaxed);
+    _firstResponseReceivedMs.store(0, std::memory_order_relaxed);
+    _firstAudioReceivedMs.store(0, std::memory_order_relaxed);
 }
 
 // =============================================================================
@@ -537,16 +545,17 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
     // 2. Contenu produit par le serveur (serverContent)
     cJSON* serverContent = cJSON_GetObjectItemCaseSensitive(root, "serverContent");
     if (serverContent) {
-        if (_waitingForResponse && _firstResponseReceivedMs == 0) {
-            _firstResponseReceivedMs = millis();
-            if (_firstResponseReceivedMs == 0) _firstResponseReceivedMs = 1;
+        if (_waitingForResponse.load(std::memory_order_acquire) && _firstResponseReceivedMs.load(std::memory_order_relaxed) == 0) {
+            uint32_t nowResp = millis();
+            if (nowResp == 0) nowResp = 1;
+            _firstResponseReceivedMs.store(nowResp, std::memory_order_relaxed);
         }
 
         // Interruption signalee par le serveur
         cJSON* interrupted = cJSON_GetObjectItemCaseSensitive(serverContent, "interrupted");
         if (cJSON_IsTrue(interrupted)) {
             Serial.println("[LiveClient] Intervention interrompue signalee par le serveur");
-            _waitingForResponse = false;
+            _waitingForResponse.store(false, std::memory_order_release);
             if (_onInterrupted) _onInterrupted();
         }
 
@@ -601,10 +610,10 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
                         }
                     }
 
-                    // Audio natif inlineData PCM 24 kHz (v0.2.1.3 - Correction A)
+                    // Audio natif inlineData PCM 24 kHz (v0.2.1.3 / v0.6.1 - Correction A)
                     cJSON* inlineData = cJSON_GetObjectItemCaseSensitive(part, "inlineData");
                     if (inlineData) {
-                        _turnAudioPartsCount++;
+                        _turnAudioPartsCount.fetch_add(1, std::memory_order_relaxed);
                         cJSON* b64Data = cJSON_GetObjectItemCaseSensitive(inlineData, "data");
                         if (b64Data && cJSON_IsString(b64Data) && b64Data->valuestring) {
                             const char* b64Str = b64Data->valuestring;
@@ -612,36 +621,37 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
                             std::vector<uint8_t> pcmBytes;
                             bool decodeOk = decodeBase64(b64Str, b64Len, pcmBytes);
                             if (!decodeOk) {
-                                _b64DecodeFailedCount++;
+                                _b64DecodeFailedCount.fetch_add(1, std::memory_order_relaxed);
                                 AudioTraceLog::record(AudioTraceEventType::PCM_DECODE_FAILED, (uint32_t)b64Len);
                                 Serial.printf("[LiveClient] ALERTE: Echec decodage Base64 audio (%u octets)\n", (unsigned)b64Len);
                             } else {
-                                _b64BlocksDecodedCount++;
+                                _b64BlocksDecodedCount.fetch_add(1, std::memory_order_relaxed);
                                 if (pcmBytes.size() < sizeof(int16_t)) {
-                                    _pcmBlocksInvalidCount++;
+                                    _pcmBlocksInvalidCount.fetch_add(1, std::memory_order_relaxed);
                                     Serial.printf("[LiveClient] ALERTE: Bloc PCM invalide (< 2 octets: %u)\n", (unsigned)pcmBytes.size());
                                 } else {
                                     if (!msgHadAudio) {
                                         msgHadAudio = true;
-                                        _audioWsMessagesCount++;
+                                        _audioWsMessagesCount.fetch_add(1, std::memory_order_relaxed);
                                         AudioTraceLog::record(AudioTraceEventType::WS_AUDIO_RECEIVED, (uint32_t)len);
                                     }
                                     const size_t sampleCount = pcmBytes.size() / sizeof(int16_t);
-                                    _pcmBytesDecodedTotal += (uint32_t)pcmBytes.size();
-                                    _pcmSamplesDispatchedTotal += (uint32_t)sampleCount;
-                                    _lastPcmPacketTimeMs = millis();
-                                    if (_waitingForResponse && _firstAudioReceivedMs == 0) {
-                                        _firstAudioReceivedMs = _lastPcmPacketTimeMs;
-                                        if (_firstAudioReceivedMs == 0) _firstAudioReceivedMs = 1;
+                                    _pcmBytesDecodedTotal.fetch_add((uint32_t)pcmBytes.size(), std::memory_order_relaxed);
+                                    _pcmSamplesDispatchedTotal.fetch_add((uint32_t)sampleCount, std::memory_order_relaxed);
+                                    uint32_t pktMs = millis();
+                                    _lastPcmPacketTimeMs.store(pktMs, std::memory_order_relaxed);
+                                    if (_waitingForResponse.load(std::memory_order_acquire) && _firstAudioReceivedMs.load(std::memory_order_relaxed) == 0) {
+                                        uint32_t firstAudMs = (pktMs == 0) ? 1 : pktMs;
+                                        _firstAudioReceivedMs.store(firstAudMs, std::memory_order_relaxed);
                                     }
                                     AudioTraceLog::record(AudioTraceEventType::PCM_DECODED, (uint32_t)sampleCount);
 
-                                    if (_turnCompleteReceived) {
-                                        _turnCompleteBeforeLastPcm = true;
-                                        _postTurnCompletePcmSamples += (uint32_t)sampleCount;
-                                        _postTurnCompletePcmBlocks++;
+                                    if (_turnCompleteReceived.load(std::memory_order_acquire)) {
+                                        _turnCompleteBeforeLastPcm.store(true, std::memory_order_release);
+                                        _postTurnCompletePcmSamples.fetch_add((uint32_t)sampleCount, std::memory_order_relaxed);
+                                        uint32_t postBlk = _postTurnCompletePcmBlocks.fetch_add(1, std::memory_order_relaxed) + 1;
                                         Serial.printf("[LiveClient] ALERTE ORDRE: Bloc PCM recu APRES turnComplete (%u echantillons, bloc post-turn #%u)\n",
-                                                      (unsigned)sampleCount, (unsigned)_postTurnCompletePcmBlocks);
+                                                      (unsigned)sampleCount, (unsigned)postBlk);
                                     }
 
                                     const int16_t* pcm16 = reinterpret_cast<const int16_t*>(pcmBytes.data());
@@ -659,9 +669,9 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
         // Fin de génération du tour
         cJSON* turnComplete = cJSON_GetObjectItemCaseSensitive(serverContent, "turnComplete");
         if (cJSON_IsTrue(turnComplete)) {
-            _turnCompleteReceived = true;
-            _turnCompleteTimeMs = millis();
-            _waitingForResponse = false;
+            _turnCompleteReceived.store(true, std::memory_order_release);
+            _turnCompleteTimeMs.store(millis(), std::memory_order_relaxed);
+            _waitingForResponse.store(false, std::memory_order_release);
             AudioTraceLog::record(AudioTraceEventType::TURN_COMPLETE_RECEIVED);
             Serial.println("[LiveClient] Fin de generation audio (turnComplete)");
             if (_onTurnComplete) _onTurnComplete();

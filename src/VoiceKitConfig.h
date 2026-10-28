@@ -357,6 +357,24 @@ struct ConnectionMetrics {
     bool sntpSkipped = false;         ///< Vrai si SNTP a été immédiat car l'horloge système était déjà valide
     uint8_t channel = 0;              ///< Canal Wi-Fi utilisé (1..14)
     char bssidStr[18] = "";           ///< BSSID au format standard "XX:XX:XX:XX:XX:XX"
+
+    // Diagnostics FreeRTOS, TLS, RAM interne et boucles (v0.6.1 — Corrections B & C)
+    int8_t wsTaskCore = -1;                      ///< Cœur FreeRTOS observé pour la tâche WebSocket (-1 si N/D)
+    uint8_t wsTaskPriority = 0;                  ///< Priorité FreeRTOS active de la tâche WebSocket
+    uint8_t wsHandshakeTaskPriority = 1;         ///< Priorité FreeRTOS configurée pendant le handshake TLS
+    uint8_t wsSteadyTaskPriority = 2;            ///< Priorité FreeRTOS configurée en régime établi (connecté)
+    int8_t loopTaskCore = -1;                    ///< Cœur FreeRTOS de la boucle principale applicative
+    uint8_t loopTaskPriority = 0;                ///< Priorité FreeRTOS de la boucle principale applicative
+    uint32_t lastLoopGapMs = 0;                  ///< Dernier intervalle observé entre deux appels à update() (ms)
+    uint32_t maxLoopGapMs = 0;                   ///< Durée maximale d'interruption apparente de la boucle principale (ms)
+    uint32_t maxLoopGapDuringTlsMs = 0;          ///< Durée maximale d'interruption apparente pendant la connexion TLS (ms)
+    uint32_t lastUpdateDurationUs = 0;           ///< Durée du dernier appel à VoiceKit::update() / VoxCoreVoice::update() (µs)
+    uint32_t maxUpdateDurationUs = 0;            ///< Durée maximale d'un appel à update() (µs)
+    uint32_t lastWifiTickDurationUs = 0;         ///< Durée du dernier appel à WiFiManager::tick() (µs)
+    uint32_t maxWifiTickDurationUs = 0;          ///< Durée maximale d'un appel à WiFiManager::tick() (µs)
+    uint32_t freeInternalHeapDuringTls = 0;      ///< RAM interne libre mesurée pendant/après le handshake TLS (octets)
+    uint32_t minFreeInternalHeapDuringTls = 0;   ///< Minimum historique de RAM interne libre pendant TLS (octets)
+    uint32_t largestInternalBlockDuringTls = 0;  ///< Plus grand bloc mémoire interne disponible pendant TLS (octets)
 };
 
 /**

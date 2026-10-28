@@ -156,6 +156,23 @@ public:
     virtual uint32_t getFirstResponseReceivedMs() const = 0;
     virtual uint32_t getFirstAudioReceivedMs() const = 0;
 
+    // Métriques de réception audio par tour (v0.6.1 — Correction A)
+    // Implémentations par défaut fournies pour préserver la compatibilité des mocks et implémentations existantes
+    virtual void resetTurnRxMetrics() {}
+    virtual uint32_t getTurnDecodedSamples() const { return 0; }
+    virtual uint32_t getPostTurnCompleteBlocks() const { return 0; }
+    virtual uint32_t getPostTurnCompleteSamples() const { return 0; }
+    virtual bool isTurnCompleteReceived() const { return false; }
+
+    // Diagnostics optionnels FreeRTOS & mémoire TLS (v0.6.1 — Correction B)
+    virtual int8_t getWsTaskCore() const { return -1; }
+    virtual uint8_t getWsTaskPriority() const { return 0; }
+    virtual uint8_t getWsHandshakeTaskPriority() const { return 1; }
+    virtual uint8_t getWsSteadyTaskPriority() const { return 2; }
+    virtual uint32_t getFreeInternalHeapDuringTls() const { return 0; }
+    virtual uint32_t getMinFreeInternalHeapDuringTls() const { return 0; }
+    virtual uint32_t getLargestInternalBlockDuringTls() const { return 0; }
+
     // =========================================================================
     // Injection Transport et Traitement de Tests
     // =========================================================================

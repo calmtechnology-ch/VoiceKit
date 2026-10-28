@@ -90,13 +90,29 @@ public:
     void setOnInterrupted(VoidCallback cb) override { _onInterrupted = std::move(cb); }
     void setOnError(ErrorCallback cb) override { _onError = std::move(cb); }
 
-    // Métriques temporelles
+    // Métriques temporelles et audio RX par tour (v0.6.1 — Correction A)
     uint32_t getWsConnectMs() const override { return _wsConnectDurationMs; }
     uint32_t getSetupCompleteMs() const override { return _setupCompleteDurationMs; }
     uint32_t getConnectAttempts() const override { return _connectAttempts; }
-    uint32_t getActivityEndSentMs() const override { return _lastActivityEndSentMs; }
-    uint32_t getFirstResponseReceivedMs() const override { return _firstResponseReceivedMs; }
-    uint32_t getFirstAudioReceivedMs() const override { return _firstAudioReceivedMs; }
+    uint32_t getActivityEndSentMs() const override { return _lastActivityEndSentMs.load(std::memory_order_relaxed); }
+    uint32_t getFirstResponseReceivedMs() const override { return _firstResponseReceivedMs.load(std::memory_order_relaxed); }
+    uint32_t getFirstAudioReceivedMs() const override { return _firstAudioReceivedMs.load(std::memory_order_relaxed); }
+    void resetTurnRxMetrics() override;
+    uint32_t getTurnDecodedSamples() const override { return _pcmSamplesDispatchedTotal.load(std::memory_order_relaxed); }
+    uint32_t getPcmSamplesDispatchedTotal() const { return _pcmSamplesDispatchedTotal.load(std::memory_order_relaxed); }
+    uint32_t getPostTurnCompleteBlocks() const override { return _postTurnCompletePcmBlocks.load(std::memory_order_relaxed); }
+    uint32_t getPostTurnCompleteSamples() const override { return _postTurnCompletePcmSamples.load(std::memory_order_relaxed); }
+    bool isTurnCompleteReceived() const override { return _turnCompleteReceived.load(std::memory_order_acquire); }
+    bool isTurnCompleteBeforeLastPcm() const { return _turnCompleteBeforeLastPcm.load(std::memory_order_acquire); }
+
+    // Diagnostics FreeRTOS & mémoire TLS (v0.6.1 — Correction B)
+    int8_t getWsTaskCore() const override { return _transport ? _transport->getTaskCore() : -1; }
+    uint8_t getWsTaskPriority() const override { return _transport ? _transport->getTaskPriority() : 0; }
+    uint8_t getWsHandshakeTaskPriority() const override { return _transport ? _transport->getHandshakeTaskPriority() : 1; }
+    uint8_t getWsSteadyTaskPriority() const override { return _transport ? _transport->getSteadyTaskPriority() : 2; }
+    uint32_t getFreeInternalHeapDuringTls() const override { return _transport ? _transport->getFreeInternalHeapAtConnect() : 0; }
+    uint32_t getMinFreeInternalHeapDuringTls() const override { return _transport ? _transport->getMinFreeInternalHeapAtConnect() : 0; }
+    uint32_t getLargestInternalBlockDuringTls() const override { return _transport ? _transport->getLargestInternalBlockAtConnect() : 0; }
 
     // Injection transport et simulation de trames pour tests unitaires
     void setTransport(ILiveTransport* transport) override;
@@ -138,16 +154,23 @@ private:
     VoidCallback _onInterrupted;
     ErrorCallback _onError;
 
-    // Métriques
+    // Métriques (thread-safe entre websocket_task et loopTask)
     uint32_t _wsConnectStartTimeMs = 0;
     uint32_t _wsConnectDurationMs = 0;
     uint32_t _setupStartTimeMs = 0;
     uint32_t _setupCompleteDurationMs = 0;
     uint32_t _connectAttempts = 0;
-    uint32_t _lastActivityEndSentMs = 0;
-    uint32_t _firstResponseReceivedMs = 0;
-    uint32_t _firstAudioReceivedMs = 0;
-    bool _waitingForResponse = false;
+    std::atomic<uint32_t> _lastActivityEndSentMs{0};
+    std::atomic<uint32_t> _firstResponseReceivedMs{0};
+    std::atomic<uint32_t> _firstAudioReceivedMs{0};
+    std::atomic<bool> _waitingForResponse{false};
+
+    // Métriques RX par tour (v0.6.1 — Correction A)
+    std::atomic<uint32_t> _pcmSamplesDispatchedTotal{0};
+    std::atomic<bool> _turnCompleteReceived{false};
+    std::atomic<bool> _turnCompleteBeforeLastPcm{false};
+    std::atomic<uint32_t> _postTurnCompletePcmSamples{0};
+    std::atomic<uint32_t> _postTurnCompletePcmBlocks{0};
 
     // Buffer rééchantillonné temporaire pour sendAudioChunk (768 échantillons = 1536 octets)
     std::vector<int16_t> _resampleBuffer;

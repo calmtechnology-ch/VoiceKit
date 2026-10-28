@@ -25,4 +25,13 @@ public:
     virtual void setHandlers(ConnectHandler onConnect, DisconnectHandler onDisconnect, 
                             DataHandler onData, ErrorHandler onError) = 0;
     virtual void tick() {}
+
+    // Diagnostics optionnels FreeRTOS & mémoire TLS (v0.6.1 — Correction B)
+    virtual int8_t getTaskCore() const { return -1; }
+    virtual uint8_t getTaskPriority() const { return 0; }
+    virtual uint8_t getHandshakeTaskPriority() const { return 1; }
+    virtual uint8_t getSteadyTaskPriority() const { return 2; }
+    virtual uint32_t getFreeInternalHeapAtConnect() const { return 0; }
+    virtual uint32_t getMinFreeInternalHeapAtConnect() const { return 0; }
+    virtual uint32_t getLargestInternalBlockAtConnect() const { return 0; }
 };

@@ -64,6 +64,18 @@ public:
     uint32_t getActivityEndSentMs() const override;
     uint32_t getFirstResponseReceivedMs() const override;
     uint32_t getFirstAudioReceivedMs() const override;
+    void resetTurnRxMetrics() override;
+    uint32_t getTurnDecodedSamples() const override;
+    uint32_t getPostTurnCompleteBlocks() const override;
+    uint32_t getPostTurnCompleteSamples() const override;
+    bool isTurnCompleteReceived() const override;
+    int8_t getWsTaskCore() const override;
+    uint8_t getWsTaskPriority() const override;
+    uint8_t getWsHandshakeTaskPriority() const override;
+    uint8_t getWsSteadyTaskPriority() const override;
+    uint32_t getFreeInternalHeapDuringTls() const override;
+    uint32_t getMinFreeInternalHeapDuringTls() const override;
+    uint32_t getLargestInternalBlockDuringTls() const override;
 
     // Injection transport et trames de tests
     void setTransport(ILiveTransport* transport) override;
