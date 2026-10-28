@@ -12,9 +12,10 @@ Cet exemple autonome valide la fondation matérielle et logicielle de détection
    - Une seule copie mémoire (`memcpy` DMA $\to$ slot) dans la tâche audio, zéro copie au dépilage dans `voice.update()`.
 3. **Machine à états complète (`WakeWordManager`)** :
    - `DISABLED` $\to$ `INITIALIZING` $\to$ `ARMED` $\to$ `DETECTED` $\to$ `SUSPENDED` $\to$ `ARMED`.
-4. **Honnêteté de l'état moteur (`IWakeWordEngine`)** :
-   - Vérifie la disponibilité réelle d'Espressif ESP-SR WakeNet10 (`wn10_fr_bonjouresp`).
-   - Sous Arduino-ESP32 2.0.17 (ESP-IDF 4.4.7), signale explicitement que `WAKENET` est indisponible (ESP-SR 2.x exige ESP-IDF $\ge$ 5.0) et bascule sur le moteur déterministe `TEST` en indiquant clairement que la détection est **simulée**.
+4. **Moteur officiel Espressif ESP-SR WakeNet (`IWakeWordEngine` / `WakeNetEngine`)** :
+   - Active par défaut sur ESP32-S3 le modèle acoustique français officiel Espressif **`wn9l_fr_bonjouresp_tts3`** (« **Bonjour ESP** ») avec accélération SIMD Xtensa TIE728 et extraction MFCC/Filterbank matérielle.
+   - Le modèle binaire (`srmodels_bonjouresp.c`, ~292 Ko) est directement embarqué en Flash (`.rodata`), sans nécessiter de téléversement séparé d'une partition `srmodels.bin` (tout en prenant automatiquement en charge une partition Flash `model` si elle est présente).
+   - Un VU-mètre RMS temps réel s'affiche sur l'écran du CoreS3 pour visualiser le niveau microphone pendant la prononciation de **« Bonjour ESP »**, avec reprise automatique (`SUSPENDED` $\to$ `ARMED`) après 2,5 secondes.
 
 ## Sortie Moniteur Série (115200 bauds)
 

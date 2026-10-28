@@ -7,13 +7,26 @@
 #include <functional>
 #include "IWakeWordEngine.h"
 
-#if defined(VOICEKIT_ENABLE_WAKENET) && __has_include(<esp_wn_iface.h>) && __has_include(<esp_wn_models.h>) && __has_include(<model_path.h>)
+#if defined(ESP32) && defined(CONFIG_IDF_TARGET_ESP32S3) && !defined(VOICEKIT_ENABLE_WAKENET)
+#define VOICEKIT_ENABLE_WAKENET 1
+#endif
+
+#if defined(VOICEKIT_ENABLE_WAKENET) && VOICEKIT_ENABLE_WAKENET && __has_include("../esp_sr/include/esp_wn_iface.h")
+#define VOICEKIT_HAS_ESP_SR_WAKENET 1
+#include "../esp_sr/include/esp_wn_iface.h"
+#include "../esp_sr/include/esp_wn_models.h"
+#include "../esp_sr/include/model_path.h"
+#elif defined(VOICEKIT_ENABLE_WAKENET) && VOICEKIT_ENABLE_WAKENET && __has_include(<esp_wn_iface.h>) && __has_include(<esp_wn_models.h>) && __has_include(<model_path.h>)
 #define VOICEKIT_HAS_ESP_SR_WAKENET 1
 #include <esp_wn_iface.h>
 #include <esp_wn_models.h>
 #include <model_path.h>
 #else
 #define VOICEKIT_HAS_ESP_SR_WAKENET 0
+#endif
+
+#if VOICEKIT_HAS_ESP_SR_WAKENET
+extern "C" void voicekit_wakenet_clean(const esp_wn_iface_t *wakenet, model_iface_data_t *model_data);
 #endif
 
 /**
@@ -105,6 +118,12 @@ public:
             return false;
         }
         char* modelNamePtr = esp_srmodel_filter(probeModels, ESP_WN_PREFIX, (char*)_modelName.c_str());
+        if (!modelNamePtr && _modelName == DEFAULT_MODEL_NAME) {
+            modelNamePtr = esp_srmodel_filter(probeModels, ESP_WN_PREFIX, "bonjouresp");
+            if (modelNamePtr) {
+                _modelName = modelNamePtr;
+            }
+        }
         _modelPresent = (modelNamePtr != nullptr);
         if (!_modelPresent) {
             snprintf(_lastError, sizeof(_lastError), "Modele WakeNet '%s' absent de srmodels.bin", _modelName.c_str());
@@ -161,6 +180,9 @@ public:
             return false;
         }
         char* modelNamePtr = esp_srmodel_filter(_models, ESP_WN_PREFIX, (char*)_modelName.c_str());
+        if (!modelNamePtr && _modelName == DEFAULT_MODEL_NAME) {
+            modelNamePtr = esp_srmodel_filter(_models, ESP_WN_PREFIX, "bonjouresp");
+        }
         if (!modelNamePtr) {
             _modelPresent = false;
             snprintf(_lastError, sizeof(_lastError), "Modele WakeNet '%s' absent de srmodels.bin", _modelName.c_str());
@@ -169,6 +191,7 @@ public:
             _initialized = false;
             return false;
         }
+        _modelName = modelNamePtr;
         _modelPresent = true;
         _wakenet = (esp_wn_iface_t*)esp_wn_handle_from_name(modelNamePtr);
         if (!_wakenet) {
@@ -178,7 +201,10 @@ public:
             _initialized = false;
             return false;
         }
-        _modelData = _wakenet->create(modelNamePtr, DET_MODE_90);
+        _modelData = _wakenet->create(modelNamePtr, DET_MODE_95);
+        if (!_modelData) {
+            _modelData = _wakenet->create(modelNamePtr, DET_MODE_90);
+        }
         if (!_modelData) {
             snprintf(_lastError, sizeof(_lastError), "Echec creation instance WakeNet ('%s')", modelNamePtr);
             _wakenet = nullptr;
@@ -186,6 +212,12 @@ public:
             _models = nullptr;
             _initialized = false;
             return false;
+        }
+        if (_wakenet->get_samp_chunksize) {
+            int chunkSz = _wakenet->get_samp_chunksize(_modelData);
+            if (chunkSz > 0) {
+                _modelChunkSamples = (size_t)chunkSz;
+            }
         }
         _lastError[0] = '\0';
         _initialized = true;
@@ -254,6 +286,11 @@ public:
         _accumCount = 0;
         _frames480Produced = 0;
         memset(_accumulator, 0, sizeof(_accumulator));
+#if VOICEKIT_HAS_ESP_SR_WAKENET
+        if (_wakenet && _modelData) {
+            voicekit_wakenet_clean(_wakenet, _modelData);
+        }
+#endif
     }
 
     /**
@@ -302,6 +339,25 @@ public:
         if (!_initialized) {
             return res;
         }
+
+#if VOICEKIT_HAS_ESP_SR_WAKENET
+        if (_wakenet && _modelData && _modelChunkSamples == 512 && sampleCount >= 512) {
+            size_t offset = 0;
+            while (offset + 512 <= sampleCount) {
+                wakenet_state_t state = _wakenet->detect(_modelData, (int16_t*)(samples + offset));
+                offset += 512;
+                if (state == WAKENET_DETECTED) {
+                    res.detected = true;
+                    res.word = _targetWakeWord;
+                    res.confidence = 0.0f;
+                    res.isSimulated = false;
+                    break;
+                }
+            }
+            res.processingTimeUs = micros() - startUs;
+            return res;
+        }
+#endif
 
         feedFrameAdapter(samples, sampleCount, [&](const int16_t* frame480, size_t count) -> bool {
             (void)count;
@@ -371,7 +427,7 @@ public:
 #endif
 
 private:
-    String _modelName;
+    mutable String _modelName;
     String _targetWakeWord;
     bool _initialized = false;
     mutable bool _modelProbed = false;
@@ -387,6 +443,7 @@ private:
     srmodel_list_t* _models = nullptr;
     esp_wn_iface_t* _wakenet = nullptr;
     model_iface_data_t* _modelData = nullptr;
+    size_t _modelChunkSamples = WAKENET_FRAME_SAMPLES;
 #elif !defined(ESP32) && !defined(ARDUINO)
     bool _simCompiledSupport = false;
     bool _simPartitionPresent = false;

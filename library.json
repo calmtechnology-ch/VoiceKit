@@ -44,10 +44,18 @@
     "m5stack/M5Unified": "0.2.23"
   },
   "build": {
+    "extraScript": "extra_script.py",
+    "srcFilter": [
+      "+<*>",
+      "+<core/*>",
+      "+<hal/*>",
+      "+<esp_sr/*>"
+    ],
     "flags": [
       "-std=gnu++17",
       "-DVOXCORE_AUDIO_MODE=2",
-      "-Isrc"
+      "-Isrc",
+      "-Isrc/esp_sr/include"
     ]
   }
 }

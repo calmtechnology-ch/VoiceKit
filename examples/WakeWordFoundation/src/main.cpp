@@ -33,6 +33,27 @@
 
 VoiceKit voice;
 static uint32_t s_lastTouchMs = 0;
+static uint32_t s_lastRmsDrawMs = 0;
+static uint32_t s_detectedSuspendStartMs = 0;
+static bool s_pendingAutoResumeAfterDetection = false;
+static constexpr uint32_t AUTO_RESUME_AFTER_DETECT_MS = 2500;
+
+static void drawLiveRmsMeter() {
+    const WakeWordMetrics& m = voice.getWakeWordMetrics();
+    CoreS3.Display.fillRect(10, 175, 300, 18, TFT_BLACK);
+    CoreS3.Display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    CoreS3.Display.setTextSize(1);
+    CoreS3.Display.setCursor(10, 178);
+    CoreS3.Display.printf("Mic RMS: %4u (Peak: %4u) | Det: %u", m.lastRms, m.peakRms, m.detectionCount);
+
+    int barWidth = (int)(m.lastRms / 15);
+    if (barWidth > 100) barWidth = 100;
+    CoreS3.Display.drawRect(210, 177, 102, 10, TFT_DARKGREY);
+    if (barWidth > 0) {
+        uint16_t barColor = (m.lastRms > 400) ? TFT_GREEN : TFT_CYAN;
+        CoreS3.Display.fillRect(211, 178, barWidth, 8, barColor);
+    }
+}
 
 static void updateSimpleStatusScreen() {
     CoreS3.Display.fillScreen(TFT_BLACK);
@@ -43,17 +64,20 @@ static void updateSimpleStatusScreen() {
 
     CoreS3.Display.setTextColor(TFT_WHITE, TFT_BLACK);
     CoreS3.Display.setTextSize(1);
-    CoreS3.Display.setCursor(10, 40);
+    CoreS3.Display.setCursor(10, 36);
     CoreS3.Display.println("Wake Word Foundation (Offline / No LVGL)");
     CoreS3.Display.println("Audio: CoreS3 ES7210 PCM 16000 Hz / 16-bit");
 
-    CoreS3.Display.setCursor(10, 75);
+    CoreS3.Display.setCursor(10, 68);
     if (voice.isWakeWordSimulated()) {
+        CoreS3.Display.setTextColor(TFT_ORANGE, TFT_BLACK);
         CoreS3.Display.println("Engine: TEST - SIMULATED (NON ACOUSTIC)");
     } else {
-        CoreS3.Display.printf("Engine: %s (REAL)\n", voice.getWakeWordEngineName());
+        CoreS3.Display.setTextColor(TFT_GREEN, TFT_BLACK);
+        CoreS3.Display.printf("Engine: %s (OFFICIEL ESPRESSIF)\n", voice.getWakeWordEngineName());
     }
-    CoreS3.Display.printf("Model  : %s\n", voice.getWakeWordModelName());
+    CoreS3.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    CoreS3.Display.printf("Model : %s (\"Bonjour ESP\")\n", voice.getWakeWordModelName());
 
     WakeWordState st = voice.getWakeWordState();
     uint16_t stateColor = TFT_LIGHTGREY;
@@ -64,26 +88,31 @@ static void updateSimpleStatusScreen() {
 
     CoreS3.Display.setTextColor(stateColor, TFT_BLACK);
     CoreS3.Display.setTextSize(2);
-    CoreS3.Display.setCursor(10, 115);
+    CoreS3.Display.setCursor(10, 105);
     CoreS3.Display.printf("State: %s\n", wakeWordStateToString(st));
 
-    CoreS3.Display.setTextColor(TFT_WHITE, TFT_BLACK);
     CoreS3.Display.setTextSize(1);
-    CoreS3.Display.setCursor(10, 155);
+    CoreS3.Display.setCursor(10, 138);
     if (!voice.getLastDetectedWakeWord().isEmpty()) {
-        CoreS3.Display.printf("Last Detection: %s %s\n",
+        CoreS3.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
+        CoreS3.Display.printf(">>> DETECTE : %s %s <<<\n",
                               voice.getLastDetectedWakeWord().c_str(),
-                              voice.isWakeWordSimulated() ? "[SIMULATED]" : "");
+                              voice.isWakeWordSimulated() ? "[SIMULATED]" : "[ACOUSTIC]");
+    } else if (st == WakeWordState::ARMED && !voice.isWakeWordSimulated()) {
+        CoreS3.Display.setTextColor(TFT_GREENYELLOW, TFT_BLACK);
+        CoreS3.Display.println("Dites : \"Bonjour ESP\" pres du microphone...");
     }
     if (voice.isWakeWordError()) {
         CoreS3.Display.setTextColor(TFT_RED, TFT_BLACK);
         CoreS3.Display.printf("Error: %s\n", voice.getWakeWordLastError().c_str());
     }
 
+    drawLiveRmsMeter();
+
     CoreS3.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    CoreS3.Display.setCursor(10, 200);
+    CoreS3.Display.setCursor(10, 205);
     CoreS3.Display.println("Touch LEFT : Trigger TEST 'Bonjour ESP'");
-    CoreS3.Display.println("Touch RIGHT: Resume ARMED (End of conv)");
+    CoreS3.Display.println("Touch RIGHT: Resume ARMED immediately");
 }
 
 static void printDiagnostics() {
@@ -156,7 +185,11 @@ void setup() {
         Serial.printf("[WAKE] Detection: %s\n", word.c_str());
         if (voice.isWakeWordSimulated()) {
             Serial.println("[WAKE] Notice: Detection SIMULEE (moteur TEST - aucune reconnaissance vocale acoustique)");
+        } else {
+            Serial.println("[WAKE] Detection acoustique officielle Espressif WakeNet reussie ! Reprise automatique dans 2.5 s...");
         }
+        s_detectedSuspendStartMs = millis();
+        s_pendingAutoResumeAfterDetection = true;
     });
 
     voice.onWakeWordError([](const String& err) {
@@ -164,15 +197,15 @@ void setup() {
         updateSimpleStatusScreen();
     });
 
-    // 1. Vérification explicite de la disponibilité du moteur réel Espressif WakeNet10
+    // 1. Vérification explicite de la disponibilité du moteur officiel Espressif WakeNet
     if (voice.getWakeWordManager().isEngineAvailable(WakeWordEngineType::WAKENET)) {
+        voice.setWakeWordProcessingBudgetUs(25000);
         voice.setWakeWordEngine(WakeWordEngineType::WAKENET);
-        Serial.println("[WAKE] Engine: WAKENET (wn10_fr_bonjouresp)");
         voice.enableWakeWord(true);
+        Serial.printf("[WAKE] Engine: WAKENET (%s) — Reconnaissance acoustique officielle active !\n",
+                      voice.getWakeWordModelName());
     } else {
-        // Affichage explicite de l'absence de WakeNet10 dans cet environnement Arduino IDF 4.4
-        Serial.println("[WAKE] WAKENET status: UNAVAILABLE in Arduino-ESP32 2.0.17 / ESP-IDF 4.4.7 (wn10_fr_bonjouresp requires ESP-IDF >= 5.0)");
-        Serial.println("[WAKE] Engine: TEST — SIMULATED");
+        Serial.println("[WAKE] WAKENET status: UNAVAILABLE -> Fallback to TEST — SIMULATED");
         voice.setWakeWordEngine(WakeWordEngineType::TEST);
         voice.enableWakeWord(true);
     }
@@ -252,6 +285,22 @@ void loop() {
                 }
             }
         }
+    }
+
+    // Reprise automatique après affichage de la détection (2.5 s) pour permettre plusieurs essais vocaux successifs
+    if (s_pendingAutoResumeAfterDetection) {
+        if (voice.getWakeWordState() != WakeWordState::SUSPENDED) {
+            s_pendingAutoResumeAfterDetection = false;
+        } else if (millis() - s_detectedSuspendStartMs >= AUTO_RESUME_AFTER_DETECT_MS) {
+            s_pendingAutoResumeAfterDetection = false;
+            voice.resumeWakeWord();
+        }
+    }
+
+    // Rafraîchissement fluide du VU-mètre RMS microphone toutes les 120 ms
+    if (voice.getWakeWordState() == WakeWordState::ARMED && (millis() - s_lastRmsDrawMs >= 120)) {
+        s_lastRmsDrawMs = millis();
+        drawLiveRmsMeter();
     }
 
     delay(5);
