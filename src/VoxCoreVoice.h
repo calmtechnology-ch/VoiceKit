@@ -324,13 +324,22 @@ public:
     const OpenAIRealtimeClient& getOpenAIClient() const { return _openaiClient; }
     LiveSessionController& getSession() { return _session; }
     const LiveSessionController& getSession() const { return _session; }
+    WiFiManager& getWiFiManager() { return _wifi; }
+    const WiFiManager& getWiFiManager() const { return _wifi; }
     IAudioOutput* getAudioOutput() const { return _audioOutput; }
     IAudioInput* getAudioInput() const { return _audioInput; }
 
     /**
-     * @brief Retourne les métriques instrumentées de démarrage et de connexion (v0.5.2).
+     * @brief Retourne les métriques instrumentées de démarrage et de connexion (v0.5.2 / v0.6.1).
      */
     const ConnectionMetrics& getConnectionMetrics() const { return _connectionMetrics; }
+
+    // Diagnostics directs de boucle et de performances (v0.6.1 — Corrections B & C)
+    uint32_t getLastUpdateDurationUs() const { return _connectionMetrics.lastUpdateDurationUs; }
+    uint32_t getMaxUpdateDurationUs() const { return _connectionMetrics.maxUpdateDurationUs; }
+    uint32_t getLastLoopGapMs() const { return _connectionMetrics.lastLoopGapMs; }
+    uint32_t getMaxLoopGapMs() const { return _connectionMetrics.maxLoopGapMs; }
+    uint32_t getMaxLoopGapDuringTlsMs() const { return _connectionMetrics.maxLoopGapDuringTlsMs; }
 
     /**
      * @brief Retourne les métriques instrumentées de latence vocale (v0.5.3).
@@ -361,6 +370,7 @@ private:
     VoiceLatencyMetrics _latencyMetrics;
     uint32_t _initStartTimeMs = 0;
     uint32_t _totalReadyMs = 0;
+    uint32_t _lastUpdateCallMs = 0;
 
     std::unique_ptr<M5AudioOutput> _internalAudioOutput;
     IAudioOutput* _audioOutput = nullptr;

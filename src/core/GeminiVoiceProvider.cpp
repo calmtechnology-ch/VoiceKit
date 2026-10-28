@@ -176,6 +176,54 @@ uint32_t GeminiVoiceProvider::getFirstAudioReceivedMs() const {
     return _client ? _client->getFirstAudioReceivedMs() : 0;
 }
 
+void GeminiVoiceProvider::resetTurnRxMetrics() {
+    if (_client) _client->resetTurnRxMetrics();
+}
+
+uint32_t GeminiVoiceProvider::getTurnDecodedSamples() const {
+    return _client ? _client->getTurnDecodedSamples() : 0;
+}
+
+uint32_t GeminiVoiceProvider::getPostTurnCompleteBlocks() const {
+    return _client ? _client->getPostTurnCompleteBlocks() : 0;
+}
+
+uint32_t GeminiVoiceProvider::getPostTurnCompleteSamples() const {
+    return _client ? _client->getPostTurnCompletePcmSamples() : 0;
+}
+
+bool GeminiVoiceProvider::isTurnCompleteReceived() const {
+    return _client ? _client->isTurnCompleteReceived() : false;
+}
+
+int8_t GeminiVoiceProvider::getWsTaskCore() const {
+    return _client ? _client->getWsTaskCore() : -1;
+}
+
+uint8_t GeminiVoiceProvider::getWsTaskPriority() const {
+    return _client ? _client->getWsTaskPriority() : 0;
+}
+
+uint8_t GeminiVoiceProvider::getWsHandshakeTaskPriority() const {
+    return _client ? _client->getWsHandshakeTaskPriority() : 1;
+}
+
+uint8_t GeminiVoiceProvider::getWsSteadyTaskPriority() const {
+    return _client ? _client->getWsSteadyTaskPriority() : 2;
+}
+
+uint32_t GeminiVoiceProvider::getFreeInternalHeapDuringTls() const {
+    return _client ? _client->getFreeInternalHeapDuringTls() : 0;
+}
+
+uint32_t GeminiVoiceProvider::getMinFreeInternalHeapDuringTls() const {
+    return _client ? _client->getMinFreeInternalHeapDuringTls() : 0;
+}
+
+uint32_t GeminiVoiceProvider::getLargestInternalBlockDuringTls() const {
+    return _client ? _client->getLargestInternalBlockDuringTls() : 0;
+}
+
 void GeminiVoiceProvider::setTransport(ILiveTransport* transport) {
     if (_client) _client->setTransport(transport);
 }

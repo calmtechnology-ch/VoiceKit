@@ -1,4 +1,4 @@
-# VoiceKit v0.6.0 — Architecture Multi-Fournisseurs (Gemini Live & OpenAI Realtime)
+# VoiceKit v0.6.1 — Architecture Multi-Fournisseurs (Gemini Live & OpenAI Realtime)
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -9,14 +9,18 @@ Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TT
 
 Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)** supportant à la fois **Google Gemini Live** (moteur par défaut, 100% rétrocompatible) et **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`), construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
 
-La version **v0.6.0** fait évoluer VoiceKit vers un framework vocal universel :
+La version **v0.6.1** consolide la stabilité temps réel de l'architecture multi-fournisseurs `v0.6.0` :
+- **Correctifs de Stabilité Temps Réel (v0.6.1)** :
+  - **Correction A (Métriques PCM Multi-Tours)** : Réinitialisation polymorphe des métriques audio RX via `IVoiceProvider` (`resetTurnRxMetrics`, `getTurnDecodedSamples`, `getPostTurnCompleteBlocks`), éliminant les fausses alertes d'ordre après `turnComplete` à partir du 2ᵉ tour tout en préservant la détection stricte des véritables blocs tardifs.
+  - **Correction B (Ordonnancement FreeRTOS TLS)** : Ajustement de la priorité de `websocket_task` pendant le handshake mbedTLS (`prio = 1`, puis `2` une fois connecté) pour supprimer la préemption prolongée (~1,55 s) de `loopTask` (LVGL/tactile) et ajout de l'instrumentation complète TLS/FreeRTOS/RAM interne.
+  - **Correction C (Wi-Fi FastConnect Non-Bloquant)** : Désactivation des écritures NVS synchrones redondantes (`WiFi.persistent(false)`) et déport des opérations de repli/reconnexion Wi-Fi sur une tâche ouvrière unique persistante (`vk_wifi_wkr`), éliminant le blocage de ~343 ms dans `WiFiManager::tick()` / `voice.update()`.
 - **Architecture Multi-Fournisseurs (`IVoiceProvider`)** : Interface pure unifiée pour l'authentification, la négociation de session, le streaming audio bidirectionnel, les transcriptions STT/TTS et les interruptions STOP.
 - **Intégration Native OpenAI Realtime** : Client WebSocket TLS direct ESP32-S3 (`OpenAIRealtimeClient`) avec support du modèle `gpt-realtime-2.1-mini`, authentification Bearer, négociation `session.update`, streaming PCM 24 kHz Base64 et transcriptions Whisper intégrées.
 - **Sélection par Configuration Zéro-Code** : Bascule instantanée entre Gemini et OpenAI par simple configuration (`config.provider = VoiceProviderType::OPENAI;`). Aucune modification requise dans le code métier de l'application !
 - **Rééchantillonneur Dédié 16 kHz $\to$ 24 kHz (`AudioResampler`)** : Algorithme linéaire ultra-rapide en virgule fixe entière (512 in $\to$ 768 out en moins de 15 µs sur Core 1), n'impactant aucunement la tâche audio critique.
 - **Sanctuaire Audio VoxCore Intact** : Conservation intégrale de la tâche FreeRTOS Mode 2, du buffer circulaire PSRAM 120 000 échantillons (~5 s), des buffers DMA et du protocole de vidage exact sans coupure de la syllabe finale (*« alpha tango terminé »*).
 - **Nouvel Exemple `OpenAIConversation`** : Démonstration headless complète de conversation vocale bidirectionnelle en français avec OpenAI Realtime.
-- **Validation Exhaustive & Zéro Régression** : **1 047 tests unitaires réussis avec 0 échec** (79 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
+- **Validation Exhaustive & Zéro Régression** : **1 227 tests unitaires réussis avec 0 échec** (82 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
 
 ---
 
@@ -135,8 +139,8 @@ VoiceKit v0.6.0 introduit une architecture ouverte découplée reposant sur l'in
 
 ```text
 VoiceKit/
-├── library.json                 # Manifeste PlatformIO (v0.6.0)
-├── library.properties           # Manifeste Arduino IDE (v0.6.0)
+├── library.json                 # Manifeste PlatformIO (v0.6.1)
+├── library.properties           # Manifeste Arduino IDE (v0.6.1)
 ├── LICENSE                      # Licence MIT
 ├── README.md                    # Documentation complète
 ├── CHANGELOG.md                 # Historique des versions
@@ -183,7 +187,7 @@ VoiceKit/
 │   └── MinimalTTS_Arduino/      # Exemple autonome Arduino IDE (.ino)
 └── tests/
     ├── run_tests.bat            # Lanceur des tests automatisés MinGW
-    └── test_voicekit_all.cpp    # 79 suites de tests unitaires (1 047 validations, 0 échec)
+    └── test_voicekit_all.cpp    # 82 suites de tests unitaires (1 227 validations, 0 échec)
 ```
 
 ---
@@ -217,7 +221,7 @@ build_flags =
 lib_deps =
     m5stack/M5CoreS3@1.0.0
     m5stack/M5Unified@0.2.23
-    https://github.com/Philippe-AD/VoiceKit.git#v0.6.0
+    https://github.com/Philippe-AD/VoiceKit.git#v0.6.1
 ```
 
 > **Note de partitionnement** : Le firmware VoiceKit et ses dépendances occupent environ 1,15 à 1,5 Mo. Utilisez une table de partitions comme `no_ota.csv` (fournie dans le dépôt) offrant au moins 2 à 3 Mo pour la partition application (`app0`).
@@ -287,12 +291,12 @@ Cette méthode permet d'utiliser VoiceKit avec l'environnement classique Arduino
 #### Prérequis
 - Arduino IDE 2.3+ avec le paquet de cartes **esp32** par Espressif (version 2.0.14+ ou 3.x).
 - Télécharger l'archive ZIP de VoiceKit depuis GitHub :  
-  `https://github.com/Philippe-AD/VoiceKit/archive/refs/tags/v0.6.0.zip`
+  `https://github.com/Philippe-AD/VoiceKit/archive/refs/tags/v0.6.1.zip`
 
 #### Étapes d'installation
 1. Ouvrez Arduino IDE.
 2. Menu : **Croquis** → **Inclure une bibliothèque** → **Ajouter la bibliothèque .ZIP...**
-3. Sélectionnez le fichier `VoiceKit-0.6.0.zip` téléchargé.
+3. Sélectionnez le fichier `VoiceKit-0.6.1.zip` téléchargé.
 4. Ouvrez le Gestionnaire de bibliothèques (**Outils** → **Gérer les bibliothèques**) et installez :
    - `M5Unified` (version >= 0.2.23)
    - `M5CoreS3` (version >= 1.0.0)
@@ -545,12 +549,12 @@ La bibliothèque fournit 10 exemples complets prêts à l'emploi :
 
 ## 10. Garanties de Non-Régression & Sécurité
 
-La version **v0.6.0** garantit une non-régression absolue sur l'ensemble des modules préexistants :
+La version **v0.6.1** garantit une non-régression absolue sur l'ensemble des modules préexistants :
 - **Intégrité absolue du moteur audio VoxCore** : Aucune réduction arbitraire du buffer circulaire PSRAM (120 000 échantillons @ 24 kHz) ni des marges DMA (160 ms). Préservation intégrale de la tâche FreeRTOS Mode 2 et du vidage exact sans coupure de syllabe.
 - **Validation Repère Acoustique (« alpha tango terminé »)** : Vérification rigoureuse que les derniers mots émis (par Gemini Live comme par OpenAI) sont intégralement restitués sans troncature, y compris lors de la réception de `response.done`.
 - **Rééchantillonnage 16k $\to$ 24k en arithmétique entière** : Exécution en < 15 µs sur ESP32-S3 Core 1 sans blocage de la boucle de capture audio.
 - **Zéro identifiant en clair** : Aucun secret, SSID Wi-Fi ni clé API n'est publié dans le dépôt. Masquage systématique des clés dans les logs.
-- **Suite de tests automatisés** : 79 suites de tests unitaires et 1 047 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
+- **Suite de tests automatisés** : 82 suites de tests unitaires et 1 227 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
 - **Compilations d'exemples validées à 100%** : Tous les exemples cibles PlatformIO compilent sans aucune erreur.
 
-Consultez le [Rapport de Livraison v0.6.0](RAPPORT_LIVRAISON_v0.6.0.md) pour les détails d'architecture, les métriques exposées et les mesures comparatives.
+Consultez le [Rapport de Livraison v0.6.1](RAPPORT_LIVRAISON_v0.6.1.md) (ainsi que le [Rapport de Livraison v0.6.0](RAPPORT_LIVRAISON_v0.6.0.md)) pour les détails d'architecture, les métriques exposées et les mesures comparatives.

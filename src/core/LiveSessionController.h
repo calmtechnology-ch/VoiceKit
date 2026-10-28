@@ -89,6 +89,10 @@ public:
     bool hasBufferOverflowAnomaly() const { return _hasBufferOverflowAnomaly; }
     bool hasPlaybackHardwareError() const { return _hasPlaybackHardwareError; }
     uint32_t getDroppedSamplesCount() const { return _player ? _player->getOverflowDroppedSamples() : 0; }
+    uint32_t getTurnDecodedSamples() const;
+    uint32_t getPostTurnCompleteBlocks() const;
+    uint32_t getPostTurnCompleteSamples() const;
+    uint32_t getRejectedSamplesBeforePlayer() const { return _audioSamplesRejectedBeforePlayerTotal; }
     uint8_t getReconnectAttempts() const { return _reconnectAttempts; }
     uint32_t getReconnectCount() const { return _reconnectCount; }
 
@@ -115,6 +119,7 @@ public:
 
 private:
     void appendTranscriptionFragment(String& target, const String& fragment, size_t maxLength = 512);
+    void resetTurnSessionMetrics();
 
     IVoiceProvider* _provider = nullptr;
     GeminiLiveClient* _legacyClient = nullptr;

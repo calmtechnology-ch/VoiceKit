@@ -7,6 +7,37 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.1] - 2026-10-28 (Correctif de Stabilité — Gemini Live, WebSocket TLS et Wi-Fi FastConnect)
+
+### Correction A — Réinitialisation Polymorphe des Métriques PCM entre Tours (`IVoiceProvider` & `LiveSessionController`)
+- **Indépendance de `_legacyClient` et Support Multi-Fournisseurs** :
+  - Correction de l'anomalie où `VoxCoreVoice::begin()` initialisait `LiveSessionController` via `IVoiceProvider*` en laissant `_legacyClient` à `nullptr`, ce qui empêchait la réinitialisation de `_turnCompleteReceived` entre deux tours et provoquait de fausses alertes `[LiveClient] ALERTE ORDRE: Bloc PCM recu APRES turnComplete` ainsi qu'un bilan `0 ech decodes` à partir du 2ᵉ tour.
+  - Extension rétrocompatible de `IVoiceProvider` avec implémentations virtuelles par défaut : `resetTurnRxMetrics()`, `getTurnDecodedSamples()`, `getPostTurnCompleteBlocks()`, `getPostTurnCompleteSamples()`, `isTurnCompleteReceived()`.
+  - Implémentation complète dans `GeminiVoiceProvider`, `GeminiLiveClient` et `OpenAIRealtimeClient`.
+  - Conversion des compteurs de réception par tour en variables `std::atomic` pour éliminer tout risque de concurrence entre la tâche WebSocket (`websocket_task`) et la boucle principale (`loopTask`).
+  - Réinitialisation déterministe au début de chaque tour (`sendTextMessage`, `beginAudioTurn`, `sendActivityStart`, `connect`) tout en conservant la détection stricte des véritables blocs PCM tardifs arrivant après `turnComplete`.
+
+### Correction B — Ordonnancement FreeRTOS pendant le Handshake TLS (`EspWebSocketTransport`)
+- **Suppression de la Famine CPU de `loopTask` durant mbedTLS** :
+  - Analyse de l'API `esp_websocket_client_config_t` de l'ESP-IDF v4.4 (`framework-arduinoespressif32`) : absence de champ `task_core` (`websocket_task` créée avec `tskNO_AFFINITY`). Avec `cfg.task_prio = 5`, la tâche WebSocket préemptait `loopTask` (Cœur 1, priorité 1) pendant toute la durée du calcul cryptographique mbedTLS (~1,55 s d'interruption de la boucle applicative LVGL/tactile).
+  - Démarrage de `websocket_task` à la priorité `DEFAULT_HANDSHAKE_TASK_PRIO = 1` (égale à `loopTask` priorité 1) pendant la connexion TCP et le handshake TLS : l'ordonnanceur FreeRTOS SMP exécute le handshake sur le Cœur 0 lorsqu'il est disponible et partage le Cœur 1 en Round-Robin (1 ms) avec `loopTask` sans jamais bloquer l'interface.
+  - Relèvement automatique de la priorité à `DEFAULT_STEADY_TASK_PRIO = 2` dès réception de `WEBSOCKET_EVENT_CONNECTED` (après le handshake TLS) pour garantir une réception réactive des trames PCM 24 kHz (< `AudioPlayerTask` priorité 4), et retour automatique à `1` sur `WEBSOCKET_EVENT_DISCONNECTED` avant toute reconnexion TLS.
+- **Instrumentation Non-Bloquante TLS / FreeRTOS / Mémoire (`ConnectionMetrics`)** :
+  - Ajout des diagnostics de cœur et priorité (`wsTaskCore`, `wsTaskPriority`, `wsHandshakeTaskPriority`, `wsSteadyTaskPriority`, `loopTaskCore`, `loopTaskPriority`), des intervalles d'interruption apparente de la boucle principale (`lastLoopGapMs`, `maxLoopGapMs`, `maxLoopGapDuringTlsMs`), et de la mémoire interne libre pendant TLS (`freeInternalHeapDuringTls`, `minFreeInternalHeapDuringTls`, `largestInternalBlockDuringTls`).
+
+### Correction C — Repli Wi-Fi FastConnect et Reconnexion Asynchrones (`WiFiManager`)
+- **Élimination du Blocage Synchrone (~343 ms) sur la Tâche Principale** :
+  - Désactivation de l'écriture flash NVS synchrone redondante du pilote Wi-Fi via `WiFi.persistent(false)` dans `WiFiManager::begin()`, et suppression des réécritures NVS `"vk_wifi"` lorsque le BSSID et le canal n'ont pas changé.
+  - Création d'une machine à états explicite (`WiFiManagerState`) et d'une tâche ouvrière FreeRTOS unique persistante (`vk_wifi_wkr`, Cœur 0, priorité 1, file de commandes non-bloquante) chargée d'exécuter en arrière-plan les opérations Wi-Fi bloquantes (`fallbackToNormalScan`, `WiFi.reconnect`, sauvegarde NVS `"vk_wifi"`), réduisant la durée de `WiFiManager::tick()` sur `loopTask` de ~343 ms à < 1 ms.
+  - Libération propre des ressources (`end()` et `~WiFiManager()`) et protection par drapeau atomique `_asyncOpInProgress` contre tout appel Wi-Fi concurrent.
+  - Mesure séparée des durées d'exécution de `WiFiManager::tick()` (`lastWifiTickDurationUs`, `maxWifiTickDurationUs`) et de `VoiceKit::update()` / `VoxCoreVoice::update()` (`lastUpdateDurationUs`, `maxUpdateDurationUs`).
+
+### Validation & Non-Régression
+- **Sanctuaire Audio VoxCore Intact** : Zéro modification des tampons PSRAM (120 000 échantillons @ 24 kHz), des 4 buffers DMA (160 ms), de la tâche `AudioPlayerTask` Mode 2 ni de la politique de vidange matérielle complète.
+- **3 Nouvelles Suites de Tests Unitaires (Suites 80 à 82)** : **1 227 validations réussies avec 0 échec**.
+
+---
+
 ## [0.6.0] - 2026-10-26 (Multi-Fournisseurs — Intégration OpenAI Realtime & Préservation VoxCore)
 
 ### Architecture Multi-Fournisseurs (`IVoiceProvider`)

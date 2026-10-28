@@ -126,25 +126,38 @@ public:
     uint32_t getSendRefusedCount() const { return _sendRefusedCount; }
     uint32_t getAudioChunksSentCount() const { return _audioChunksSentCount; }
 
-    // Instrumentation audio RX par tour (v0.2.1.3 - Correction A)
+    // Instrumentation audio RX par tour (v0.2.1.3 / v0.6.1 - Correction A)
     void resetTurnRxMetrics();
-    uint32_t getAudioWsMessagesCount() const { return _audioWsMessagesCount; }
-    uint32_t getB64BlocksDecodedCount() const { return _b64BlocksDecodedCount; }
-    uint32_t getB64DecodeFailedCount() const { return _b64DecodeFailedCount; }
-    uint32_t getPcmBlocksInvalidCount() const { return _pcmBlocksInvalidCount; }
-    uint32_t getPcmBytesDecodedTotal() const { return _pcmBytesDecodedTotal; }
-    uint32_t getPcmSamplesDispatchedTotal() const { return _pcmSamplesDispatchedTotal; }
-    uint32_t getLastPcmPacketTimeMs() const { return _lastPcmPacketTimeMs; }
-    uint32_t getTurnCompleteTimeMs() const { return _turnCompleteTimeMs; }
-    bool isTurnCompleteReceived() const { return _turnCompleteReceived; }
-    bool isTurnCompleteBeforeLastPcm() const { return _turnCompleteBeforeLastPcm; }
-    uint32_t getPostTurnCompletePcmSamples() const { return _postTurnCompletePcmSamples; }
-    uint32_t getTurnAudioPartsCount() const { return _turnAudioPartsCount; }
+    uint32_t getAudioWsMessagesCount() const { return _audioWsMessagesCount.load(std::memory_order_relaxed); }
+    uint32_t getB64BlocksDecodedCount() const { return _b64BlocksDecodedCount.load(std::memory_order_relaxed); }
+    uint32_t getB64DecodeFailedCount() const { return _b64DecodeFailedCount.load(std::memory_order_relaxed); }
+    uint32_t getPcmBlocksInvalidCount() const { return _pcmBlocksInvalidCount.load(std::memory_order_relaxed); }
+    uint32_t getPcmBytesDecodedTotal() const { return _pcmBytesDecodedTotal.load(std::memory_order_relaxed); }
+    uint32_t getPcmSamplesDispatchedTotal() const { return _pcmSamplesDispatchedTotal.load(std::memory_order_relaxed); }
+    uint32_t getTurnDecodedSamples() const { return _pcmSamplesDispatchedTotal.load(std::memory_order_relaxed); }
+    uint32_t getLastPcmPacketTimeMs() const { return _lastPcmPacketTimeMs.load(std::memory_order_relaxed); }
+    uint32_t getTurnCompleteTimeMs() const { return _turnCompleteTimeMs.load(std::memory_order_relaxed); }
+    bool isTurnCompleteReceived() const { return _turnCompleteReceived.load(std::memory_order_acquire); }
+    bool isTurnCompleteBeforeLastPcm() const { return _turnCompleteBeforeLastPcm.load(std::memory_order_acquire); }
+    uint32_t getPostTurnCompletePcmSamples() const { return _postTurnCompletePcmSamples.load(std::memory_order_relaxed); }
+    uint32_t getPostTurnCompleteSamples() const { return _postTurnCompletePcmSamples.load(std::memory_order_relaxed); }
+    uint32_t getPostTurnCompleteBlocks() const { return _postTurnCompletePcmBlocks.load(std::memory_order_relaxed); }
+    uint32_t getPostTurnCompletePcmBlocks() const { return _postTurnCompletePcmBlocks.load(std::memory_order_relaxed); }
+    uint32_t getTurnAudioPartsCount() const { return _turnAudioPartsCount.load(std::memory_order_relaxed); }
 
     // Instrumentation temps de démarrage Gemini Live (v0.5.2)
     uint32_t getWsConnectMs() const { return _wsConnectDurationMs; }
     uint32_t getSetupCompleteMs() const { return _setupCompleteDurationMs; }
     uint32_t getConnectAttempts() const { return _connectAttempts; }
+
+    // Diagnostics FreeRTOS & mémoire TLS (v0.6.1 — Correction B)
+    int8_t getWsTaskCore() const { return _transport ? _transport->getTaskCore() : -1; }
+    uint8_t getWsTaskPriority() const { return _transport ? _transport->getTaskPriority() : 0; }
+    uint8_t getWsHandshakeTaskPriority() const { return _transport ? _transport->getHandshakeTaskPriority() : 1; }
+    uint8_t getWsSteadyTaskPriority() const { return _transport ? _transport->getSteadyTaskPriority() : 2; }
+    uint32_t getFreeInternalHeapDuringTls() const { return _transport ? _transport->getFreeInternalHeapAtConnect() : 0; }
+    uint32_t getMinFreeInternalHeapDuringTls() const { return _transport ? _transport->getMinFreeInternalHeapAtConnect() : 0; }
+    uint32_t getLargestInternalBlockDuringTls() const { return _transport ? _transport->getLargestInternalBlockAtConnect() : 0; }
 
     // Instrumentation latence vocale (v0.5.3)
     uint32_t getActivityEndSentMs() const { return _lastActivityEndSentMs; }
@@ -221,20 +234,20 @@ private:
     uint32_t _sendRefusedCount = 0;
     uint32_t _audioChunksSentCount = 0;
 
-    // Métriques d'instrumentation audio RX (v0.2.1.3 - Correction A)
-    uint32_t _audioWsMessagesCount = 0;
-    uint32_t _b64BlocksDecodedCount = 0;
-    uint32_t _b64DecodeFailedCount = 0;
-    uint32_t _pcmBlocksInvalidCount = 0;
-    uint32_t _pcmBytesDecodedTotal = 0;
-    uint32_t _pcmSamplesDispatchedTotal = 0;
-    uint32_t _lastPcmPacketTimeMs = 0;
-    uint32_t _turnCompleteTimeMs = 0;
-    bool _turnCompleteReceived = false;
-    bool _turnCompleteBeforeLastPcm = false;
-    uint32_t _postTurnCompletePcmSamples = 0;
-    uint32_t _postTurnCompletePcmBlocks = 0;
-    uint32_t _turnAudioPartsCount = 0;
+    // Métriques d'instrumentation audio RX (v0.2.1.3 / v0.6.1 - Correction A, thread-safe entre websocket_task et loopTask)
+    std::atomic<uint32_t> _audioWsMessagesCount{0};
+    std::atomic<uint32_t> _b64BlocksDecodedCount{0};
+    std::atomic<uint32_t> _b64DecodeFailedCount{0};
+    std::atomic<uint32_t> _pcmBlocksInvalidCount{0};
+    std::atomic<uint32_t> _pcmBytesDecodedTotal{0};
+    std::atomic<uint32_t> _pcmSamplesDispatchedTotal{0};
+    std::atomic<uint32_t> _lastPcmPacketTimeMs{0};
+    std::atomic<uint32_t> _turnCompleteTimeMs{0};
+    std::atomic<bool> _turnCompleteReceived{false};
+    std::atomic<bool> _turnCompleteBeforeLastPcm{false};
+    std::atomic<uint32_t> _postTurnCompletePcmSamples{0};
+    std::atomic<uint32_t> _postTurnCompletePcmBlocks{0};
+    std::atomic<uint32_t> _turnAudioPartsCount{0};
 
     // Instrumentation temps de démarrage Gemini Live (v0.5.2)
     uint32_t _wsConnectStartTimeMs = 0;
@@ -244,8 +257,8 @@ private:
     uint32_t _connectAttempts = 0;
 
     // Instrumentation latence vocale (v0.5.3)
-    uint32_t _lastActivityEndSentMs = 0;
-    uint32_t _firstResponseReceivedMs = 0;
-    uint32_t _firstAudioReceivedMs = 0;
-    bool _waitingForResponse = false;
+    std::atomic<uint32_t> _lastActivityEndSentMs{0};
+    std::atomic<uint32_t> _firstResponseReceivedMs{0};
+    std::atomic<uint32_t> _firstAudioReceivedMs{0};
+    std::atomic<bool> _waitingForResponse{false};
 };

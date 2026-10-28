@@ -2,6 +2,12 @@
 #include <WiFi.h>
 #include <time.h>
 
+#if defined(ESP32) || defined(ARDUINO)
+#include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#endif
+
 VoxCoreVoice::VoxCoreVoice() {
     _geminiProvider.setClient(&_client);
     _activeProvider = &_geminiProvider;
@@ -50,6 +56,29 @@ void VoxCoreVoice::updateConnectionMetrics() {
     _connectionMetrics.channel = _wifi.getChannel();
     strncpy(_connectionMetrics.bssidStr, _wifi.getBSSID(), sizeof(_connectionMetrics.bssidStr) - 1);
     _connectionMetrics.bssidStr[sizeof(_connectionMetrics.bssidStr) - 1] = '\0';
+
+    // Diagnostics FreeRTOS, TLS et mémoire interne (v0.6.1 — Corrections B & C)
+    if (_activeProvider) {
+        _connectionMetrics.wsTaskCore = _activeProvider->getWsTaskCore();
+        _connectionMetrics.wsTaskPriority = _activeProvider->getWsTaskPriority();
+        _connectionMetrics.wsHandshakeTaskPriority = _activeProvider->getWsHandshakeTaskPriority();
+        _connectionMetrics.wsSteadyTaskPriority = _activeProvider->getWsSteadyTaskPriority();
+        uint32_t provFreeInt = _activeProvider->getFreeInternalHeapDuringTls();
+        uint32_t provMinInt = _activeProvider->getMinFreeInternalHeapDuringTls();
+        uint32_t provLargestInt = _activeProvider->getLargestInternalBlockDuringTls();
+        if (provFreeInt > 0 && (_connectionMetrics.freeInternalHeapDuringTls == 0 || provFreeInt < _connectionMetrics.freeInternalHeapDuringTls)) {
+            _connectionMetrics.freeInternalHeapDuringTls = provFreeInt;
+        }
+        if (provMinInt > 0) {
+            _connectionMetrics.minFreeInternalHeapDuringTls = provMinInt;
+        }
+        if (provLargestInt > 0 && (_connectionMetrics.largestInternalBlockDuringTls == 0 || provLargestInt < _connectionMetrics.largestInternalBlockDuringTls)) {
+            _connectionMetrics.largestInternalBlockDuringTls = provLargestInt;
+        }
+    }
+    _connectionMetrics.lastWifiTickDurationUs = _wifi.getLastTickDurationUs();
+    _connectionMetrics.maxWifiTickDurationUs = _wifi.getMaxTickDurationUs();
+
     if (_totalReadyMs == 0 && _initStartTimeMs > 0) {
         _totalReadyMs = millis() - _initStartTimeMs;
         _connectionMetrics.totalReadyMs = _totalReadyMs;
@@ -83,11 +112,19 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _lastError = "";
     _initStartTimeMs = millis();
     _totalReadyMs = 0;
+    _lastUpdateCallMs = 0;
     _connectionMetrics = ConnectionMetrics();
     _connectionMetrics.fastConnectEnabled = _config.enableFastConnect;
+#if defined(ESP32) || defined(ARDUINO)
+    _connectionMetrics.loopTaskCore = (int8_t)xPortGetCoreID();
+    _connectionMetrics.loopTaskPriority = (uint8_t)uxTaskPriorityGet(NULL);
+#else
+    _connectionMetrics.loopTaskCore = 1;
+    _connectionMetrics.loopTaskPriority = 1;
+#endif
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.6.0 — Multi-Fournisseurs IA       ");
+    Serial.println("  VoxCore VoiceKit v0.6.1 — Multi-Fournisseurs IA       ");
     Serial.printf("  Fournisseur : %s | Mode Audio : %s | FastConnect : %s\n",
                   (_config.provider == VoiceProviderType::OPENAI) ? "OPENAI REALTIME" : "GEMINI LIVE",
                   (LiveAudioPlayer::getCompiledAudioMode() == 1) ? "MODE 1 (REACTIVE_CALLBACK)" : "MODE 2 (DEDICATED_AUDIO_TASK)",
@@ -401,11 +438,48 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
 }
 
 void VoxCoreVoice::update() {
+    const uint32_t updateStartUs = micros();
     const uint32_t now = millis();
+
+#if defined(ESP32) || defined(ARDUINO)
+    _connectionMetrics.loopTaskCore = (int8_t)xPortGetCoreID();
+    _connectionMetrics.loopTaskPriority = (uint8_t)uxTaskPriorityGet(NULL);
+#endif
+
+    // Instrumentation des intervalles entre appels applicatifs et pendant le handshake TLS (v0.6.1 — Correction B)
+    if (_lastUpdateCallMs > 0 && now >= _lastUpdateCallMs) {
+        uint32_t gapMs = now - _lastUpdateCallMs;
+        _connectionMetrics.lastLoopGapMs = gapMs;
+        if (gapMs > _connectionMetrics.maxLoopGapMs) {
+            _connectionMetrics.maxLoopGapMs = gapMs;
+        }
+        if (_state == VoiceState::CONNECTING_SERVICE ||
+            _session.getState() == LiveSessionState::CONNECTING ||
+            _session.getState() == LiveSessionState::RECONNECTING) {
+            if (gapMs > _connectionMetrics.maxLoopGapDuringTlsMs) {
+                _connectionMetrics.maxLoopGapDuringTlsMs = gapMs;
+            }
+#if defined(ESP32) || defined(ARDUINO)
+            uint32_t freeInt = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            uint32_t minFreeInt = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            uint32_t largestInt = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            if (_connectionMetrics.freeInternalHeapDuringTls == 0 || freeInt < _connectionMetrics.freeInternalHeapDuringTls) {
+                _connectionMetrics.freeInternalHeapDuringTls = freeInt;
+            }
+            _connectionMetrics.minFreeInternalHeapDuringTls = minFreeInt;
+            if (_connectionMetrics.largestInternalBlockDuringTls == 0 || largestInt < _connectionMetrics.largestInternalBlockDuringTls) {
+                _connectionMetrics.largestInternalBlockDuringTls = largestInt;
+            }
+#endif
+        }
+    }
+    _lastUpdateCallMs = now;
 
     // 1. Mise à jour réseau Wi-Fi / SNTP si en mode MANAGED_WIFI
     if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
         _wifi.tick();
+        _connectionMetrics.lastWifiTickDurationUs = _wifi.getLastTickDurationUs();
+        _connectionMetrics.maxWifiTickDurationUs = _wifi.getMaxTickDurationUs();
         if (_wifi.isConnected() && _wifi.isTimeSynced()) {
             if (_state == VoiceState::CONNECTING_WIFI || _state == VoiceState::IDLE || _state == VoiceState::DISCONNECTED || _state == VoiceState::ERROR_STATE) {
                 if ((!_activeProvider || !_activeProvider->isConnected()) && (_session.getState() == LiveSessionState::DISCONNECTED || _session.getState() == LiveSessionState::ERROR)) {
@@ -528,6 +602,12 @@ void VoxCoreVoice::update() {
             setState(VoiceState::ERROR_STATE);
             if (_onError) _onError(_lastError);
         }
+    }
+
+    const uint32_t updateDurUs = micros() - updateStartUs;
+    _connectionMetrics.lastUpdateDurationUs = updateDurUs;
+    if (updateDurUs > _connectionMetrics.maxUpdateDurationUs) {
+        _connectionMetrics.maxUpdateDurationUs = updateDurUs;
     }
 }
 
