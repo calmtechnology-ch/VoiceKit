@@ -107,6 +107,13 @@ bool VoiceKit::begin(const VoiceKitConfig& config) {
 
     bool ok = _voice.begin(config);
 
+    // Surcharge du callback de vérification d'occupation pour inclure ContinuousSTT
+    _voice.getWakeWordManager().setVoiceBusyCheckCallback([this]() {
+        return this->isBusy() || this->isSpeaking() ||
+               (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING &&
+                !_continuousController.isPaused());
+    });
+
     if (config.enableConversation) {
         _mode.store(VoiceKitMode::CONVERSATION, std::memory_order_release);
     } else {
@@ -117,6 +124,12 @@ bool VoiceKit::begin(const VoiceKitConfig& config) {
 }
 
 void VoiceKit::update() {
+    // Si la dictée continue est active (et non en pause), maintenir la suspension Wake Word
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING &&
+        !_continuousController.isPaused()) {
+        _voice.getWakeWordManager().notifyVoiceActivity(true, isSpeaking());
+    }
+
     _voice.update();
 
     // Synchronisation du mode opérationnel exposé avec VoxCoreVoice une fois la transition achevée
@@ -241,6 +254,7 @@ bool VoiceKit::startContinuousListening() {
     bool started = _continuousController.start();
     if (started) {
         _mode.store(VoiceKitMode::CONTINUOUS_LISTENING, std::memory_order_release);
+        _voice.getWakeWordManager().notifyVoiceActivity(true, isSpeaking());
         return true;
     }
     return false;
@@ -252,6 +266,7 @@ bool VoiceKit::stopContinuousListening() {
     }
     bool stopped = _continuousController.stop();
     _mode.store(VoiceKitMode::IDLE, std::memory_order_release);
+    _voice.getWakeWordManager().notifyVoiceActivity(isBusy(), isSpeaking());
     return stopped;
 }
 
@@ -260,6 +275,7 @@ bool VoiceKit::pauseContinuousListening() {
         return false;
     }
     _continuousController.pause();
+    _voice.getWakeWordManager().notifyVoiceActivity(isBusy(), isSpeaking());
     return true;
 }
 
@@ -267,7 +283,11 @@ bool VoiceKit::resumeContinuousListening() {
     if (_mode.load(std::memory_order_relaxed) != VoiceKitMode::CONTINUOUS_LISTENING) {
         return false;
     }
-    return _continuousController.resume();
+    bool resumed = _continuousController.resume();
+    if (resumed) {
+        _voice.getWakeWordManager().notifyVoiceActivity(true, isSpeaking());
+    }
+    return resumed;
 }
 
 bool VoiceKit::startConversation() {
@@ -321,6 +341,32 @@ bool VoiceKit::stopConversation() {
     }
     // Si en ligne, demande acceptée, le mode sera confirmé à réception de setupComplete
     return true;
+}
+
+bool VoiceKit::enableWakeWord(bool enable) {
+    if (enable) {
+        bool voiceActive = isBusy() || isSpeaking() ||
+                           (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING &&
+                            !_continuousController.isPaused());
+        _voice.getWakeWordManager().notifyVoiceActivity(voiceActive, isSpeaking());
+    }
+    return _voice.enableWakeWord(enable);
+}
+
+void VoiceKit::disableWakeWord() {
+    _voice.disableWakeWord();
+}
+
+bool VoiceKit::suspendWakeWord() {
+    return _voice.suspendWakeWord();
+}
+
+bool VoiceKit::resumeWakeWord() {
+    bool voiceActive = isBusy() || isSpeaking() ||
+                       (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING &&
+                        !_continuousController.isPaused());
+    _voice.getWakeWordManager().notifyVoiceActivity(voiceActive, isSpeaking());
+    return _voice.resumeWakeWord();
 }
 
 bool VoiceKit::setVoiceProfile(const String& voice, const String& language,

@@ -105,6 +105,11 @@ public:
     // Annulation immédiate sur appui STOP (abandon propre sans émission activityEnd)
     void cancel();
 
+    // Capture locale hors ligne pour détection de mot de réveil (v0.6.2 — sans fournisseur réseau ni tâche TX)
+    bool startLocalCapture();
+    bool stopLocalCapture();
+    bool isLocalCapture() const { return _isLocalCapture; }
+
     // États & Métriques
     bool isStreaming() const { return _isStreaming; }
     bool isQueueSaturated() const { return _queueSaturated; }
@@ -132,6 +137,7 @@ public:
     // Callback léger sur chaque bloc audio acquis (pour VAD, visualiseur ou métriques)
     using AudioChunkCallback = std::function<void(const int16_t* samples, size_t count, uint32_t rms)>;
     void onAudioChunk(AudioChunkCallback cb) { _chunkCallback = std::move(cb); }
+    void setWakeWordAudioCallback(AudioChunkCallback cb) { _wakeWordChunkCallback = std::move(cb); }
 
     bool isActivityStartConfirmed() const { return _activityStartSent; }
     bool isActivityEndConfirmed() const { return _activityEndSent; }
@@ -248,6 +254,7 @@ private:
     GeminiLiveClient* _legacyClient = nullptr;
     std::unique_ptr<IVoiceProvider> _legacyAdapter;
     volatile bool _isStreaming = false;
+    volatile bool _isLocalCapture = false;
     volatile bool _stopDrainRequested = false;
     bool _queueSaturated = false;
     uint32_t _startTimeMs = 0;
@@ -265,6 +272,7 @@ private:
     uint32_t _peakRms = 0;
     volatile uint32_t _lastChunkRms = 0;
     AudioChunkCallback _chunkCallback = nullptr;
+    AudioChunkCallback _wakeWordChunkCallback = nullptr;
     bool _activityStartSent = false;
     bool _activityEndSent = false;
     uint32_t _micStoppedMs = 0;

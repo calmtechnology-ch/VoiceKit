@@ -28,16 +28,19 @@ inline const char* voiceKitModeToString(VoiceKitMode m) {
 
 /**
  * @class VoiceKit
- * @brief Façade simplifiée, haut niveau et sécurisée pour l'écosystème vocal multi-fournisseurs VoiceKit v0.6.0.
+ * @brief Façade simplifiée, haut niveau et sécurisée pour l'écosystème vocal multi-fournisseurs VoiceKit v0.6.2.
  * 
- * Cette façade unifie et simplifie l'accès aux quatre modes vocaux majeurs :
+ * Cette façade unifie et simplifie l'accès aux quatre modes vocaux majeurs ainsi qu'à la
+ * fondation de détection locale de mot de réveil (Wake Word) hors ligne :
  * 1. TTS : Synthèse vocale asynchrone PCM 24 kHz haute fidélité (`say`).
  * 2. STT : Reconnaissance vocale manuelle en streaming PCM 16 kHz (`listen` / `stopListening`).
  * 3. ContinuousSTT : Reconnaissance continue mains libres avec VAD intégré (`startContinuousListening`).
- * 4. Conversation : Dialogue vocal bidirectionnel complet avec Gemini Live (`startConversation`).
+ * 4. Conversation : Dialogue vocal bidirectionnel complet avec Gemini Live / OpenAI (`startConversation`).
+ * 5. Wake Word : Fondation locale hors ligne pour détection de mot de réveil (`enableWakeWord`).
  * 
  * Architecture & Garanties :
  * - Délégation transparente et exclusive au moteur VoxCore (`VoxCoreVoice`).
+ * - Propriété unique du microphone CoreS3 ES7210 (PCM 16 kHz 16-bit mono partagé sans double init).
  * - Zéro duplication des contrôleurs audio, des connexions WebSocket TLS ou des machines à états.
  * - Validation stricte des opérations incompatibles avec retours explicites (`bool`).
  * - Garantie d'unicité des événements de terminaison (aucun callback dupliqué).
@@ -55,6 +58,9 @@ public:
     using AssistantTextCallback = std::function<void(const String& text)>;
     using AudioChunkCallback = LiveAudioStreamer::AudioChunkCallback;
     using TurnFinishedCallback = std::function<void(const ConversationMetrics& metrics)>;
+    using WakeWordDetectedCallback = WakeWordManager::WakeWordDetectedCallback;
+    using WakeWordEventCallback = WakeWordManager::WakeWordEventCallback;
+    using WakeWordStateCallback = WakeWordManager::WakeWordStateCallback;
 
     VoiceKit();
     ~VoiceKit();
@@ -68,7 +74,7 @@ public:
 
     /**
      * @brief Initialise le moteur vocal VoiceKit avec la configuration fournie.
-     * @param config Paramètres (clé API Gemini, Wi-Fi, voix, volume, etc.).
+     * @param config Paramètres (clé API Gemini/OpenAI, Wi-Fi, voix, volume, Wake Word, etc.).
      * @return true si l'initialisation a réussi, false en cas d'erreur.
      */
     bool begin(const VoiceKitConfig& config);
@@ -246,6 +252,158 @@ public:
                 _voice.isConversationEnabled() &&
                 !_voice.isModeSwitchPending());
     }
+
+    // =========================================================================
+    // 5. Détection Locale de Mot de Réveil (Wake Word Foundation — v0.6.2)
+    // =========================================================================
+
+    /**
+     * @brief Active ou désactive le détecteur de mot de réveil hors ligne.
+     *        Distingue strictement la fonction activée, la disponibilité du moteur,
+     *        et l'écoute réelle ou simulée. N'ouvre jamais de connexion réseau automatique.
+     * @param enable true pour activer, false pour désactiver.
+     * @return true si le moteur est initialisé et actif (ARMED ou SUSPENDED),
+     *         false si désactivé ou si le moteur est indisponible/en erreur (ERROR).
+     */
+    bool enableWakeWord(bool enable = true);
+
+    /**
+     * @brief Désactive complètement le détecteur de mot de réveil (coût CPU/RAM minimal).
+     */
+    void disableWakeWord();
+
+    /**
+     * @brief Suspend temporairement la détection Wake Word (état SUSPENDED).
+     */
+    bool suspendWakeWord();
+
+    /**
+     * @brief Reprend la détection Wake Word après une suspension (retour à ARMED).
+     */
+    bool resumeWakeWord();
+
+    /**
+     * @brief Indique si la fonctionnalité Wake Word a été activée par l'utilisateur.
+     */
+    bool isWakeWordEnabled() const { return _voice.isWakeWordEnabled(); }
+
+    /**
+     * @brief Indique si le détecteur écoute effectivement les trames PCM (état ARMED).
+     */
+    bool isWakeWordListening() const { return _voice.isWakeWordListening(); }
+
+    /**
+     * @brief Indique si le moteur sélectionné est disponible dans l'environnement courant.
+     */
+    bool isWakeWordEngineAvailable() const { return _voice.isWakeWordEngineAvailable(); }
+
+    /**
+     * @brief Indique si le moteur sélectionné a été initialisé avec succès.
+     */
+    bool isWakeWordEngineInitialized() const { return _voice.isWakeWordEngineInitialized(); }
+
+    /**
+     * @brief Indique si le moteur actif est un moteur de test simulé (et non une reconnaissance acoustique).
+     */
+    bool isWakeWordSimulated() const { return _voice.isWakeWordSimulated(); }
+
+    /**
+     * @brief Indique si une véritable reconnaissance acoustique (non simulée) est active.
+     */
+    bool isWakeWordRealRecognitionActive() const { return _voice.isWakeWordRealRecognitionActive(); }
+
+    /**
+     * @brief Indique si le gestionnaire Wake Word est en état d'erreur (ERROR).
+     */
+    bool isWakeWordError() const { return _voice.isWakeWordError(); }
+
+    /**
+     * @brief Retourne l'état courant de la machine à états Wake Word.
+     */
+    WakeWordState getWakeWordState() const { return _voice.getWakeWordState(); }
+
+    /**
+     * @brief Retourne le dernier message d'erreur du sous-système Wake Word.
+     */
+    String getWakeWordLastError() const { return _voice.getWakeWordLastError(); }
+
+    /**
+     * @brief Retourne le dernier mot de réveil détecté.
+     */
+    String getLastDetectedWakeWord() const { return _voice.getLastDetectedWakeWord(); }
+
+    /**
+     * @brief Sélectionne le type de moteur Wake Word (WAKENET ou TEST).
+     */
+    bool setWakeWordEngine(WakeWordEngineType type) { return _voice.setWakeWordEngine(type); }
+
+    /**
+     * @brief Injecte un moteur personnalisé implémentant IWakeWordEngine.
+     */
+    bool setWakeWordEngine(IWakeWordEngine* customEngine) { return _voice.setWakeWordEngine(customEngine); }
+    bool setCustomWakeWordEngine(IWakeWordEngine* engine) { return _voice.setWakeWordEngine(engine); }
+
+    WakeWordEngineType getWakeWordEngineType() const { return _voice.getWakeWordEngineType(); }
+    const char* getWakeWordEngineName() const { return _voice.getWakeWordEngineName(); }
+    const char* getWakeWordModelName() const { return _voice.getWakeWordModelName(); }
+
+    void setWakeWordPhrase(const String& word) { _voice.setWakeWordPhrase(word); }
+    String getWakeWordPhrase() const { return _voice.getWakeWordPhrase(); }
+
+    void setWakeWordAutoResume(bool autoResume) { _voice.setWakeWordAutoResume(autoResume); }
+    bool isWakeWordAutoResume() const { return _voice.isWakeWordAutoResume(); }
+
+    void setWakeWordResumeDelayMs(uint32_t delayMs) { _voice.setWakeWordResumeDelayMs(delayMs); }
+    uint32_t getWakeWordResumeDelayMs() const { return _voice.getWakeWordResumeDelayMs(); }
+
+    /**
+     * @brief Déclenche une détection de test simulée (uniquement si moteur TEST et état ARMED).
+     */
+    bool triggerTestWakeWord(const String& customWord = "") { return _voice.triggerTestWakeWord(customWord); }
+
+    /**
+     * @brief Analyse une commande série ("wake", "bonjour", "bonjour esp") pour le moteur TEST.
+     */
+    bool handleWakeWordSerialCommand(const String& commandLine) {
+        return _voice.handleWakeWordSerialCommand(commandLine);
+    }
+
+    /**
+     * @brief Callback déclenché lors de la détection d'un mot de réveil.
+     *        Contexte : Tâche principale (loop / update), compatible LVGL.
+     */
+    void onWakeWordDetected(WakeWordDetectedCallback cb) { _voice.onWakeWordDetected(std::move(cb)); }
+
+    /**
+     * @brief Callback détaillé incluant les métadonnées (isSimulated, latence, confiance).
+     *        Contexte : Tâche principale (loop / update).
+     */
+    void onWakeWordEvent(WakeWordEventCallback cb) { _voice.onWakeWordEvent(std::move(cb)); }
+
+    /**
+     * @brief Callback déclenché à chaque transition d'état de la machine Wake Word.
+     *        Contexte : Tâche principale (loop / update).
+     */
+    void onWakeWordStateChanged(WakeWordStateCallback cb) { _voice.onWakeWordStateChanged(std::move(cb)); }
+
+    /**
+     * @brief Callback déclenché en cas d'erreur d'initialisation ou d'exécution du moteur Wake Word.
+     */
+    void onWakeWordError(ErrorCallback cb) { _voice.onWakeWordError(std::move(cb)); }
+
+    /**
+     * @brief Récupère de manière non bloquante le dernier événement Wake Word pour la boucle LVGL.
+     */
+    bool pollWakeWordEvent(WakeWordEvent& outEvent) { return _voice.pollWakeWordEvent(outEvent); }
+    bool hasPendingWakeWordEvent() const { return _voice.hasPendingWakeWordEvent(); }
+
+    /**
+     * @brief Retourne un instantané complet des métriques mémoire, CPU et files du sous-système Wake Word.
+     */
+    WakeWordMetrics getWakeWordMetrics() const { return _voice.getWakeWordMetrics(); }
+
+    WakeWordManager& getWakeWordManager() { return _voice.getWakeWordManager(); }
+    const WakeWordManager& getWakeWordManager() const { return _voice.getWakeWordManager(); }
 
     // =========================================================================
     // Configuration Vocale & Profils (v0.4.1)

@@ -13,6 +13,9 @@ LiveAudioStreamer::LiveAudioStreamer(IAudioInput* input, IAudioOutput* output)
 }
 
 LiveAudioStreamer::~LiveAudioStreamer() {
+    if (_isLocalCapture) {
+        stopLocalCapture();
+    }
     cancel();
 #if defined(ESP32) || defined(ARDUINO)
     // Ne détruire la file et l'EventGroup que si les deux tâches sont formellement arrêtées
@@ -313,6 +316,7 @@ void LiveAudioStreamer::micTaskLoop() {
 
     if (!_audioInput) {
         _isStreaming = false;
+        _isLocalCapture = false;
         _micTaskRunning = false;
         if (_taskEventGroup) {
             xEventGroupSetBits(_taskEventGroup, LIVE_MIC_TASK_START_FAIL_BIT | LIVE_MIC_TASK_STOPPED_BIT);
@@ -346,6 +350,7 @@ void LiveAudioStreamer::micTaskLoop() {
             _ringBuffers[recQueue[i]].state = LiveBufferState::FREE;
         }
         _isStreaming = false;
+        _isLocalCapture = false;
         _micTaskRunning = false;
         if (_taskEventGroup) {
             xEventGroupSetBits(_taskEventGroup, LIVE_MIC_TASK_START_FAIL_BIT | LIVE_MIC_TASK_STOPPED_BIT);
@@ -358,11 +363,11 @@ void LiveAudioStreamer::micTaskLoop() {
         xEventGroupSetBits(_taskEventGroup, LIVE_MIC_TASK_STARTED_BIT);
     }
 
-    while (_isStreaming) {
+    while (_isStreaming || _isLocalCapture) {
         // Attente active non bloquante que le bloc actif en tête soit 100% acquis par DMA
         uint32_t waitStart = millis();
         bool timedOut = false;
-        while (_isStreaming && _audioInput->isRecording() > (int)(recCount - 1)) {
+        while ((_isStreaming || _isLocalCapture) && _audioInput->isRecording() > (int)(recCount - 1)) {
             vTaskDelay(pdMS_TO_TICKS(2));
             if (millis() - waitStart > 120) {
                 timedOut = true;
@@ -370,7 +375,7 @@ void LiveAudioStreamer::micTaskLoop() {
                 break;
             }
         }
-        if (!_isStreaming) break;
+        if (!_isStreaming && !_isLocalCapture) break;
 
         size_t currentSlot = recQueue[0];
         recQueue[0] = recQueue[1];
@@ -384,12 +389,18 @@ void LiveAudioStreamer::micTaskLoop() {
             _ringBuffers[currentSlot].state = LiveBufferState::READY;
             _blocksCompleted++;
             uint32_t rms = computeRms(_ringBuffers[currentSlot].samples, AUDIO_CHUNK_SAMPLES);
+            if (_wakeWordChunkCallback) {
+                _wakeWordChunkCallback(_ringBuffers[currentSlot].samples, AUDIO_CHUNK_SAMPLES, rms);
+            }
             if (_chunkCallback) {
                 _chunkCallback(_ringBuffers[currentSlot].samples, AUDIO_CHUNK_SAMPLES, rms);
             }
 
-            // Envoi de l'index du bloc prêt dans la file d'émission réseau (non bloquant)
-            if (_txQueue) {
+            if (_isLocalCapture && !_isStreaming) {
+                // Mode capture locale (Wake Word) : libération immédiate du slot pour le double-buffering DMA
+                _ringBuffers[currentSlot].state = LiveBufferState::FREE;
+            } else if (_txQueue) {
+                // Mode streaming réseau : envoi de l'index du bloc prêt dans la file d'émission (non bloquant)
                 if (xQueueSend(_txQueue, &currentSlot, 0) == pdTRUE) {
                     _consecutiveDroppedBlocks = 0;
                     size_t qSize = uxQueueMessagesWaiting(_txQueue);
@@ -418,7 +429,7 @@ void LiveAudioStreamer::micTaskLoop() {
         }
 
         // Réarmement d'un slot disponible pour maintenir le double-buffering
-        if (_audioInput->isRecording() < 2 && _isStreaming) {
+        if (_audioInput->isRecording() < 2 && (_isStreaming || _isLocalCapture)) {
             int freeSlot = -1;
             for (size_t i = 0; i < LIVE_AUDIO_TX_QUEUE_MAX; ++i) {
                 if (_ringBuffers[i].state == LiveBufferState::FREE) {
@@ -459,6 +470,182 @@ void LiveAudioStreamer::micTaskLoop() {
 }
 #endif
 
+bool LiveAudioStreamer::startLocalCapture() {
+    checkQuarantinedTasks();
+
+    if (_isLocalCapture) {
+        return true;
+    }
+
+    if (_isStreaming || _micTaskRunning || _micTaskHandle != nullptr ||
+        _txTaskRunning || _txTaskHandle != nullptr || _taskQuarantined || _txTaskQuarantined) {
+        strncpy(_lastError, "Taches precedentes non terminees ou streaming actif", sizeof(_lastError));
+        _lastStatus = AudioHardwareStatus::DEVICE_BUSY;
+        return false;
+    }
+
+    if (!areAllBuffersFree()) {
+        strncpy(_lastError, "Tampons non libres (detenus par ancienne tache)", sizeof(_lastError));
+        _lastStatus = AudioHardwareStatus::DEVICE_BUSY;
+        return false;
+    }
+
+    for (size_t i = 0; i < LIVE_AUDIO_TX_QUEUE_MAX; ++i) {
+        _ringBuffers[i].state = LiveBufferState::FREE;
+    }
+
+    _provider = nullptr;
+    _queueSaturated = false;
+    _stopDrainRequested = false;
+    _lastError[0] = '\0';
+    _blocksAcquired = 0;
+    _blocksCompleted = 0;
+    _blocksDropped = 0;
+    _consecutiveDroppedBlocks = 0;
+    _sumRms = 0;
+    _rmsCount = 0;
+    _peakRms = 0;
+    _lastChunkRms = 0;
+
+    if (!_audioInput) {
+        _audioInput = HardwareManager::getInstance().getAudioInput();
+    }
+    if (!_audioOutput) {
+        _audioOutput = HardwareManager::getInstance().getAudioOutput();
+    }
+
+    if (HardwareManager::getInstance().getAudioOutput() != nullptr) {
+        if (!HardwareManager::getInstance().prepareMicCapture()) {
+            strncpy(_lastError, "Arbitrage I2S refuse (HP actif)", sizeof(_lastError));
+            _lastStatus = HardwareManager::getInstance().getLastAudioStatus();
+            return false;
+        }
+    } else if (_audioOutput && _audioOutput->isRunning()) {
+        _audioOutput->end();
+    }
+
+    if (_audioInput && !_audioInput->isRunning()) {
+        if (!_audioInput->begin()) {
+            strncpy(_lastError, "Echec initialisation micro ES7210", sizeof(_lastError));
+            _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+            HardwareManager::getInstance().restoreSpeakerAfterMic();
+            return false;
+        }
+    }
+
+#if defined(ESP32) || defined(ARDUINO)
+    if (!_taskEventGroup) {
+        _taskEventGroup = xEventGroupCreate();
+        if (!_taskEventGroup) {
+            strncpy(_lastError, "Echec creation EventGroup (memoire insuffisante)", sizeof(_lastError));
+            _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+            stopMicHardware();
+            return false;
+        }
+    }
+    xEventGroupClearBits(_taskEventGroup,
+        LIVE_MIC_TASK_STARTED_BIT | LIVE_MIC_TASK_START_FAIL_BIT | LIVE_MIC_TASK_STOPPED_BIT);
+#endif
+
+    _startTimeMs = millis();
+    _durationMs = 0;
+    _isLocalCapture = true;
+
+#if defined(ESP32) || defined(ARDUINO)
+    BaseType_t micTaskRes = xTaskCreatePinnedToCore(
+        micTaskEntry,
+        "live_mic_task",
+        LIVE_MIC_TASK_STACK_SIZE,
+        this,
+        3,
+        &_micTaskHandle,
+        1  // Core 1
+    );
+
+    if (micTaskRes != pdPASS || _micTaskHandle == nullptr) {
+        _isLocalCapture = false;
+        _micTaskHandle = nullptr;
+        _micTaskRunning = false;
+        char errBuf[64];
+        strncpy(errBuf, "Echec creation live_mic_task (memoire FreeRTOS)", sizeof(errBuf));
+        stopMicHardware();
+        strncpy(_lastError, errBuf, sizeof(_lastError));
+        _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+        return false;
+    }
+
+    EventBits_t bits = xEventGroupWaitBits(
+        _taskEventGroup,
+        LIVE_MIC_TASK_STARTED_BIT,
+        pdFALSE,
+        pdTRUE,
+        pdMS_TO_TICKS(250)
+    );
+
+    if ((bits & LIVE_MIC_TASK_STARTED_BIT) != LIVE_MIC_TASK_STARTED_BIT) {
+        _isLocalCapture = false;
+        char errBuf[64];
+        strncpy(errBuf, "Timeout confirmation demarrage live_mic_task locale", sizeof(errBuf));
+        waitForTaskTermination(200);
+        stopMicHardware();
+        strncpy(_lastError, errBuf, sizeof(_lastError));
+        _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+        return false;
+    }
+#else
+    if (_simTaskCreateHook) {
+        bool ok = _simTaskCreateHook(this);
+        if (!ok) {
+            _isLocalCapture = false;
+            _micTaskHandle = nullptr;
+            _micTaskRunning = false;
+            char errBuf[64];
+            strncpy(errBuf, "Echec creation live_mic_task (memoire FreeRTOS insuffisante)", sizeof(errBuf));
+            stopMicHardware();
+            strncpy(_lastError, errBuf, sizeof(_lastError));
+            _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+            return false;
+        }
+    }
+    if (_simStartupFailure) {
+        _isLocalCapture = false;
+        _micTaskHandle = nullptr;
+        _micTaskRunning = false;
+        char errBuf[64];
+        strncpy(errBuf, "Echec initialisation double-tampon micro", sizeof(errBuf));
+        stopMicHardware();
+        strncpy(_lastError, errBuf, sizeof(_lastError));
+        _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+        return false;
+    }
+    _micTaskHandle = (void*)0x1234;
+    _micTaskRunning = true;
+#endif
+
+    _lastStatus = AudioHardwareStatus::SUCCESS;
+    return true;
+}
+
+bool LiveAudioStreamer::stopLocalCapture() {
+    if (!_isLocalCapture) {
+        return false;
+    }
+
+    _durationMs = millis() - _startTimeMs;
+    _isLocalCapture = false;
+
+    bool micTermOk = waitForTaskTermination(250);
+    bool hwOk = stopMicHardware();
+
+    if (micTermOk && !_micTaskRunning && !_taskQuarantined) {
+        for (size_t i = 0; i < LIVE_AUDIO_TX_QUEUE_MAX; ++i) {
+            _ringBuffers[i].state = LiveBufferState::FREE;
+        }
+    }
+
+    return hwOk && micTermOk;
+}
+
 bool LiveAudioStreamer::start(GeminiLiveClient* client) {
     if (!client) return false;
     _legacyClient = client;
@@ -471,6 +658,11 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
         strncpy(_lastError, "Fournisseur vocal non pret", sizeof(_lastError));
         _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
         return false;
+    }
+
+    // Si une capture locale (Wake Word) est en cours, l'arrêter proprement avant de démarrer le streaming réseau
+    if (_isLocalCapture) {
+        stopLocalCapture();
     }
 
     // CORRECTION E : Contrôle et levée des quarantaines si les anciennes tâches sont enfin terminées
@@ -865,8 +1057,9 @@ bool LiveAudioStreamer::stop() {
 }
 
 void LiveAudioStreamer::cancel() {
-    if (_isStreaming || _micTaskRunning || _micTaskHandle != nullptr || _txTaskRunning || _txTaskHandle != nullptr || _txTaskQuarantined || _taskQuarantined) {
+    if (_isStreaming || _isLocalCapture || _micTaskRunning || _micTaskHandle != nullptr || _txTaskRunning || _txTaskHandle != nullptr || _txTaskQuarantined || _taskQuarantined) {
         _isStreaming = false;
+        _isLocalCapture = false;
         _stopDrainRequested = false;
         _lastTxStatus = LiveTxStatus::TX_STOP_REQUESTED;
         _durationMs = millis() - _startTimeMs;
@@ -929,7 +1122,7 @@ void LiveAudioStreamer::printDiagnosticSummary() const {
 }
 
 uint32_t LiveAudioStreamer::getDurationMs() const {
-    if (_isStreaming) {
+    if (_isStreaming || _isLocalCapture) {
         return millis() - _startTimeMs;
     }
     return _durationMs;
@@ -1004,7 +1197,20 @@ uint32_t LiveAudioStreamer::computeRms(const int16_t* samples, size_t count) {
 
 #if !defined(ESP32) && !defined(ARDUINO)
 bool LiveAudioStreamer::pushSimulatedChunk(const int16_t* samples, size_t count) {
-    if (!_isStreaming || !samples || count != AUDIO_CHUNK_SAMPLES) return false;
+    if ((!_isStreaming && !_isLocalCapture) || !samples || count != AUDIO_CHUNK_SAMPLES) return false;
+
+    if (_isLocalCapture && !_isStreaming) {
+        _blocksAcquired++;
+        _blocksCompleted++;
+        uint32_t rms = computeRms(samples, count);
+        if (_wakeWordChunkCallback) {
+            _wakeWordChunkCallback(samples, count, rms);
+        }
+        if (_chunkCallback) {
+            _chunkCallback(samples, count, rms);
+        }
+        return true;
+    }
 
     int freeSlot = -1;
     for (size_t i = 0; i < LIVE_AUDIO_TX_QUEUE_MAX; ++i) {
@@ -1032,6 +1238,9 @@ bool LiveAudioStreamer::pushSimulatedChunk(const int16_t* samples, size_t count)
     _blocksAcquired++;
     _blocksCompleted++;
     uint32_t rms = computeRms(samples, count);
+    if (_wakeWordChunkCallback) {
+        _wakeWordChunkCallback(samples, count, rms);
+    }
     if (_chunkCallback) {
         _chunkCallback(samples, count, rms);
     }
