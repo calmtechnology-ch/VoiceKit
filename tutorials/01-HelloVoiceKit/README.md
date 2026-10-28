@@ -13,7 +13,7 @@ L'objectif de cette leçon est d'apprendre à :
 - Suivre les étapes de connexion et les changements d'état du moteur via le moniteur série.
 - Réagir aux événements majeurs (`onReady`, `onError`, `onStateChanged`).
 
-> **Remarque :** Cette leçon n'active volontairement ni le microphone ni le haut-parleur. Nous nous concentrons d'abord sur la solidité de la liaison réseau et de la session IA.
+> **Remarque :** Cette leçon initialise le haut-parleur au volume par défaut de VoiceKit, car VoiceKit exige une sortie audio disponible. Le microphone reste désactivé. Nous nous concentrons d'abord sur la solidité de la liaison réseau et de la session IA.
 
 ---
 
@@ -122,9 +122,9 @@ void setup() {
     Serial.println("========================================================");
 
     // 2. Initialisation matérielle du M5Stack CoreS3
-    // Pour cette première leçon, nous n'activons ni le haut-parleur ni le micro.
+    // VoiceKit exige une sortie audio initialisée dès voice.begin().
     auto cfg = M5.config();
-    cfg.internal_spk = false;
+    cfg.internal_spk = true;
     cfg.internal_mic = false;
     M5.begin(cfg);
 
@@ -235,7 +235,7 @@ Avant de compiler, créez une copie locale du fichier `include/secrets.example.h
 Ce fichier est ignoré par Git, ce qui garantit que vos clés ne seront jamais publiées par erreur.
 
 ### Étape 2 : L'initialisation matérielle dans `setup()`
-`M5.begin(cfg)` initialise l'horloge interne, l'écran et la gestion d'énergie. Nous passons `internal_spk = false` et `internal_mic = false` pour que le CoreS3 reste silencieux.
+`M5.begin(cfg)` initialise l'horloge interne, l'écran et la gestion d'énergie. Nous passons `internal_spk = true` pour configurer la sortie audio requise par `voice.begin()`. Le volume par défaut de VoiceKit est conservé (65). Le microphone reste désactivé avec `internal_mic = false`. Désactiver aussi le haut-parleur empêche M5Unified de configurer ses broches et provoque `Echec initialisation materielle AudioOutput`.
 
 ### Étape 3 : La préparation des callbacks
 Il est recommandé d'enregistrer vos fonctions de rappel **avant** d'appeler `voice.begin()`. Ainsi, dès que la connexion Wi-Fi s'établit ou que le serveur répond, votre code est prêt à intercepter l'événement.

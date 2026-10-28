@@ -5,7 +5,7 @@
  * Objectif : Initialiser la façade VoiceKit et établir une session sécurisée
  *            avec le service Google Gemini Live sur M5Stack CoreS3.
  * 
- * Cette leçon n'active ni le haut-parleur ni le microphone. Elle se concentre
+ * Cette leçon initialise le haut-parleur au volume par défaut de VoiceKit, sans activer le microphone. Elle se concentre
  * sur la connexion réseau Wi-Fi, la synchronisation horaire et l'initialisation
  * de la machine à états de VoiceKit.
  */
@@ -47,9 +47,9 @@ void setup() {
     Serial.println("========================================================");
 
     // 2. Initialisation matérielle du M5Stack CoreS3
-    // Pour cette première leçon, nous n'activons ni le haut-parleur ni le micro.
+    // VoiceKit exige une sortie audio initialisée dès voice.begin().
     auto cfg = M5.config();
-    cfg.internal_spk = false;
+    cfg.internal_spk = true;
     cfg.internal_mic = false;
     M5.begin(cfg);
 
