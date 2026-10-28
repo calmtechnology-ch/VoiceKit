@@ -4963,6 +4963,9 @@ void test_v062_test_engine_and_state_machine_transitions() {
     TEST_ASSERT(stateHistory[1] == WakeWordState::ARMED, "Transition 2 : ARMED");
     TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ARMED, "Etat courant ARMED");
     TEST_ASSERT(vk.isWakeWordListening(), "isWakeWordListening() == true en etat ARMED");
+    TEST_ASSERT(vk.getWakeWordMetrics().rearmCount == 0, "rearmCount == 0 lors du premier armement (ARMED — En ecoute)");
+    TEST_ASSERT(vk.getWakeWordMetrics().detectionCount == 0, "detectionCount == 0 avant toute detection");
+    TEST_ASSERT(vk.getWakeWordMetrics().errorCount == 0, "errorCount == 0");
 
     // Déclenchement par commande série ("bonjour esp")
     vk.setWakeWordAutoResume(false); // Garder SUSPENDED après détection pour vérifier le cycle manuel
@@ -4976,6 +4979,8 @@ void test_v062_test_engine_and_state_machine_transitions() {
 
     // Vérification du cycle : ARMED -> DETECTED -> SUSPENDED
     TEST_ASSERT(detectedCallbackCount == 1, "Callback onWakeWordDetected appele exactement 1 fois");
+    TEST_ASSERT(vk.getWakeWordMetrics().detectionCount == 1, "Compteur detectionCount incremente exactement 1 seule fois par evenement reel");
+    TEST_ASSERT(vk.getWakeWordMetrics().rearmCount == 0, "rearmCount toujours a 0 avant rearmement");
     TEST_ASSERT(lastDetectedWord == "Bonjour ESP", "Mot detecte = 'Bonjour ESP'");
     TEST_ASSERT(lastEventSimulated == true, "Evenement marque isSimulated = true");
     TEST_ASSERT(stateHistory.size() >= 4, "Transitions DETECTED puis SUSPENDED enregistrees");
@@ -4991,17 +4996,30 @@ void test_v062_test_engine_and_state_machine_transitions() {
     TEST_ASSERT(vk.resumeWakeWord(), "resumeWakeWord() ramene l'etat a ARMED");
     TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ARMED, "Etat revenu a ARMED");
     TEST_ASSERT(vk.isWakeWordListening(), "Ecoute de nouveau active");
+    TEST_ASSERT(vk.getWakeWordMetrics().rearmCount == 1, "rearmCount == 1 apres premier rearmement (ARMED — Ecoute reactivee)");
 
-    // Transitions répétées (10 cycles complets)
+    // Transitions répétées (10 cycles complets ARMED -> DETECTED -> SUSPENDED -> ARMED)
     for (int cycle = 0; cycle < 10; ++cycle) {
+        size_t histBefore = stateHistory.size();
+        uint32_t detBefore = vk.getWakeWordMetrics().detectionCount;
+        uint32_t rearmBefore = vk.getWakeWordMetrics().rearmCount;
         TEST_ASSERT(vk.triggerTestWakeWord(), "Trigger cycle repete");
         vk.getEngine().getStreamer().pushSimulatedChunk(pcm, AUDIO_CHUNK_SAMPLES);
         vk.update();
         TEST_ASSERT(vk.getWakeWordState() == WakeWordState::SUSPENDED, "SUSPENDED apres detection");
+        TEST_ASSERT(vk.getWakeWordMetrics().detectionCount == detBefore + 1, "1 seule detection comptabilisee sur le cycle");
         TEST_ASSERT(vk.resumeWakeWord(), "Retour a ARMED");
         TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ARMED, "ARMED confirme");
+        TEST_ASSERT(vk.getWakeWordMetrics().rearmCount == rearmBefore + 1, "rearmCount incremente exactement de 1 au retour ARMED");
+        TEST_ASSERT(stateHistory.size() == histBefore + 3 &&
+                    stateHistory[histBefore] == WakeWordState::DETECTED &&
+                    stateHistory[histBefore + 1] == WakeWordState::SUSPENDED &&
+                    stateHistory[histBefore + 2] == WakeWordState::ARMED,
+                    "Sequence exacte DETECTED -> SUSPENDED -> ARMED verifiee a chaque cycle");
     }
     TEST_ASSERT(detectedCallbackCount == 11, "11 detections cumulees sans defaillance");
+    TEST_ASSERT(vk.getWakeWordMetrics().detectionCount == 11, "detectionCount == 11");
+    TEST_ASSERT(vk.getWakeWordMetrics().rearmCount == 11, "rearmCount == 11 apres 11 rearmements");
 
     // Test d'erreur d'initialisation et d'exécution vers ERROR
     String reportedErr;
@@ -5011,6 +5029,7 @@ void test_v062_test_engine_and_state_machine_transitions() {
     vk.update();
     TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ERROR, "Erreur d'execution fait basculer vers ERROR");
     TEST_ASSERT(vk.isWakeWordError(), "isWakeWordError() == true");
+    TEST_ASSERT(vk.getWakeWordMetrics().errorCount == 1, "errorCount == 1 apres erreur d'execution");
     TEST_ASSERT(!reportedErr.isEmpty(), "Callback onWakeWordError notifie");
 
     vk.getWakeWordManager().getTestEngine().setSimulateRuntimeError(false);

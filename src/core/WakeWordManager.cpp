@@ -57,6 +57,13 @@ void WakeWordManager::setState(WakeWordState newState) {
     WakeWordState oldState = _state.exchange(newState, std::memory_order_acq_rel);
     if (oldState != newState) {
         _metrics.stateTransitionCount++;
+        if (newState == WakeWordState::ARMED) {
+            if (_hasArmedOnce) {
+                _metrics.rearmCount++;
+            } else {
+                _hasArmedOnce = true;
+            }
+        }
         if (_onStateChanged) {
             _onStateChanged(newState);
         }
@@ -760,5 +767,6 @@ const WakeWordMetrics& WakeWordManager::getMetrics() const {
 void WakeWordManager::resetMetrics() {
     _bridge.resetMetrics();
     _metrics.reset();
+    _hasArmedOnce = (_state.load(std::memory_order_acquire) == WakeWordState::ARMED);
     refreshMemoryMetrics();
 }

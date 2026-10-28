@@ -40,10 +40,15 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
   - Libération systématique de `esp_srmodel_deinit(_models)` sur tous les chemins d'échec partiel de `begin()`.
   - Suppression du score de confiance fictif (`res.confidence = 0.0f` au lieu de `0.95f`).
   - Continuité bit-à-bit de l'adaptateur `512 -> 480` sans perte d'échantillons aux frontières même lors d'une détection en milieu de bloc, et remise à zéro complète de `_accumulator` dans `reset()`.
-- **Métriques RMS Authentiques & Exemple `WakeWordFoundation`** :
+- **Métriques RMS Authentiques, Compteurs & Clarification de l'Affichage `WakeWordFoundation`** :
   - Suppression de l'injection de trame silencieuse fictive (`rms = 0`) dans `triggerTestDetection()` et `handleSerialCommand()`, garantissant que `lastRms`, `peakRms` et `framesReceived` reflètent exclusivement le signal acquis sur le microphone ES7210.
-  - Mise à jour de `examples/WakeWordFoundation/src/main.cpp` avec signalement explicite `Engine: TEST — SIMULATED`, commande `'c'` de cycles d'activation/désactivation et diagnostics complets.
-- **6 Nouvelles Suites de Tests Unitaires (Suites 89 à 94)** : **1 805 validations réussies avec 0 échec** (94 suites au total).
+  - Ajout du compteur de réarmements (`rearmCount` dans `WakeWordMetrics`, incrémenté lors de chaque retour à l'état `ARMED` après l'activation initiale), en complément des compteurs de détections (`detectionCount`, comptabilisées une seule fois par événement réel) et d'erreurs (`errorCount`).
+  - Clarification de l'affichage série dans `examples/WakeWordFoundation/src/main.cpp` :
+    - Encadré très visible `MOT DE RÉVEIL DÉTECTÉ` affichant le texte `Bonjour ESP`, le moteur actif (`RECONNAISSANCE RÉELLE` ou `SIMULATION (TEST)`) et les compteurs de détections, de réarmements et d'erreurs.
+    - Distinction explicite des états en français : `ARMED — En écoute`, `DETECTED — Mot reconnu`, `SUSPENDED — Détection suspendue`, puis `ARMED — Écoute réactivée`.
+    - Conservation de l'affichage complet des métriques mémoire (RAM/PSRAM) et CPU via la commande série `'m'`, et de la commande `'c'` de cycles d'activation/désactivation.
+    - Zéro journal répétitif dans `loop()` (affichage uniquement sur transitions, détections ou commandes) et zéro impression série dans le callback audio critique.
+- **6 Nouvelles Suites de Tests Unitaires (Suites 89 à 94)** : **1 844 validations réussies avec 0 échec** (94 suites au total).
 
 ---
 

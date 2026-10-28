@@ -29,7 +29,7 @@ La version **v0.6.2.1** est une version corrective qui fiabilise et durcit la **
 - **Sélection par Configuration Zéro-Code** : Bascule instantanée entre Gemini et OpenAI par simple configuration (`config.provider = VoiceProviderType::OPENAI;`). Aucune modification requise dans le code métier de l'application !
 - **Rééchantillonneur Dédié 16 kHz $\to$ 24 kHz (`AudioResampler`)** : Algorithme linéaire ultra-rapide en virgule fixe entière (512 in $\to$ 768 out en moins de 15 µs sur Core 1), n'impactant aucunement la tâche audio critique.
 - **Sanctuaire Audio VoxCore Intact** : Conservation intégrale de la tâche FreeRTOS Mode 2, du buffer circulaire PSRAM 120 000 échantillons (~5 s), des buffers DMA et du protocole de vidage exact sans coupure de la syllabe finale (*« alpha tango terminé »*).
-- **Validation Exhaustive & Zéro Régression** : **1 805 tests unitaires réussis avec 0 échec** (94 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
+- **Validation Exhaustive & Zéro Régression** : **1 844 tests unitaires réussis avec 0 échec** (94 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
 
 ---
 

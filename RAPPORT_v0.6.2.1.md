@@ -108,21 +108,22 @@ L'audit approfondi du code source `v0.6.2` a confirmé 5 défauts techniques :
 
 | Fichier | Nature des modifications |
 | :--- | :--- |
-| `src/core/IWakeWordEngine.h` | Documentation de la désactivation de `DROP_OLDEST`, ajout de `isCompiledSupportAvailable()` et `isModelAvailable()`, enrichissement de `WakeWordMetrics` (budget CPU, RMS, `captureStopFailures`). |
+| `src/core/IWakeWordEngine.h` | Documentation de la désactivation de `DROP_OLDEST`, ajout de `isCompiledSupportAvailable()` et `isModelAvailable()`, enrichissement de `WakeWordMetrics` (budget CPU, RMS, `rearmCount`, `captureStopFailures`). |
 | `src/core/WakeWordAudioBridge.h` | Ajout de `_activeWriters`, `_epoch`, `_framePeeked`, `_unsupportedPolicyRequests`, `isOverflowPolicySupported()`, et hook natif de test concurrent `setSimMidWriteHook()`. |
 | `src/core/WakeWordAudioBridge.cpp` | Désactivation sécurisée de `DROP_OLDEST` (repli `DROP_NEWEST`), garde RAII `_activeWriters` et validation d'époque `_epoch` dans `pushAudioChunk()`, protection de `clear()`, `setEnabled()`, `begin()` et `end()`. |
 | `src/core/WakeNetEngine.h` | Distinction à 4 niveaux, sonde de partition/modèle, correction des fuites `_models` dans `begin()`, suppression du score `0.95f` (`0.0f`), continuité sans perte de `feedFrameAdapter()`, remise à zéro de `_accumulator` dans `reset()`. |
 | `src/core/TestWakeWordEngine.h` | Ajout de `setSimulatedProcessDurationUs()` (test natif) pour tester de manière déterministe le budget CPU de `update()`. |
-| `src/core/WakeWordManager.h` | Ajout des paramètres de budget CPU (`setMaxFramesPerUpdate`, `setProcessingBudgetUs`), des accesseurs à 4 niveaux, de `_inUpdate`, et changement de signature `bool stopCaptureIfNeeded()`. |
-| `src/core/WakeWordManager.cpp` | Implémentation de la boucle `update()` bornée en nombre de trames et en microsecondes, gestion stricte des échecs de `stopCaptureIfNeeded()`, sûreté mémoire dans `disable()`, idempotence et suppression de la trame fictive `silentFrame`. |
+| `src/core/WakeWordManager.h` | Ajout des paramètres de budget CPU (`setMaxFramesPerUpdate`, `setProcessingBudgetUs`), des accesseurs à 4 niveaux, de `_hasArmedOnce`, de `_inUpdate`, et changement de signature `bool stopCaptureIfNeeded()`. |
+| `src/core/WakeWordManager.cpp` | Implémentation de la boucle `update()` bornée en nombre de trames et en microsecondes, comptabilisation des réarmements (`rearmCount`), gestion stricte des échecs de `stopCaptureIfNeeded()`, sûreté mémoire dans `disable()`, idempotence et suppression de la trame fictive `silentFrame`. |
 | `src/core/LiveAudioStreamer.cpp` | Vérification du retour de `stopLocalCapture()` dans `start()`, protection de `stopMicHardware()` sous quarantaine et libération complète des tampons/réservation micro lors de la levée de quarantaine dans `checkQuarantinedTasks()`. |
 | `src/core/ContinuousListeningController.cpp` | Propagation immédiate de l'échec si `_voice->startListening()` échoue dans `start()` ou `resume()`. |
 | `src/VoiceKitConfig.h` | Ajout de `wakeWordMaxFramesPerUpdate = 2` et `wakeWordProcessingBudgetUs = 5000`. |
 | `src/VoxCoreVoice.h` / `src/VoxCoreVoice.cpp` | Exposition des réglages de budget CPU et des états de modèle Wake Word ; vérification de l'état d'erreur Wake Word après suspension dans `say()` et `startListening()`. |
 | `src/VoiceKit.h` / `src/VoiceKit.cpp` | Exposition des méthodes v0.6.2.1 sur la façade `VoiceKit` et vérification de la suspension Wake Word dans `startContinuousListening()`. |
 | `src/core/VoiceHubConfig.h` | Mise à jour de `VOICEKIT_VERSION` vers `"v0.6.2.1"`. |
-| `examples/WakeWordFoundation/src/main.cpp` | Affichage explicite `Engine: TEST — SIMULATED`, diagnostics complets (saturation pont, budget CPU, échecs d'arrêt capture, transitions, RMS) et commande `'c'` de cycles d'activation/désactivation. |
-| `tests/test_voicekit_all.cpp` | Mise à jour de la Suite 84 et ajout de 6 nouvelles suites correctives v0.6.2.1 (Suites 89 à 94). |
+| `examples/WakeWordFoundation/src/main.cpp` | Encadré visible `MOT DE RÉVEIL DÉTECTÉ` (`Bonjour ESP`), messages d'état français (`ARMED — En écoute`, `DETECTED — Mot reconnu`, `SUSPENDED — Détection suspendue`, `ARMED — Écoute réactivée`), distinction `RECONNAISSANCE RÉELLE` / `SIMULATION (TEST)`, compteurs (`detectionCount`, `rearmCount`, `errorCount`) et commande `'m'` de métriques mémoire/CPU. |
+| `examples/WakeWordFoundation/README.md` | Documentation de la sortie série clarifiée v0.6.2.1 et des commandes interactives. |
+| `tests/test_voicekit_all.cpp` | Mise à jour des Suites 84 et 86 et ajout de 6 nouvelles suites correctives v0.6.2.1 (Suites 89 à 94, 1 844 assertions). |
 | `library.json`, `library.properties`, `README.md`, `CHANGELOG.md` | Mise à jour de la version vers `0.6.2.1` et documentation des correctifs. |
 | `RAPPORT_v0.6.2.1.md` | Présent rapport technique détaillé. |
 
@@ -132,7 +133,7 @@ L'audit approfondi du code source `v0.6.2` a confirmé 5 défauts techniques :
 
 ### 5.1 Exécution de la Suite de Tests Unitaires Natifs (`.\tests\run_tests.bat`)
 - **Avant modifications (référence v0.6.2 vérifiée par exécution réelle)** : 88 suites, **1 457 tests réussis, 0 échec**.
-- **Après modifications v0.6.2.1** : **94 suites (Suites 1 à 94), 1 805 assertions réussies, 0 échec** (+348 nouvelles assertions dans les Suites 89 à 94).
+- **Après modifications v0.6.2.1** : **94 suites (Suites 1 à 94), 1 844 assertions réussies, 0 échec** (+387 nouvelles assertions).
 - Détail des nouvelles suites ajoutées :
   - **Suite 89** : `WakeWordAudioBridge` — Durée de vie `peekFrame()` et 7 scénarios de concurrence (producteur > consommateur, file pleine, 50 saturations répétées pendant `process()`, suspension mi-écriture via hook concurrent, désactivation pendant acquisition, 10 redémarrages successifs, intégrité bit-à-bit PCM et séquences sur 4 tours complets d'anneau).
   - **Suite 90** : Budget CPU borné (`setMaxFramesPerUpdate(1)`, `setProcessingBudgetUs(2000)`) et comptabilisation de `processingBudgetExceeded`.

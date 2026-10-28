@@ -129,7 +129,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
 #endif
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.6.2 — Multi-Fournisseurs & Wake   ");
+    Serial.println("  VoxCore VoiceKit v0.6.2.1 — Multi-Fournisseurs & Wake ");
     Serial.printf("  Fournisseur : %s | Mode Audio : %s | FastConnect : %s\n",
                   (_config.provider == VoiceProviderType::OPENAI) ? "OPENAI REALTIME" : "GEMINI LIVE",
                   (LiveAudioPlayer::getCompiledAudioMode() == 1) ? "MODE 1 (REACTIVE_CALLBACK)" : "MODE 2 (DEDICATED_AUDIO_TASK)",

@@ -1,4 +1,4 @@
-# Exemple Autonome : WakeWordFoundation (VoiceKit v0.6.2)
+# Exemple Autonome : WakeWordFoundation (VoiceKit v0.6.2.1)
 
 Cet exemple autonome valide la fondation matérielle et logicielle de détection locale de mot de réveil (**Wake Word Foundation**) sur **M5Stack CoreS3**, **sans écran LVGL** et **sans connexion réseau Wi-Fi / Gemini / OpenAI**.
 
@@ -9,44 +9,59 @@ Cet exemple autonome valide la fondation matérielle et logicielle de détection
    - Aucune seconde initialisation concurrente du codec ES7210.
 2. **Pont audio temps réel (`WakeWordAudioBridge`)** :
    - File circulaire SPSC bornée (8 trames de 512 échantillons = 256 ms).
-   - Une seule copie mémoire (`memcpy` DMA $\to$ slot) dans la tâche audio, zéro copie au dépilage dans `voice.update()`.
-3. **Machine à états complète (`WakeWordManager`)** :
-   - `DISABLED` $\to$ `INITIALIZING` $\to$ `ARMED` $\to$ `DETECTED` $\to$ `SUSPENDED` $\to$ `ARMED`.
-4. **Moteur officiel Espressif ESP-SR WakeNet (`IWakeWordEngine` / `WakeNetEngine`)** :
-   - Active par défaut sur ESP32-S3 le modèle acoustique français officiel Espressif **`wn9l_fr_bonjouresp_tts3`** (« **Bonjour ESP** ») avec accélération SIMD Xtensa TIE728 et extraction MFCC/Filterbank matérielle.
-   - Le modèle binaire (`srmodels_bonjouresp.c`, ~292 Ko) est directement embarqué en Flash (`.rodata`), sans nécessiter de téléversement séparé d'une partition `srmodels.bin` (tout en prenant automatiquement en charge une partition Flash `model` si elle est présente).
-   - Un VU-mètre RMS temps réel s'affiche sur l'écran du CoreS3 pour visualiser le niveau microphone pendant la prononciation de **« Bonjour ESP »**, avec reprise automatique (`SUSPENDED` $\to$ `ARMED`) après 2,5 secondes.
+   - Une seule copie mémoire (`memcpy` DMA $\to$ slot) dans la tâche audio, zéro copie au dépilage dans `voice.update()`, zéro impression `Serial` dans le callback audio critique.
+3. **Machine à états complète et affichage français explicite (`WakeWordManager`)** :
+   - Transitions clairement distinguées :
+     - `ARMED — En écoute` (activation initiale)
+     - `DETECTED — Mot reconnu` (avec encadré très visible `MOT DE RÉVEIL DÉTECTÉ` et texte `Bonjour ESP`)
+     - `SUSPENDED — Détection suspendue`
+     - `ARMED — Écoute réactivée` (après réarmement)
+   - Compteurs de détections (comptabilisées une seule fois par événement réel), de réarmements et d'erreurs.
+   - Aucune sortie série répétitive dans `loop()`.
+4. **Distinction honnête du moteur actif (`IWakeWordEngine`)** :
+   - Affiche explicitement le nom du moteur actif ainsi que **`RECONNAISSANCE RÉELLE`** (pour `WAKENET` / `wn9l_fr_bonjouresp_tts3`) ou **`SIMULATION (TEST)`** (pour `TEST`).
+   - Ne présente jamais un déclenchement du moteur `TEST` comme une détection acoustique.
 
 ## Sortie Moniteur Série (115200 bauds)
 
 ```text
-[WAKE] VoiceKit v0.6.2
-[WAKE] CoreS3 ES7210 ready
-[WAKE] PCM 16000 Hz / 16-bit
-[WAKE] WAKENET status: UNAVAILABLE in Arduino-ESP32 2.0.17 / ESP-IDF 4.4.7 (wn10_fr_bonjouresp requires ESP-IDF >= 5.0)
-[WAKE] Engine: TEST (SIMULATED - validation capture PCM 16 kHz, pont audio et machine a etats)
-[WAKE] State: INITIALIZING
-[WAKE] State: ARMED
-[WAKE] Detection: Bonjour ESP
-[WAKE] Notice: Detection SIMULEE (moteur TEST - aucune reconnaissance vocale acoustique)
-[WAKE] State: SUSPENDED
-[WAKE] State: ARMED
+[WAKE] VoiceKit v0.6.2.1
+[WAKE] CoreS3 ES7210 prêt (PCM 16000 Hz / 16-bit mono)
+[WAKE] État : INITIALIZING — Initialisation en cours | Moteur : WAKENET [RECONNAISSANCE RÉELLE] | Détections=0 | Réarmements=0 | Erreurs=0
+[WAKE] État : ARMED — En écoute | Moteur : WAKENET [RECONNAISSANCE RÉELLE] | Détections=0 | Réarmements=0 | Erreurs=0
+[WAKE] Moteur actif : WAKENET (modèle : wn9l_fr_bonjouresp_tts3) — RECONNAISSANCE RÉELLE
+[WAKE] État : DETECTED — Mot reconnu | Moteur : WAKENET [RECONNAISSANCE RÉELLE] | Détections=1 | Réarmements=0 | Erreurs=0
+
+============================================================
+||                 MOT DE RÉVEIL DÉTECTÉ                  ||
+============================================================
+  Texte reconnu          : Bonjour ESP
+  Moteur actif           : WAKENET (wn9l_fr_bonjouresp_tts3)
+  Mode de reconnaissance : RECONNAISSANCE RÉELLE
+  Origine                : Détection acoustique réelle (microphone CoreS3 ES7210)
+  Compteur de détections : #1 (réelles=1 | simulées=0)
+  Compteurs cumulés      : Détections=1 | Réarmements=0 | Erreurs=0
+============================================================
+[WAKE] État : SUSPENDED — Détection suspendue | Moteur : WAKENET [RECONNAISSANCE RÉELLE] | Détections=1 | Réarmements=0 | Erreurs=0
+[WAKE] État : ARMED — Écoute réactivée | Moteur : WAKENET [RECONNAISSANCE RÉELLE] | Détections=1 | Réarmements=1 | Erreurs=0
 ```
 
 ## Commandes Série Interactives
 
 | Commande | Action |
 |---|---|
-| `bonjour esp` ou `wake` | Déclenche une détection de test simulée (uniquement si moteur `TEST` et état `ARMED`) |
-| `r` ou `resume` | Simule la fin de conversation et réarme le détecteur (`SUSPENDED` $\to$ `ARMED`) |
-| `s` ou `suspend` | Suspend manuellement le détecteur (`ARMED` $\to$ `SUSPENDED`) |
-| `w` ou `wakenet` | Sélectionne le moteur `WAKENET` (démontre le passage explicite en état `ERROR` sous IDF 4.4) |
-| `t` ou `test` | Sélectionne le moteur `TEST` et arme la capture locale (`ARMED`) |
-| `m` ou `metrics` | Affiche les compteurs mémoire (RAM interne, PSRAM), temps CPU max et statistiques de file |
+| `bonjour esp` ou `wake` | Déclenche une détection de test simulée (`SIMULATION (TEST)`, uniquement si moteur `TEST` et état `ARMED`) |
+| `r` ou `resume` | Simule la fin de conversation et réarme le détecteur (`SUSPENDED` $\to$ `ARMED — Écoute réactivée`) |
+| `s` ou `suspend` | Suspend manuellement le détecteur (`ARMED` $\to$ `SUSPENDED — Détection suspendue`) |
+| `d` ou `disable` | Désactive le détecteur (`DISABLED`) |
+| `e` ou `enable` | Réactive le détecteur (`DISABLED` $\to$ `INITIALIZING` $\to$ `ARMED`) |
+| `c` ou `cycle` | Exécute 5 cycles d'activation / suspension / reprise / désactivation |
+| `w` ou `wakenet` | Sélectionne le moteur `WAKENET` (`RECONNAISSANCE RÉELLE` si disponible, sinon `ERROR` explicite) |
+| `t` ou `test` | Sélectionne le moteur `TEST` (`SIMULATION (TEST)`) et arme la capture locale (`ARMED`) |
+| `m` ou `metrics` | Affiche les métriques mémoire (RAM interne, PSRAM), CPU, file audio et compteurs (détections, réarmements, erreurs) |
 
 ## Compilation PlatformIO
 
 ```bash
 pio run -d examples/WakeWordFoundation
 ```
-

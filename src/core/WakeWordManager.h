@@ -277,6 +277,7 @@ private:
     bool _voiceActivitySeenSinceSuspend = false;
     bool _wasVoiceBusy = false;
     bool _resumePendingAfterBusy = false;
+    bool _hasArmedOnce = false;
     bool _inUpdate = false;
     uint32_t _lastVoiceActivityEndMs = 0;
     uint32_t _resumeDelayMs = 250;

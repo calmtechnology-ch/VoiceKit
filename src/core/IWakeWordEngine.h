@@ -150,6 +150,7 @@ struct WakeWordMetrics {
     // Compteurs d'événements, transitions micro et machine à états
     uint32_t detectionCount = 0;            ///< Nombre total de détections (réelles + simulées)
     uint32_t simulatedDetectionCount = 0;   ///< Nombre de détections issues du moteur TEST
+    uint32_t rearmCount = 0;                ///< Nombre de réarmements vers l'état ARMED (v0.6.2.1)
     uint32_t stateTransitionCount = 0;      ///< Nombre de transitions d'état effectuées
     uint32_t errorCount = 0;                ///< Nombre d'erreurs d'initialisation ou d'exécution
     uint32_t captureStopFailures = 0;       ///< Nombre d'échecs d'arrêt de capture locale (stopLocalCapture)
@@ -179,6 +180,7 @@ struct WakeWordMetrics {
         peakRms = 0;
         detectionCount = 0;
         simulatedDetectionCount = 0;
+        rearmCount = 0;
         stateTransitionCount = 0;
         errorCount = 0;
         captureStopFailures = 0;
