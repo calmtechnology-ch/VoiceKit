@@ -5,31 +5,23 @@
  * Fonctionnement :
  * - S'exécute sur M5Stack CoreS3 SANS écran LVGL et SANS connexion Wi-Fi ni Gemini/OpenAI.
  * - Valide la capture audio locale partagée (ES7210, PCM 16000 Hz / 16-bit mono) via VoiceKit.
- * - Valide et affiche clairement sur le moniteur série les transitions de la machine à états :
- *     DISABLED -> INITIALIZING -> ARMED (ARMED — En écoute) -> DETECTED (DETECTED — Mot reconnu)
- *     -> SUSPENDED (SUSPENDED — Détection suspendue) -> ARMED (ARMED — Écoute réactivée)
- * - Lorsqu'un événement DETECTED est émis, affiche un encadré très visible avec
- *   "MOT DE RÉVEIL DÉTECTÉ", le texte "Bonjour ESP", le moteur actif ("RECONNAISSANCE RÉELLE"
- *   ou "SIMULATION (TEST)") et les compteurs de détections, de réarmements et d'erreurs.
+ * - Affiche sur le moniteur série ET sur l'écran M5Stack CoreS3 (M5GFX sans LVGL) la carte
+ *   visuelle v0.6.2.1 mettant immédiatement en évidence chaque détection de « Bonjour ESP » :
+ *     VOICEKIT — WAKE WORD                                    v0.6.2.1
+ *     ────────────────────────────────────────────────────────────────
+ *     🎙 ARMED — En écoute...
+ *     ╭──────────────────────────────────────────────────────────────╮
+ *     │  ✓ MOT DE RÉVEIL DÉTECTÉ !          [DETECTED — Mot reconnu] │
+ *     │  « Bonjour ESP »                                             │
+ *     │  Détection réussie — événement #1                            │
+ *     ╰──────────────────────────────────────────────────────────────╯
+ *     ⏸ SUSPENDED — Suspension temporaire (Détection suspendue)
+ *     ✓ ARMED — Prêt pour un nouveau réveil (Écoute réactivée)
+ *     ────────────────────────────────────────────────────────────────
+ *     Détections : 1 | Réarmements : 1 | Erreurs : 0
  * - Toutes les impressions série sont produites exclusivement dans la boucle principale
  *   (jamais dans le callback audio critique FreeRTOS).
- * - Aucun journal répétitif n'est émis à chaque passage de loop() : seuls les changements
- *   d'état, les détections, les erreurs et les commandes explicites sont affichés.
- *
- * Commandes Moniteur Série (115200 bauds) :
- * - "wake" ou "bonjour" ou "bonjour esp" : déclenche une détection de test simulée (si ARMED et moteur TEST)
- * - "r" ou "resume"                      : reprend l'écoute après fin de conversation (SUSPENDED -> ARMED)
- * - "s" ou "suspend"                     : suspend manuellement le détecteur (ARMED -> SUSPENDED)
- * - "d" ou "disable"                     : désactive le détecteur ( -> DISABLED)
- * - "e" ou "enable"                      : réactive le détecteur (DISABLED -> INITIALIZING -> ARMED)
- * - "c" ou "cycle"                       : exécute 5 cycles d'activation/suspension/reprise
- * - "w" ou "wakenet"                     : sélectionne et teste le moteur WAKENET
- * - "t" ou "test"                        : sélectionne et arme le moteur TEST (SIMULATION (TEST))
- * - "m" ou "metrics"                     : affiche les métriques mémoire (RAM/PSRAM), CPU, pont audio et compteurs
- *
- * Interactions M5Stack CoreS3 (sans moniteur série) :
- * - Appui tactile moitié gauche de l'écran : déclenche "Bonjour ESP" (en mode TEST et état ARMED)
- * - Appui tactile moitié droite de l'écran : simule la fin de conversation (SUSPENDED -> ARMED)
+ * - Aucun journal répétitif n'est émis à chaque passage de loop().
  */
 
 #include <M5CoreS3.h>
@@ -37,7 +29,6 @@
 
 VoiceKit voice;
 static uint32_t s_lastTouchMs = 0;
-static uint32_t s_lastRmsDrawMs = 0;
 static uint32_t s_detectedSuspendStartMs = 0;
 static bool s_pendingAutoResumeAfterDetection = false;
 static uint32_t s_lastDisplayedDetectionIndex = 0;
@@ -53,11 +44,13 @@ static const char* getStateFrenchMessage(WakeWordState state) {
         case WakeWordState::INITIALIZING:
             return "INITIALIZING — Initialisation en cours";
         case WakeWordState::ARMED:
-            return (m.rearmCount == 0) ? "ARMED — En écoute" : "ARMED — Écoute réactivée";
+            return (m.rearmCount == 0)
+                ? "ARMED — En écoute..."
+                : "ARMED — Prêt pour un nouveau réveil (Écoute réactivée)";
         case WakeWordState::DETECTED:
             return "DETECTED — Mot reconnu";
         case WakeWordState::SUSPENDED:
-            return "SUSPENDED — Détection suspendue";
+            return "SUSPENDED — Suspension temporaire (Détection suspendue)";
         case WakeWordState::ERROR:
             return "ERROR — Erreur du détecteur";
         case WakeWordState::DISABLED:
@@ -66,145 +59,277 @@ static const char* getStateFrenchMessage(WakeWordState state) {
     }
 }
 
-static void drawLiveRmsMeter() {
-    const WakeWordMetrics& m = voice.getWakeWordMetrics();
-    CoreS3.Display.fillRect(10, 175, 300, 18, TFT_BLACK);
-    CoreS3.Display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+/**
+ * @brief Rendu léger de texte français UTF-8 avec DejaVu (sans embarquer 1.3 Mo de police CJK).
+ * Dessine les accents français (é, è, ê, É, Ê), les chevrons « » et le tiret cadratin —.
+ */
+static void drawFrenchText(int x, int y, const char* utf8, const lgfx::GFXfont* font, uint16_t fg, uint16_t bg) {
+    CoreS3.Display.setFont(font);
     CoreS3.Display.setTextSize(1);
-    CoreS3.Display.setCursor(10, 178);
-    CoreS3.Display.printf("RMS:%4u(Pk:%4u) Det:%u Rearm:%u Err:%u",
-                          m.lastRms, m.peakRms, m.detectionCount, m.rearmCount, m.errorCount);
+    CoreS3.Display.setTextColor(fg, bg);
 
-    int barWidth = (int)(m.lastRms / 15);
-    if (barWidth > 76) barWidth = 76;
-    CoreS3.Display.drawRect(234, 177, 78, 10, TFT_DARKGREY);
-    if (barWidth > 0) {
-        uint16_t barColor = (m.lastRms > 400) ? TFT_GREEN : TFT_CYAN;
-        CoreS3.Display.fillRect(235, 178, barWidth, 8, barColor);
+    const bool isLarge = (font == &fonts::DejaVu18);
+    const int fontH = isLarge ? 18 : 12;
+    int cx = x;
+    char chBuf[2] = {0, 0};
+
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(utf8);
+    while (*p) {
+        if (*p < 0x80) {
+            chBuf[0] = static_cast<char>(*p++);
+            CoreS3.Display.drawString(chBuf, cx, y);
+            cx += CoreS3.Display.textWidth(chBuf);
+        } else if (p[0] == 0xC3 && p[1] != 0) {
+            uint8_t c2 = p[1];
+            p += 2;
+            bool isUpper = (c2 == 0x89 || c2 == 0x88 || c2 == 0x8A);
+            chBuf[0] = isUpper ? 'E' : 'e';
+            CoreS3.Display.drawString(chBuf, cx, y);
+            int w = CoreS3.Display.textWidth(chBuf);
+            int ax = cx + (w / 2);
+            int ay = y + (isUpper ? 0 : (isLarge ? 3 : 2));
+            if (c2 == 0xA9 || c2 == 0x89) {
+                // Accent aigu (é / É)
+                CoreS3.Display.drawLine(ax - 1, ay, ax + 2, ay - 2, fg);
+            } else if (c2 == 0xA8 || c2 == 0x88) {
+                // Accent grave (è / È)
+                CoreS3.Display.drawLine(ax + 1, ay, ax - 2, ay - 2, fg);
+            } else if (c2 == 0xAA || c2 == 0x8A) {
+                // Accent circonflexe (ê / Ê)
+                CoreS3.Display.drawLine(ax - 2, ay, ax, ay - 2, fg);
+                CoreS3.Display.drawLine(ax, ay - 2, ax + 2, ay, fg);
+            }
+            cx += w;
+        } else if (p[0] == 0xC2 && (p[1] == 0xAB || p[1] == 0xBB)) {
+            bool isLeft = (p[1] == 0xAB);
+            p += 2;
+            int cy = y + (fontH / 2) + 1;
+            int d = isLarge ? 4 : 3;
+            for (int k = 0; k < 2; ++k) {
+                int gx = cx + k * (d + 1);
+                if (isLeft) {
+                    CoreS3.Display.drawLine(gx + d, cy - d, gx, cy, fg);
+                    CoreS3.Display.drawLine(gx, cy, gx + d, cy + d, fg);
+                } else {
+                    CoreS3.Display.drawLine(gx, cy - d, gx + d, cy, fg);
+                    CoreS3.Display.drawLine(gx + d, cy, gx, cy + d, fg);
+                }
+            }
+            cx += isLarge ? 14 : 10;
+        } else if (p[0] == 0xE2 && p[1] == 0x80 && p[2] == 0x94) {
+            // Tiret cadratin (—)
+            p += 3;
+            int cy = y + (fontH / 2) + 1;
+            int dashW = isLarge ? 12 : 9;
+            CoreS3.Display.drawFastHLine(cx, cy, dashW, fg);
+            cx += dashW + 2;
+        } else {
+            ++p;
+        }
     }
 }
 
-static void updateSimpleStatusScreen() {
+/**
+ * @brief Dessine la carte visuelle v0.6.2.1 sur l'écran 320x240 du M5Stack CoreS3 (M5GFX pur, sans LVGL).
+ */
+static void updateWakeWordCardScreen() {
     const WakeWordMetrics& m = voice.getWakeWordMetrics();
-    CoreS3.Display.fillScreen(TFT_BLACK);
-    CoreS3.Display.setTextColor(TFT_CYAN, TFT_BLACK);
-    CoreS3.Display.setTextSize(2);
-    CoreS3.Display.setCursor(10, 10);
-    CoreS3.Display.printf("VoiceKit %s\n", VOICEKIT_VERSION);
+    const WakeWordState st = voice.getWakeWordState();
+    const bool hasDetection = (m.detectionCount > 0) || (st == WakeWordState::DETECTED);
+    const bool isSimulated = voice.isWakeWordSimulated();
 
-    CoreS3.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    CoreS3.Display.setTextSize(1);
-    CoreS3.Display.setCursor(10, 36);
-    CoreS3.Display.println("Wake Word Foundation (Offline / No LVGL)");
-    CoreS3.Display.println("Audio: CoreS3 ES7210 PCM 16000 Hz / 16-bit");
+    const uint16_t colOuterBg     = CoreS3.Display.color565(7, 10, 16);
+    const uint16_t colCardBg      = CoreS3.Display.color565(13, 18, 30);
+    const uint16_t colDivider     = CoreS3.Display.color565(35, 45, 63);
+    const uint16_t colHeader      = CoreS3.Display.color565(148, 163, 184);
+    const uint16_t colBadgeBg     = CoreS3.Display.color565(8, 60, 38);
+    const uint16_t colBadgeBorder = CoreS3.Display.color565(16, 112, 70);
+    const uint16_t colBadgeText   = CoreS3.Display.color565(52, 211, 153);
+    const uint16_t colBlue        = CoreS3.Display.color565(96, 165, 250);
+    const uint16_t colBoxBg       = hasDetection
+                                      ? CoreS3.Display.color565(10, 77, 44)
+                                      : CoreS3.Display.color565(18, 28, 45);
+    const uint16_t colBoxBorder   = hasDetection
+                                      ? CoreS3.Display.color565(22, 130, 65)
+                                      : CoreS3.Display.color565(45, 60, 85);
+    const uint16_t colBoxTitle    = CoreS3.Display.color565(226, 232, 240);
+    const uint16_t colBoxCheck    = CoreS3.Display.color565(74, 222, 128);
+    const uint16_t colBoxSub      = hasDetection
+                                      ? CoreS3.Display.color565(110, 231, 183)
+                                      : CoreS3.Display.color565(148, 163, 184);
+    const uint16_t colAmber       = (st == WakeWordState::SUSPENDED || hasDetection)
+                                      ? CoreS3.Display.color565(251, 191, 36)
+                                      : CoreS3.Display.color565(90, 75, 35);
+    const uint16_t colRearmIcon   = (m.rearmCount > 0 && st == WakeWordState::ARMED)
+                                      ? CoreS3.Display.color565(52, 211, 153)
+                                      : CoreS3.Display.color565(60, 90, 80);
+    const uint16_t colRearmText   = (m.rearmCount > 0 && st == WakeWordState::ARMED)
+                                      ? CoreS3.Display.color565(203, 213, 225)
+                                      : CoreS3.Display.color565(90, 102, 120);
+    const uint16_t colFooter      = CoreS3.Display.color565(120, 134, 155);
 
-    CoreS3.Display.setCursor(10, 68);
-    if (voice.isWakeWordSimulated()) {
-        CoreS3.Display.setTextColor(TFT_ORANGE, TFT_BLACK);
-        CoreS3.Display.printf("Moteur: %s — SIMULATION (TEST)\n", voice.getWakeWordEngineName());
+    CoreS3.Display.startWrite();
+    CoreS3.Display.fillScreen(colOuterBg);
+
+    // Carte principale arrondie
+    CoreS3.Display.fillRoundRect(4, 4, 312, 232, 10, colCardBg);
+    CoreS3.Display.drawRoundRect(4, 4, 312, 232, 10, colDivider);
+
+    // 1. En-tête : VOICEKIT — WAKE WORD + badge v0.6.2.1
+    drawFrenchText(16, 13, "VOICEKIT — WAKE WORD", &fonts::DejaVu12, colHeader, colCardBg);
+
+    CoreS3.Display.fillRoundRect(246, 9, 58, 18, 9, colBadgeBg);
+    CoreS3.Display.drawRoundRect(246, 9, 58, 18, 9, colBadgeBorder);
+    drawFrenchText(253, 14, VOICEKIT_VERSION, &fonts::DejaVu9, colBadgeText, colBadgeBg);
+
+    CoreS3.Display.drawFastHLine(16, 33, 288, colDivider);
+
+    // 2. Ligne d'écoute initiale : icône micro bleue + ARMED — En écoute...
+    CoreS3.Display.fillRoundRect(20, 41, 5, 8, 2, colBlue);
+    CoreS3.Display.drawFastVLine(18, 45, 4, colBlue);
+    CoreS3.Display.drawFastVLine(26, 45, 4, colBlue);
+    CoreS3.Display.drawFastHLine(19, 50, 7, colBlue);
+    CoreS3.Display.drawFastVLine(22, 51, 3, colBlue);
+    CoreS3.Display.drawFastHLine(19, 54, 7, colBlue);
+
+    if (st == WakeWordState::ERROR) {
+        drawFrenchText(34, 42, "ERROR — Erreur du détecteur", &fonts::DejaVu12, TFT_RED, colCardBg);
+    } else if (st == WakeWordState::DISABLED) {
+        drawFrenchText(34, 42, "DISABLED — Détecteur désactivé", &fonts::DejaVu12, colHeader, colCardBg);
     } else {
-        CoreS3.Display.setTextColor(TFT_GREEN, TFT_BLACK);
-        CoreS3.Display.printf("Moteur: %s — RECONNAISSANCE REELLE\n", voice.getWakeWordEngineName());
-    }
-    CoreS3.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    CoreS3.Display.printf("Modele: %s (\"Bonjour ESP\")\n", voice.getWakeWordModelName());
-
-    WakeWordState st = voice.getWakeWordState();
-    uint16_t stateColor = TFT_LIGHTGREY;
-    if (st == WakeWordState::ARMED) stateColor = TFT_GREEN;
-    else if (st == WakeWordState::DETECTED) stateColor = TFT_YELLOW;
-    else if (st == WakeWordState::SUSPENDED) stateColor = TFT_ORANGE;
-    else if (st == WakeWordState::ERROR) stateColor = TFT_RED;
-
-    CoreS3.Display.setTextColor(stateColor, TFT_BLACK);
-    CoreS3.Display.setTextSize(2);
-    CoreS3.Display.setCursor(10, 105);
-    CoreS3.Display.printf("Etat: %s\n", wakeWordStateToString(st));
-
-    CoreS3.Display.setTextSize(1);
-    CoreS3.Display.setCursor(10, 138);
-    if (!voice.getLastDetectedWakeWord().isEmpty() && (st == WakeWordState::DETECTED || st == WakeWordState::SUSPENDED)) {
-        CoreS3.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
-        CoreS3.Display.printf(">>> MOT DE REVEIL DETECTE : %s (#%u) <<<\n",
-                              voice.getLastDetectedWakeWord().c_str(),
-                              m.detectionCount);
-        CoreS3.Display.printf("Mode : %s\n",
-                              voice.isWakeWordSimulated() ? "SIMULATION (TEST) - Non acoustique" : "RECONNAISSANCE REELLE");
-    } else if (st == WakeWordState::ARMED && !voice.isWakeWordSimulated()) {
-        CoreS3.Display.setTextColor(TFT_GREENYELLOW, TFT_BLACK);
-        CoreS3.Display.println("Dites : \"Bonjour ESP\" pres du microphone...");
-    } else if (st == WakeWordState::ARMED && voice.isWakeWordSimulated()) {
-        CoreS3.Display.setTextColor(TFT_ORANGE, TFT_BLACK);
-        CoreS3.Display.println("Mode SIMULATION (TEST) : tapez 'bonjour esp' ou touchez GAUCHE");
-    }
-    if (voice.isWakeWordError()) {
-        CoreS3.Display.setTextColor(TFT_RED, TFT_BLACK);
-        CoreS3.Display.printf("Erreur: %s\n", voice.getWakeWordLastError().c_str());
+        drawFrenchText(34, 42, "ARMED — En écoute...", &fonts::DejaVu12, colBlue, colCardBg);
     }
 
-    drawLiveRmsMeter();
+    // 3. Encadré vert de détection : MOT DE RÉVEIL DÉTECTÉ ! / « Bonjour ESP » / Détection réussie — événement #N
+    CoreS3.Display.fillRoundRect(16, 61, 288, 88, 8, colBoxBg);
+    CoreS3.Display.drawRoundRect(16, 61, 288, 88, 8, colBoxBorder);
 
-    CoreS3.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    CoreS3.Display.setCursor(10, 205);
-    CoreS3.Display.println("Touch LEFT : Trigger TEST 'Bonjour ESP'");
-    CoreS3.Display.println("Touch RIGHT: Resume ARMED immediately");
+    // Icône coche dans un cercle
+    CoreS3.Display.drawCircle(30, 76, 6, colBoxCheck);
+    CoreS3.Display.drawLine(27, 76, 29, 78, colBoxCheck);
+    CoreS3.Display.drawLine(29, 78, 33, 73, colBoxCheck);
+
+    if (hasDetection) {
+        drawFrenchText(42, 70, "MOT DE RÉVEIL DÉTECTÉ !", &fonts::DejaVu12, colBoxTitle, colBoxBg);
+    } else {
+        drawFrenchText(42, 70, "EN ÉCOUTE DU MOT DE RÉVEIL", &fonts::DejaVu12, colBoxTitle, colBoxBg);
+    }
+
+    const String phrase = voice.getLastDetectedWakeWord().isEmpty()
+        ? String("Bonjour ESP")
+        : voice.getLastDetectedWakeWord();
+    char phraseLine[64];
+    snprintf(phraseLine, sizeof(phraseLine), "« %s »", phrase.c_str());
+    drawFrenchText(26, 95, phraseLine, &fonts::DejaVu18, TFT_WHITE, colBoxBg);
+
+    char subLine[80];
+    if (hasDetection) {
+        if (isSimulated) {
+            snprintf(subLine, sizeof(subLine), "Simulation TEST (non acoustique) — #%u", m.detectionCount);
+        } else {
+            snprintf(subLine, sizeof(subLine), "Détection réussie — événement #%u", m.detectionCount);
+        }
+    } else {
+        snprintf(subLine, sizeof(subLine), "Moteur %s — %s",
+                 voice.getWakeWordEngineName(),
+                 getEngineRecognitionNature());
+    }
+    drawFrenchText(26, 126, subLine, &fonts::DejaVu12, colBoxSub, colBoxBg);
+
+    // 4. Ligne SUSPENDED — Suspension temporaire
+    CoreS3.Display.fillCircle(22, 166, 6, colAmber);
+    CoreS3.Display.fillRect(20, 163, 1, 6, colCardBg);
+    CoreS3.Display.fillRect(23, 163, 1, 6, colCardBg);
+    drawFrenchText(34, 160, "SUSPENDED — Suspension temporaire", &fonts::DejaVu12, colAmber, colCardBg);
+
+    // 5. Ligne ARMED — Prêt pour un nouveau réveil
+    CoreS3.Display.drawCircle(22, 188, 6, colRearmIcon);
+    CoreS3.Display.drawLine(19, 188, 21, 190, colRearmIcon);
+    CoreS3.Display.drawLine(21, 190, 25, 185, colRearmIcon);
+    drawFrenchText(34, 182, "ARMED — Prêt pour un nouveau réveil", &fonts::DejaVu12, colRearmText, colCardBg);
+
+    // 6. Pied de page : Détections : X | Réarmements : Y | Erreurs : Z
+    CoreS3.Display.drawFastHLine(16, 206, 288, colDivider);
+    char footerLine[80];
+    snprintf(footerLine, sizeof(footerLine), "Détections : %u | Réarmements : %u | Erreurs : %u",
+             m.detectionCount, m.rearmCount, m.errorCount);
+    drawFrenchText(16, 215, footerLine, &fonts::DejaVu12, colFooter, colCardBg);
+
+    CoreS3.Display.endWrite();
 }
 
-static void printActiveEngineStatus() {
-    Serial.printf("[WAKE] Moteur actif : %s (modèle : %s) — %s\n",
+static void printSerialHeader() {
+    Serial.println();
+    Serial.printf("VOICEKIT — WAKE WORD                                            %s\n", VOICEKIT_VERSION);
+    Serial.printf("Moteur actif : %s (%s) — %s\n",
                   voice.getWakeWordEngineName(),
                   voice.getWakeWordModelName(),
                   getEngineRecognitionNature());
     if (voice.isWakeWordSimulated()) {
-        Serial.println("[WAKE] Information : Le moteur TEST est une SIMULATION (TEST) déterministe et ne réalise aucune détection acoustique.");
+        Serial.println("Note : Le moteur TEST est une SIMULATION (TEST) et ne réalise aucune détection acoustique.");
     }
+    Serial.println("────────────────────────────────────────────────────────────────────────");
+}
+
+static void printCountersFooter() {
+    const WakeWordMetrics& m = voice.getWakeWordMetrics();
+    Serial.println("────────────────────────────────────────────────────────────────────────");
+    Serial.printf("Détections : %u | Réarmements : %u | Erreurs : %u\n\n",
+                  m.detectionCount, m.rearmCount, m.errorCount);
 }
 
 static void printStateTransitionMessage(WakeWordState state) {
     const WakeWordMetrics& m = voice.getWakeWordMetrics();
-    const char* stateMsg = getStateFrenchMessage(state);
-    const char* engineName = voice.getWakeWordEngineName();
-    const char* engineNature = getEngineRecognitionNature();
-
-    Serial.printf("[WAKE] État : %s | Moteur : %s [%s] | Détections=%u | Réarmements=%u | Erreurs=%u\n",
-                  stateMsg,
-                  engineName,
-                  engineNature,
-                  m.detectionCount,
-                  m.rearmCount,
-                  m.errorCount);
+    switch (state) {
+        case WakeWordState::INITIALIZING:
+            Serial.println("⏳ INITIALIZING — Initialisation en cours");
+            break;
+        case WakeWordState::ARMED:
+            if (m.rearmCount == 0) {
+                Serial.println();
+                Serial.println("🎙 ARMED — En écoute...");
+            } else {
+                Serial.println("✓ ARMED — Prêt pour un nouveau réveil (Écoute réactivée)");
+                printCountersFooter();
+            }
+            break;
+        case WakeWordState::DETECTED:
+            Serial.println("✓ DETECTED — Mot reconnu");
+            break;
+        case WakeWordState::SUSPENDED:
+            Serial.println("⏸ SUSPENDED — Suspension temporaire (Détection suspendue)");
+            break;
+        case WakeWordState::ERROR:
+            Serial.println("✖ ERROR — Erreur du détecteur");
+            printCountersFooter();
+            break;
+        case WakeWordState::DISABLED:
+        default:
+            Serial.println("○ DISABLED — Détecteur désactivé");
+            break;
+    }
 }
 
 static void printWakeWordDetectionBanner(const String& word) {
     const WakeWordMetrics& m = voice.getWakeWordMetrics();
     const String detectedPhrase = word.isEmpty() ? String("Bonjour ESP") : word;
-    const uint32_t realDetections = (m.detectionCount >= m.simulatedDetectionCount)
-        ? (m.detectionCount - m.simulatedDetectionCount)
-        : 0u;
 
     Serial.println();
-    Serial.println("============================================================");
-    Serial.println("||                 MOT DE RÉVEIL DÉTECTÉ                  ||");
-    Serial.println("============================================================");
-    Serial.printf("  Texte reconnu          : %s\n", detectedPhrase.c_str());
-    Serial.printf("  Moteur actif           : %s (%s)\n",
-                  voice.getWakeWordEngineName(),
-                  voice.getWakeWordModelName());
-    Serial.printf("  Mode de reconnaissance : %s\n", getEngineRecognitionNature());
+    Serial.println("╭──────────────────────────────────────────────────────────────────────╮");
+    Serial.println("│  ✓ MOT DE RÉVEIL DÉTECTÉ !                                           │");
+    Serial.println("│                                                                      │");
+    Serial.printf("│  « %s »                                                     │\n", detectedPhrase.c_str());
+    Serial.println("│                                                                      │");
     if (voice.isWakeWordSimulated()) {
-        Serial.println("  Origine                : Déclenchement simulé du moteur TEST (non acoustique)");
+        Serial.printf("│  Déclenchement simulé (non acoustique) — événement #%-16u│\n", m.detectionCount);
     } else {
-        Serial.println("  Origine                : Détection acoustique réelle (microphone CoreS3 ES7210)");
+        Serial.printf("│  Détection réussie — événement #%-36u│\n", m.detectionCount);
     }
-    Serial.printf("  Compteur de détections : #%u (réelles=%u | simulées=%u)\n",
-                  m.detectionCount,
-                  realDetections,
-                  m.simulatedDetectionCount);
-    Serial.printf("  Compteurs cumulés      : Détections=%u | Réarmements=%u | Erreurs=%u\n",
-                  m.detectionCount,
-                  m.rearmCount,
-                  m.errorCount);
-    Serial.println("============================================================");
+    Serial.printf("│  Moteur : %s — %s\n",
+                  voice.getWakeWordEngineName(),
+                  getEngineRecognitionNature());
+    Serial.println("╰──────────────────────────────────────────────────────────────────────╯");
+    Serial.println();
 }
 
 static void printDiagnostics() {
@@ -213,7 +338,7 @@ static void printDiagnostics() {
         ? (m.detectionCount - m.simulatedDetectionCount)
         : 0u;
 
-    Serial.println("------------------------------------------------------------");
+    Serial.println("────────────────────────────────────────────────────────────────────────");
     Serial.printf("[WAKE][DIAG] Enabled=%s | CompiledSupport=%s | ModelAvail=%s | EngineAvail=%s | EngineInit=%s\n",
                   voice.isWakeWordEnabled() ? "YES" : "NO",
                   voice.isWakeWordEngineCompiledSupportAvailable() ? "YES" : "NO",
@@ -241,12 +366,13 @@ static void printDiagnostics() {
     Serial.printf("[WAKE][DIAG] Frames rx=%u | processed=%u | dropped=%u | saturations=%u | queue=%u/%u (max=%u)\n",
                   m.framesReceived, m.framesProcessed, m.framesDropped, m.queueSaturations,
                   (unsigned)m.currentQueueOccupancy, (unsigned)m.queueCapacity, (unsigned)m.maxQueueOccupancy);
-    Serial.printf("[WAKE][DIAG] RMS last=%u | peak=%u | Detections=%u (real=%u, simulated=%u) | Rearms=%u | Errors=%u | Transitions=%u | CaptureStopFailures=%u\n",
+    Serial.printf("[WAKE][DIAG] RMS last=%u | peak=%u | Detections=%u (real=%u, simulated=%u) | Rearms=%u | Errors=%u | Transitions=%u\n",
                   m.lastRms, m.peakRms,
                   m.detectionCount, realDetections, m.simulatedDetectionCount,
-                  m.rearmCount, m.errorCount, m.stateTransitionCount,
-                  m.captureStopFailures);
-    Serial.println("------------------------------------------------------------");
+                  m.rearmCount, m.errorCount, m.stateTransitionCount);
+    Serial.printf("Détections : %u | Réarmements : %u | Erreurs : %u\n",
+                  m.detectionCount, m.rearmCount, m.errorCount);
+    Serial.println("────────────────────────────────────────────────────────────────────────");
 }
 
 void setup() {
@@ -254,9 +380,6 @@ void setup() {
     CoreS3.begin(cfg);
     Serial.begin(115200);
     delay(300);
-
-    Serial.println();
-    Serial.printf("[WAKE] VoiceKit %s\n", VOICEKIT_VERSION);
 
     // Configuration purement hors ligne (aucun Wi-Fi, aucune clé API Gemini/OpenAI)
     VoiceKitConfig vConfig;
@@ -271,13 +394,11 @@ void setup() {
         return;
     }
 
-    Serial.println("[WAKE] CoreS3 ES7210 prêt (PCM 16000 Hz / 16-bit mono)");
-
     // Callbacks de la machine à états et de détection :
     // Exécutés exclusivement dans la boucle principale via voice.update() (jamais dans le callback audio critique)
     voice.onWakeWordStateChanged([](WakeWordState state) {
         printStateTransitionMessage(state);
-        updateSimpleStatusScreen();
+        updateWakeWordCardScreen();
     });
 
     voice.onWakeWordDetected([](const String& word) {
@@ -288,31 +409,28 @@ void setup() {
         }
         s_lastDisplayedDetectionIndex = m.detectionCount;
         printWakeWordDetectionBanner(word);
+        updateWakeWordCardScreen();
         s_detectedSuspendStartMs = millis();
         s_pendingAutoResumeAfterDetection = true;
     });
 
     voice.onWakeWordError([](const String& err) {
         const WakeWordMetrics& m = voice.getWakeWordMetrics();
-        Serial.printf("[WAKE] Erreur Wake Word (#%u) : %s\n", m.errorCount, err.c_str());
-        updateSimpleStatusScreen();
+        Serial.printf("✖ Erreur Wake Word (#%u) : %s\n", m.errorCount, err.c_str());
+        updateWakeWordCardScreen();
     });
 
     // 1. Vérification explicite de la disponibilité du moteur officiel Espressif WakeNet
     if (voice.getWakeWordManager().isEngineAvailable(WakeWordEngineType::WAKENET)) {
         voice.setWakeWordProcessingBudgetUs(25000);
         voice.setWakeWordEngine(WakeWordEngineType::WAKENET);
-        voice.enableWakeWord(true);
-        printActiveEngineStatus();
     } else {
-        Serial.println("[WAKE] Moteur WAKENET indisponible dans cet environnement -> Repli explicite sur le moteur TEST — SIMULATION (TEST)");
         voice.setWakeWordEngine(WakeWordEngineType::TEST);
-        voice.enableWakeWord(true);
-        printActiveEngineStatus();
     }
 
-    Serial.println("[WAKE] Commandes série : 'bonjour esp' (déclencher test), 'r' (reprendre ARMED), 's' (suspendre), 'd' (désactiver), 'e' (activer), 'c' (cycles), 'w' (moteur WAKENET), 't' (moteur TEST), 'm' (métriques mémoire/CPU)");
-    updateSimpleStatusScreen();
+    printSerialHeader();
+    voice.enableWakeWord(true);
+    updateWakeWordCardScreen();
 }
 
 void loop() {
@@ -322,7 +440,7 @@ void loop() {
     // Consommation non bloquante de l'événement (sans journalisation dupliquée ni double comptage)
     WakeWordEvent ev;
     if (voice.pollWakeWordEvent(ev)) {
-        updateSimpleStatusScreen();
+        updateWakeWordCardScreen();
     }
 
     // Lecture des commandes sur le moniteur série
@@ -345,19 +463,16 @@ void loop() {
             voice.enableWakeWord(true);
         } else if (lower == "w" || lower == "wakenet") {
             s_pendingAutoResumeAfterDetection = false;
-            Serial.println("[WAKE] Basculement vers le moteur WAKENET (vérification de disponibilité réelle)...");
             voice.setWakeWordEngine(WakeWordEngineType::WAKENET);
+            printSerialHeader();
             voice.enableWakeWord(true);
-            printActiveEngineStatus();
         } else if (lower == "t" || lower == "test") {
             s_pendingAutoResumeAfterDetection = false;
-            Serial.println("[WAKE] Basculement vers le moteur TEST — SIMULATION (TEST)...");
             voice.setWakeWordEngine(WakeWordEngineType::TEST);
+            printSerialHeader();
             voice.enableWakeWord(true);
-            printActiveEngineStatus();
         } else if (lower == "c" || lower == "cycle") {
             s_pendingAutoResumeAfterDetection = false;
-            Serial.println("[WAKE] Exécution de 5 cycles d'activation / suspension / reprise / désactivation...");
             for (int i = 0; i < 5; ++i) {
                 voice.disableWakeWord();
                 voice.enableWakeWord(true);
@@ -369,7 +484,7 @@ void loop() {
             printDiagnostics();
         } else if (!cmd.isEmpty()) {
             if (!voice.handleWakeWordSerialCommand(cmd)) {
-                Serial.printf("[WAKE] Commande ignorée ('%s') : vérifiez que le moteur actif est TEST et que l'état est ARMED.\n", cmd.c_str());
+                Serial.printf("Commande ignorée ('%s') : vérifiez que le moteur actif est TEST et que l'état est ARMED.\n", cmd.c_str());
             }
         }
     }
@@ -380,12 +495,10 @@ void loop() {
         if (pt.wasPressed()) {
             s_lastTouchMs = millis();
             if (pt.x < 160) {
-                // Moitié gauche : déclencher la détection de test si ARMED et moteur TEST
                 if (voice.getWakeWordState() == WakeWordState::ARMED && voice.isWakeWordSimulated()) {
                     voice.triggerTestWakeWord("Bonjour ESP");
                 }
             } else {
-                // Moitié droite : reprendre l'écoute (SUSPENDED -> ARMED)
                 if (voice.getWakeWordState() == WakeWordState::SUSPENDED) {
                     s_pendingAutoResumeAfterDetection = false;
                     voice.resumeWakeWord();
@@ -394,7 +507,7 @@ void loop() {
         }
     }
 
-    // Reprise automatique après affichage de la détection (2.5 s) pour permettre plusieurs essais successifs
+    // Reprise automatique après affichage de la détection (2.5 s) pour enchainer les réveils
     if (s_pendingAutoResumeAfterDetection) {
         if (voice.getWakeWordState() != WakeWordState::SUSPENDED) {
             s_pendingAutoResumeAfterDetection = false;
@@ -402,12 +515,6 @@ void loop() {
             s_pendingAutoResumeAfterDetection = false;
             voice.resumeWakeWord();
         }
-    }
-
-    // Rafraîchissement fluide du VU-mètre RMS sur l'écran toutes les 120 ms (aucune sortie série dans loop)
-    if (voice.getWakeWordState() == WakeWordState::ARMED && (millis() - s_lastRmsDrawMs >= 120)) {
-        s_lastRmsDrawMs = millis();
-        drawLiveRmsMeter();
     }
 
     delay(5);
