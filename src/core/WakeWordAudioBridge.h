@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <atomic>
 #include <memory>
+#include <functional>
 #include "IWakeWordEngine.h"
 #include "VoiceHubConfig.h"
 
@@ -67,18 +68,35 @@ public:
     /**
      * @brief Active ou désactive l'acceptation des trames dans pushAudioChunk().
      */
-    void setEnabled(bool enabled) { _enabled.store(enabled, std::memory_order_release); }
+    void setEnabled(bool enabled);
     bool isEnabled() const { return _enabled.load(std::memory_order_acquire); }
     bool isInitialized() const { return _initialized.load(std::memory_order_acquire); }
 
     /**
      * @brief Configure la politique en cas de saturation de la file bornée.
+     *
+     * Note v0.6.2.1 : Seule la politique `DROP_NEWEST` est autorisée afin de garantir
+     * que le producteur ne modifie jamais `_tail` et n'invalide jamais un pointeur
+     * retourné par `peekFrame()` pendant `IWakeWordEngine::process()`.
+     * Tout appel avec `DROP_OLDEST` maintient `DROP_NEWEST` et incrémente le compteur
+     * de rejets de politique non sécurisée.
      */
     void setOverflowPolicy(WakeWordOverflowPolicy policy) {
-        _overflowPolicy.store(policy, std::memory_order_relaxed);
+        if (policy == WakeWordOverflowPolicy::DROP_OLDEST) {
+            _unsupportedPolicyRequests.fetch_add(1, std::memory_order_relaxed);
+            _overflowPolicy.store(WakeWordOverflowPolicy::DROP_NEWEST, std::memory_order_relaxed);
+            return;
+        }
+        _overflowPolicy.store(WakeWordOverflowPolicy::DROP_NEWEST, std::memory_order_relaxed);
     }
     WakeWordOverflowPolicy getOverflowPolicy() const {
         return _overflowPolicy.load(std::memory_order_relaxed);
+    }
+    static bool isOverflowPolicySupported(WakeWordOverflowPolicy policy) {
+        return policy == WakeWordOverflowPolicy::DROP_NEWEST;
+    }
+    uint32_t getUnsupportedPolicyRequestCount() const {
+        return _unsupportedPolicyRequests.load(std::memory_order_relaxed);
     }
 
     /**
@@ -130,14 +148,31 @@ public:
     uint32_t getLastSequenceEnqueued() const { return _lastSeqEnqueued.load(std::memory_order_relaxed); }
     uint32_t getLastSequenceConsumed() const { return _lastSeqConsumed.load(std::memory_order_relaxed); }
     uint32_t getCopyCountPerFrame() const { return 1; } // Exactement 1 copie (DMA -> slot pont), 0 copie au dépilage
+    bool isFramePeeked() const { return _consumerPeeking.load(std::memory_order_acquire); }
+    uint32_t getActiveWriters() const { return _activeWriters.load(std::memory_order_acquire); }
+
+#if !defined(ESP32) && !defined(ARDUINO)
+    using WriteHook = std::function<void()>;
+    void setSimMidWriteHook(WriteHook hook) { _simMidWriteHook = std::move(hook); }
+#endif
 
 private:
+    void waitForActiveWriters() const;
+
     std::unique_ptr<FrameSlot[]> _slots;
     size_t _capacity = 0;
 
     std::atomic<bool> _initialized{false};
     std::atomic<bool> _enabled{false};
     std::atomic<WakeWordOverflowPolicy> _overflowPolicy{WakeWordOverflowPolicy::DROP_NEWEST};
+    std::atomic<uint32_t> _unsupportedPolicyRequests{0};
+    std::atomic<uint32_t> _activeWriters{0};
+    std::atomic<uint32_t> _epoch{0};
+    mutable std::atomic<bool> _consumerPeeking{false};
+
+#if !defined(ESP32) && !defined(ARDUINO)
+    WriteHook _simMidWriteHook;
+#endif
 
     std::atomic<size_t> _head{0};
     std::atomic<size_t> _tail{0};

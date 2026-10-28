@@ -325,6 +325,8 @@ public:
     bool resumeWakeWord();
 
     bool isWakeWordEnabled() const { return _wakeWordManager.isEnabled(); }
+    bool isWakeWordEngineCompiledSupportAvailable() const { return _wakeWordManager.isEngineCompiledSupportAvailable(); }
+    bool isWakeWordEngineModelAvailable() const { return _wakeWordManager.isEngineModelAvailable(); }
     bool isWakeWordEngineAvailable() const { return _wakeWordManager.isEngineAvailable(); }
     bool isWakeWordEngineAvailable(WakeWordEngineType type) const { return _wakeWordManager.isEngineAvailable(type); }
     bool isWakeWordEngineInitialized() const { return _wakeWordManager.isEngineInitialized(); }
@@ -350,6 +352,12 @@ public:
     bool isWakeWordAutoResume() const { return _wakeWordManager.isAutoResumeAfterVoiceActivity(); }
     void setWakeWordResumeDelayMs(uint32_t delayMs) { _wakeWordManager.setResumeDelayMs(delayMs); }
     uint32_t getWakeWordResumeDelayMs() const { return _wakeWordManager.getResumeDelayMs(); }
+
+    void setWakeWordMaxFramesPerUpdate(size_t maxFrames) { _wakeWordManager.setMaxFramesPerUpdate(maxFrames); }
+    size_t getWakeWordMaxFramesPerUpdate() const { return _wakeWordManager.getMaxFramesPerUpdate(); }
+    void setWakeWordProcessingBudgetUs(uint32_t budgetUs) { _wakeWordManager.setProcessingBudgetUs(budgetUs); }
+    uint32_t getWakeWordProcessingBudgetUs() const { return _wakeWordManager.getProcessingBudgetUs(); }
+    uint32_t getWakeWordProcessingBudgetExceededCount() const { return _wakeWordManager.getProcessingBudgetExceededCount(); }
 
     bool triggerTestWakeWord(const String& customWord = "") { return _wakeWordManager.triggerTestDetection(customWord); }
     bool handleWakeWordSerialCommand(const String& cmd) { return _wakeWordManager.handleSerialCommand(cmd); }

@@ -48,9 +48,11 @@ static void updateSimpleStatusScreen() {
     CoreS3.Display.println("Audio: CoreS3 ES7210 PCM 16000 Hz / 16-bit");
 
     CoreS3.Display.setCursor(10, 75);
-    CoreS3.Display.printf("Engine : %s %s\n",
-                          voice.getWakeWordEngineName(),
-                          voice.isWakeWordSimulated() ? "(SIMULATED - NON ACOUSTIC)" : "(REAL)");
+    if (voice.isWakeWordSimulated()) {
+        CoreS3.Display.println("Engine: TEST - SIMULATED (NON ACOUSTIC)");
+    } else {
+        CoreS3.Display.printf("Engine: %s (REAL)\n", voice.getWakeWordEngineName());
+    }
     CoreS3.Display.printf("Model  : %s\n", voice.getWakeWordModelName());
 
     WakeWordState st = voice.getWakeWordState();
@@ -87,26 +89,35 @@ static void updateSimpleStatusScreen() {
 static void printDiagnostics() {
     const WakeWordMetrics& m = voice.getWakeWordMetrics();
     Serial.println("------------------------------------------------------------");
-    Serial.printf("[WAKE][DIAG] Enabled=%s | EngineAvail=%s | EngineInit=%s | Listening=%s | Simulated=%s\n",
+    Serial.printf("[WAKE][DIAG] Enabled=%s | CompiledSupport=%s | ModelAvail=%s | EngineAvail=%s | EngineInit=%s\n",
                   voice.isWakeWordEnabled() ? "YES" : "NO",
+                  voice.isWakeWordEngineCompiledSupportAvailable() ? "YES" : "NO",
+                  voice.isWakeWordEngineModelAvailable() ? "YES" : "NO",
                   voice.isWakeWordEngineAvailable() ? "YES" : "NO",
-                  voice.isWakeWordEngineInitialized() ? "YES" : "NO",
+                  voice.isWakeWordEngineInitialized() ? "YES" : "NO");
+    Serial.printf("[WAKE][DIAG] Listening=%s | RealRecognition=%s | Simulated=%s\n",
                   voice.isWakeWordListening() ? "YES" : "NO",
+                  voice.isWakeWordRealRecognitionActive() ? "YES" : "NO",
                   voice.isWakeWordSimulated() ? "YES" : "NO");
     Serial.printf("[WAKE][DIAG] State=%s | Engine=%s | Model=%s\n",
                   wakeWordStateToString(voice.getWakeWordState()),
-                  voice.getWakeWordEngineName(),
+                  voice.isWakeWordSimulated() ? "TEST — SIMULATED" : voice.getWakeWordEngineName(),
                   voice.getWakeWordModelName());
     Serial.printf("[WAKE][DIAG] Internal RAM free=%u B (min=%u B) | PSRAM free=%u B (min=%u B)\n",
                   m.freeInternalHeap, m.minFreeInternalHeap, m.freePsram, m.minFreePsram);
-    Serial.printf("[WAKE][DIAG] Audio Push max=%u us (last=%u us) | WakeWord Process max=%u us (last=%u us)\n",
+    Serial.printf("[WAKE][DIAG] Audio Push max=%u us (last=%u us) | Frame Process max=%u us (last=%u us)\n",
                   m.maxAudioPushDurationUs, m.lastAudioPushDurationUs,
                   m.maxWakeProcessDurationUs, m.lastWakeProcessDurationUs);
+    Serial.printf("[WAKE][DIAG] Update Budget=%u us | Update Process max=%u us (last=%u us) | BudgetExceeded=%u | MaxFrames/Update=%u (last=%u)\n",
+                  m.processingBudgetUs, m.maxUpdateProcessDurationUs, m.lastUpdateProcessDurationUs,
+                  m.processingBudgetExceeded, (unsigned)m.maxFramesPerUpdate, (unsigned)m.lastFramesProcessedInUpdate);
     Serial.printf("[WAKE][DIAG] Frames rx=%u | processed=%u | dropped=%u | saturations=%u | queue=%u/%u (max=%u)\n",
                   m.framesReceived, m.framesProcessed, m.framesDropped, m.queueSaturations,
                   (unsigned)m.currentQueueOccupancy, (unsigned)m.queueCapacity, (unsigned)m.maxQueueOccupancy);
-    Serial.printf("[WAKE][DIAG] Detections=%u (simulated=%u) | Transitions=%u | Errors=%u\n",
-                  m.detectionCount, m.simulatedDetectionCount, m.stateTransitionCount, m.errorCount);
+    Serial.printf("[WAKE][DIAG] RMS last=%u | peak=%u | Detections=%u (simulated=%u) | Transitions=%u | CaptureStopFailures=%u | Errors=%u\n",
+                  m.lastRms, m.peakRms,
+                  m.detectionCount, m.simulatedDetectionCount, m.stateTransitionCount,
+                  m.captureStopFailures, m.errorCount);
     Serial.println("------------------------------------------------------------");
 }
 
@@ -161,12 +172,12 @@ void setup() {
     } else {
         // Affichage explicite de l'absence de WakeNet10 dans cet environnement Arduino IDF 4.4
         Serial.println("[WAKE] WAKENET status: UNAVAILABLE in Arduino-ESP32 2.0.17 / ESP-IDF 4.4.7 (wn10_fr_bonjouresp requires ESP-IDF >= 5.0)");
-        Serial.println("[WAKE] Engine: TEST (SIMULATED - validation capture PCM 16 kHz, pont audio et machine a etats)");
+        Serial.println("[WAKE] Engine: TEST — SIMULATED");
         voice.setWakeWordEngine(WakeWordEngineType::TEST);
         voice.enableWakeWord(true);
     }
 
-    Serial.println("[WAKE] Commandes serie : 'bonjour esp' (declencher test), 'r' (reprendre ARMED), 's' (suspendre), 'w' (tester WAKENET), 't' (moteur TEST), 'm' (diagnostics)");
+    Serial.println("[WAKE] Commandes serie : 'bonjour esp' (declencher test), 'r' (reprendre ARMED), 's' (suspendre), 'd' (desactiver), 'e' (activer), 'c' (cycles activation/desactivation), 'w' (tester WAKENET), 't' (moteur TEST), 'm' (diagnostics)");
     updateSimpleStatusScreen();
 }
 
@@ -203,9 +214,18 @@ void loop() {
             voice.setWakeWordEngine(WakeWordEngineType::WAKENET);
             voice.enableWakeWord(true);
         } else if (lower == "t" || lower == "test") {
-            Serial.println("[WAKE] Switching engine to TEST (SIMULATED non-acoustic engine)...");
+            Serial.println("[WAKE] Engine: TEST — SIMULATED");
             voice.setWakeWordEngine(WakeWordEngineType::TEST);
             voice.enableWakeWord(true);
+        } else if (lower == "c" || lower == "cycle") {
+            Serial.println("[WAKE] Execution de 5 cycles d'activation / suspension / reprise / desactivation...");
+            for (int i = 0; i < 5; ++i) {
+                voice.disableWakeWord();
+                voice.enableWakeWord(true);
+                voice.suspendWakeWord();
+                voice.resumeWakeWord();
+            }
+            printDiagnostics();
         } else if (lower == "m" || lower == "metrics") {
             printDiagnostics();
         } else if (!cmd.isEmpty()) {

@@ -439,12 +439,14 @@ struct VoiceKitConfig {
     bool enableConversation = false;
     String conversationInstruction = VOICEKIT_DEFAULT_CONVERSATION_INSTRUCTION;
 
-    // Fondation Wake Word locale (v0.6.2 — optionnelle, désactivée par défaut)
+    // Fondation Wake Word locale (v0.6.2 / v0.6.2.1 — optionnelle, désactivée par défaut)
     bool enableWakeWord = false;                                    ///< Active le détecteur au démarrage si true
     WakeWordEngineType wakeWordEngine = WakeWordEngineType::WAKENET;///< Moteur ciblé (WAKENET par défaut, ou TEST)
     String wakeWordPhrase = "Bonjour ESP";                          ///< Mot de réveil cible
     bool wakeWordAutoResume = true;                                 ///< Reprise automatique après fin de conversation/TTS
     uint32_t wakeWordResumeDelayMs = 250;                           ///< Délai d'extinction acoustique avant réarmement (ms)
+    size_t wakeWordMaxFramesPerUpdate = 2;                          ///< Nombre max de trames PCM traitées par appel à update() (fluidité LVGL)
+    uint32_t wakeWordProcessingBudgetUs = 5000;                     ///< Budget max de traitement Wake Word par appel à update() en µs (0 = illimité)
 
     // Champs de compatibilite ascendante pour applications hotes autonomes
     bool hardwareAlreadyInitialized = true;

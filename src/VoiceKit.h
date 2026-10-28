@@ -293,6 +293,16 @@ public:
     bool isWakeWordListening() const { return _voice.isWakeWordListening(); }
 
     /**
+     * @brief Indique si le support ESP-SR WakeNet est compilé dans l'environnement courant (v0.6.2.1).
+     */
+    bool isWakeWordEngineCompiledSupportAvailable() const { return _voice.isWakeWordEngineCompiledSupportAvailable(); }
+
+    /**
+     * @brief Indique si la partition/modèle WakeNet est effectivement accessible et valide (v0.6.2.1).
+     */
+    bool isWakeWordEngineModelAvailable() const { return _voice.isWakeWordEngineModelAvailable(); }
+
+    /**
      * @brief Indique si le moteur sélectionné est disponible dans l'environnement courant.
      */
     bool isWakeWordEngineAvailable() const { return _voice.isWakeWordEngineAvailable(); }
@@ -355,6 +365,19 @@ public:
 
     void setWakeWordResumeDelayMs(uint32_t delayMs) { _voice.setWakeWordResumeDelayMs(delayMs); }
     uint32_t getWakeWordResumeDelayMs() const { return _voice.getWakeWordResumeDelayMs(); }
+
+    /**
+     * @brief Définit le nombre maximal de trames PCM traitées par appel à update() (fluidité LVGL — v0.6.2.1).
+     */
+    void setWakeWordMaxFramesPerUpdate(size_t maxFrames) { _voice.setWakeWordMaxFramesPerUpdate(maxFrames); }
+    size_t getWakeWordMaxFramesPerUpdate() const { return _voice.getWakeWordMaxFramesPerUpdate(); }
+
+    /**
+     * @brief Définit le budget maximal de temps CPU (µs) par appel à update() pour le Wake Word (v0.6.2.1).
+     */
+    void setWakeWordProcessingBudgetUs(uint32_t budgetUs) { _voice.setWakeWordProcessingBudgetUs(budgetUs); }
+    uint32_t getWakeWordProcessingBudgetUs() const { return _voice.getWakeWordProcessingBudgetUs(); }
+    uint32_t getWakeWordProcessingBudgetExceededCount() const { return _voice.getWakeWordProcessingBudgetExceededCount(); }
 
     /**
      * @brief Déclenche une détection de test simulée (uniquement si moteur TEST et état ARMED).

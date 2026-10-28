@@ -188,7 +188,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         return false;
     }
 
-    // 4b. Liaison du gestionnaire Wake Word sur le streamer audio partagé (v0.6.2)
+    // 4b. Liaison du gestionnaire Wake Word sur le streamer audio partagé (v0.6.2 / v0.6.2.1)
     _wakeWordManager.begin(&_streamer);
     _wakeWordManager.setVoiceBusyCheckCallback([this]() {
         return this->isBusy() || this->isSpeaking();
@@ -198,6 +198,8 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     }
     _wakeWordManager.setAutoResumeAfterVoiceActivity(_config.wakeWordAutoResume);
     _wakeWordManager.setResumeDelayMs(_config.wakeWordResumeDelayMs);
+    _wakeWordManager.setMaxFramesPerUpdate(_config.wakeWordMaxFramesPerUpdate);
+    _wakeWordManager.setProcessingBudgetUs(_config.wakeWordProcessingBudgetUs);
 
     // 5. Initialisation du fournisseur vocal actif (Gemini Live ou OpenAI Realtime, ou mode hors ligne sans clé API)
     if (_config.provider == VoiceProviderType::OPENAI) {
@@ -712,8 +714,24 @@ bool VoxCoreVoice::say(const String& text) {
     }
 
     // Réarmer la restitution haut-parleur (et suspendre Wake Word pour éviter conflit I2S / larsen)
-    if (_wakeWordManager.isEnabled() && _wakeWordManager.getState() == WakeWordState::ARMED) {
+    if (_wakeWordManager.isEnabled() &&
+        (_wakeWordManager.getState() == WakeWordState::ARMED ||
+         _wakeWordManager.getState() == WakeWordState::DETECTED ||
+         _streamer.isLocalCapture())) {
         _wakeWordManager.notifyVoiceActivity(true, true);
+        if (_wakeWordManager.isError()) {
+            _lastError = _wakeWordManager.getLastError();
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+    } else if (_streamer.isLocalCapture()) {
+        if (!_streamer.stopLocalCapture()) {
+            _lastError = _streamer.getLastError();
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+            return false;
+        }
     }
     _player.setPlaybackAllowed(true);
 
@@ -1045,8 +1063,33 @@ bool VoxCoreVoice::startListening() {
     _lastError = "";
 
     // Suspension automatique du détecteur Wake Word pendant tout tour de conversation ou écoute STT
-    if (_wakeWordManager.isEnabled() && _wakeWordManager.getState() == WakeWordState::ARMED) {
+    if (_wakeWordManager.isEnabled() &&
+        (_wakeWordManager.getState() == WakeWordState::ARMED ||
+         _wakeWordManager.getState() == WakeWordState::DETECTED ||
+         _streamer.isLocalCapture())) {
         _wakeWordManager.notifyVoiceActivity(true, false);
+        if (_wakeWordManager.isError()) {
+            _lastError = _wakeWordManager.getLastError();
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+    } else if (_wakeWordManager.isEnabled() && _wakeWordManager.isError() &&
+               (_streamer.isLocalCapture() || _streamer.isTaskQuarantined())) {
+        _streamer.checkQuarantinedTasks();
+        if (_streamer.isLocalCapture() || _streamer.isTaskQuarantined()) {
+            _lastError = _wakeWordManager.getLastError();
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+    } else if (_streamer.isLocalCapture()) {
+        if (!_streamer.stopLocalCapture()) {
+            _lastError = _streamer.getLastError();
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+            return false;
+        }
     }
 
     // 0. En mode conversationnel bidirectionnel (Mode B)

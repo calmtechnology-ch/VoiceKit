@@ -3786,8 +3786,8 @@ void test_v0531_facade_modes_transitions_and_resilience() {
     cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
     vk.begin(cfg);
 
-    // 1. Constante de version alignée sur v0.6.2
-    TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.2") == 0, "VOICEKIT_VERSION est strictement v0.6.2");
+    // 1. Constante de version alignée sur v0.6.2.1
+    TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.2.1") == 0, "VOICEKIT_VERSION est strictement v0.6.2.1");
 
     // 2. Mode par défaut IDLE
     TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode initial = IDLE");
@@ -4778,6 +4778,7 @@ void test_v062_offline_init_and_shared_audio_capture() {
     WakeWordMetrics mBefore = vk.getWakeWordMetrics();
     TEST_ASSERT(mBefore.framesReceived == 5, "WakeWordAudioBridge a recu les 5 trames PCM");
 
+    vk.setWakeWordMaxFramesPerUpdate(8);
     vk.update();
     WakeWordMetrics mAfter = vk.getWakeWordMetrics();
     TEST_ASSERT(mAfter.framesProcessed == 5, "Les 5 trames PCM ont ete traitees hors callback audio dans update()");
@@ -4836,21 +4837,31 @@ void test_v062_wakeword_audio_bridge_queue_and_overflow() {
     TEST_ASSERT(bridge.getOccupancy() == 0, "File entierement videe");
     TEST_ASSERT(bridge.getFramesConsumed() == WakeWordAudioBridge::DEFAULT_QUEUE_CAPACITY, "8 trames marquees consommees");
 
-    // 3. Test de la politique DROP_OLDEST
+    // 3. Test de la politique DROP_OLDEST (désactivée en v0.6.2.1 et repliée sur DROP_NEWEST pour garantir l'intégrité de peekFrame)
     bridge.resetMetrics();
+    TEST_ASSERT(!WakeWordAudioBridge::isOverflowPolicySupported(WakeWordOverflowPolicy::DROP_OLDEST),
+                "DROP_OLDEST est explicitement declare non supporte en SPSC sans copie");
     bridge.setOverflowPolicy(WakeWordOverflowPolicy::DROP_OLDEST);
+    TEST_ASSERT(bridge.getOverflowPolicy() == WakeWordOverflowPolicy::DROP_NEWEST,
+                "setOverflowPolicy(DROP_OLDEST) maintient DROP_NEWEST pour proteger peekFrame()");
+    TEST_ASSERT(bridge.getUnsupportedPolicyRequestCount() == 1,
+                "Demande de politique DROP_OLDEST tracee dans les diagnostics");
     bridge.setEnabled(true);
 
     for (uint32_t seq = 1; seq <= WakeWordAudioBridge::DEFAULT_QUEUE_CAPACITY + 4; ++seq) {
         int16_t chunk[AUDIO_CHUNK_SAMPLES];
         chunk[0] = static_cast<int16_t>(seq);
         bool ok = bridge.pushAudioChunk(chunk, AUDIO_CHUNK_SAMPLES, seq);
-        TEST_ASSERT(ok, "DROP_OLDEST accepte la nouvelle trame en evincant la plus ancienne");
+        if (seq <= WakeWordAudioBridge::DEFAULT_QUEUE_CAPACITY) {
+            TEST_ASSERT(ok, "Trame acceptee tant que la file n'est pas pleine");
+        } else {
+            TEST_ASSERT(!ok, "Repli DROP_NEWEST rejette les nouvelles trames au-dela de la capacite sans modifier _tail");
+        }
     }
-    TEST_ASSERT(bridge.getFramesDropped() == 4, "4 anciennes trames evincees comptabilisees");
-    TEST_ASSERT(bridge.getQueueSaturationCount() == 4, "4 saturations comptabilisees en DROP_OLDEST");
+    TEST_ASSERT(bridge.getFramesDropped() == 4, "4 trames rejetees comptabilisees");
+    TEST_ASSERT(bridge.getQueueSaturationCount() == 4, "4 saturations comptabilisees");
     const WakeWordAudioBridge::FrameSlot* oldest = bridge.peekFrame();
-    TEST_ASSERT(oldest != nullptr && oldest->sequence == 5, "La plus ancienne trame restante est bien la trame #5");
+    TEST_ASSERT(oldest != nullptr && oldest->sequence == 1, "La trame #1 en tete de file est strictement preservee");
     bridge.clear();
 
     // 4. Pont désactivé : coût minimal, aucun push
@@ -5166,12 +5177,548 @@ void test_v062_lvgl_event_polling_and_diagnostics_metrics() {
 }
 
 // =============================================================================
+// SUITES DE TESTS CORRECTIVES VoiceKit v0.6.2.1
+// (Fiabilisation Wake Word Foundation — Concurrence, Budget CPU, Micro, WakeNet)
+// =============================================================================
+
+// SUITE 89 : WakeWordAudioBridge v0.6.2.1 — Protection de la durée de vie des trames et 7 scénarios de concurrence
+void test_v0621_audio_bridge_lifetime_concurrency_and_7_scenarios() {
+    std::cout << "\n[TEST SUITE 89] v0.6.2.1 : WakeWordAudioBridge (securite peekFrame, 7 scenarios de concurrence et integrite PCM)" << std::endl;
+
+    WakeWordAudioBridge bridge;
+    TEST_ASSERT(bridge.begin(8), "Pont audio initialise (8 slots)");
+    TEST_ASSERT(bridge.getOverflowPolicy() == WakeWordOverflowPolicy::DROP_NEWEST, "Politique par defaut = DROP_NEWEST");
+    bridge.setEnabled(true);
+
+    // Scénario 1 : Producteur plus rapide que consommateur
+    uint32_t nextWriteSeq = 1;
+    uint32_t expectedReadSeq = 1;
+    for (int round = 0; round < 5; ++round) {
+        // Producteur pousse 4 trames par tour
+        for (int p = 0; p < 4; ++p) {
+            int16_t chunk[AUDIO_CHUNK_SAMPLES];
+            for (size_t i = 0; i < AUDIO_CHUNK_SAMPLES; ++i) {
+                chunk[i] = static_cast<int16_t>((nextWriteSeq * 37 + i) & 0x7FFF);
+            }
+            bridge.pushAudioChunk(chunk, AUDIO_CHUNK_SAMPLES, nextWriteSeq * 10);
+            nextWriteSeq++;
+        }
+        // Consommateur ne lit qu'une seule trame par tour
+        const WakeWordAudioBridge::FrameSlot* slot = bridge.peekFrame();
+        TEST_ASSERT(slot != nullptr, "Scenario 1 : trame disponible pour le consommateur lent");
+        TEST_ASSERT(slot->sequence == expectedReadSeq, "Scenario 1 : ordre FIFO strictement sans trou sur les trames retenues");
+        TEST_ASSERT(slot->samples[0] == static_cast<int16_t>((expectedReadSeq * 37) & 0x7FFF), "Scenario 1 : echantillon 0 intact");
+        TEST_ASSERT(slot->samples[511] == static_cast<int16_t>((expectedReadSeq * 37 + 511) & 0x7FFF), "Scenario 1 : echantillon 511 intact");
+        bridge.consumeFrame();
+        expectedReadSeq++;
+    }
+    TEST_ASSERT(bridge.getFramesDropped() > 0, "Scenario 1 : trames excedentaires rejetees sans ecraser la file active");
+
+    // Scénario 2 & 3 : File complètement remplie + Saturations répétées pendant que le consommateur détient peekFrame()
+    bridge.clear();
+    bridge.resetMetrics();
+    bridge.setEnabled(true);
+
+    for (uint32_t s = 1; s <= 8; ++s) {
+        int16_t chunk[AUDIO_CHUNK_SAMPLES];
+        for (size_t i = 0; i < AUDIO_CHUNK_SAMPLES; ++i) {
+            chunk[i] = static_cast<int16_t>(s * 1000 + (i % 100));
+        }
+        TEST_ASSERT(bridge.pushAudioChunk(chunk, AUDIO_CHUNK_SAMPLES, s * 100), "Scenario 2 : remplissage complet slot");
+    }
+    TEST_ASSERT(bridge.isFull(), "Scenario 2 : file completement remplie (8/8)");
+
+    // Le consommateur obtient un pointeur via peekFrame() (simulant IWakeWordEngine::process() en cours)
+    const WakeWordAudioBridge::FrameSlot* peeked = bridge.peekFrame();
+    TEST_ASSERT(peeked != nullptr, "Scenario 2 : peekFrame() retourne un pointeur valide");
+    TEST_ASSERT(bridge.isFramePeeked(), "Scenario 2 : flag _framePeeked actif");
+    int16_t snapshotBefore[AUDIO_CHUNK_SAMPLES];
+    memcpy(snapshotBefore, peeked->samples, sizeof(snapshotBefore));
+    uint32_t seqBefore = peeked->sequence;
+
+    // Scénario 3 : 50 tentatives d'écriture saturantes pendant que peekFrame() est détenu
+    int16_t poisonChunk[AUDIO_CHUNK_SAMPLES];
+    for (size_t i = 0; i < AUDIO_CHUNK_SAMPLES; ++i) poisonChunk[i] = -32123;
+    for (int sat = 0; sat < 50; ++sat) {
+        bool pushed = bridge.pushAudioChunk(poisonChunk, AUDIO_CHUNK_SAMPLES, 99999);
+        TEST_ASSERT(!pushed, "Scenario 3 : producteur rejette la trame sans jamais ecraser le slot consulte");
+    }
+    TEST_ASSERT(bridge.getQueueSaturationCount() == 50, "Scenario 3 : 50 saturations comptabilisees");
+    TEST_ASSERT(bridge.getFramesDropped() == 50, "Scenario 3 : 50 pertes comptabilisees");
+    TEST_ASSERT(peeked->sequence == seqBefore, "Scenario 3 : numero de sequence du slot peekFrame inchange");
+    TEST_ASSERT(memcmp(peeked->samples, snapshotBefore, sizeof(snapshotBefore)) == 0,
+                "Scenario 3 : ZERO corruption memoire du slot detenu par le consommateur pendant process()");
+    bridge.consumeFrame();
+    TEST_ASSERT(!bridge.isFramePeeked(), "Scenario 3 : _framePeeked relache apres consumeFrame()");
+
+    // Scénario 4 : Suspension pendant une écriture (aucune trame partiellement écrite ou fantôme visible)
+    bridge.clear();
+    bridge.setEnabled(true);
+    bool midWriteHookCalled = false;
+    bridge.setSimMidWriteHook([&]() {
+        midWriteHookCalled = true;
+        // Pendant que la tâche audio est au milieu de pushAudioChunk(), le thread principal suspend le pont
+        TEST_ASSERT(bridge.getActiveWriters() == 1, "Scenario 4 : 1 ecrivain actif detecte pendant pushAudioChunk");
+        bridge.setEnabled(false);
+    });
+    int16_t midWriteChunk[AUDIO_CHUNK_SAMPLES];
+    for (size_t i = 0; i < AUDIO_CHUNK_SAMPLES; ++i) midWriteChunk[i] = 4321;
+    bool midWriteAccepted = bridge.pushAudioChunk(midWriteChunk, AUDIO_CHUNK_SAMPLES, 432);
+    bridge.setSimMidWriteHook(nullptr);
+
+    TEST_ASSERT(midWriteHookCalled, "Scenario 4 : hook de concurrence mi-ecriture declenche");
+    TEST_ASSERT(!midWriteAccepted, "Scenario 4 : ecriture invalidee par le changement d'epoque lors de la suspension");
+    TEST_ASSERT(bridge.getOccupancy() == 0, "Scenario 4 : file strictement vide apres suspension concurrente");
+    TEST_ASSERT(bridge.peekFrame() == nullptr, "Scenario 4 : aucune trame partiellement ecrite ou post-suspension visible");
+
+    // Scénario 5 : Désactivation pendant une acquisition via WakeWordManager
+    VoiceKit vk;
+    VoiceKitConfig cfg;
+    cfg.apiKey = "";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfg.wakeWordEngine = WakeWordEngineType::TEST;
+    cfg.enableWakeWord = true;
+    vk.begin(cfg);
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ARMED, "Scenario 5 : WakeWord ARMED");
+
+    vk.getWakeWordManager().getAudioBridge().setSimMidWriteHook([&]() {
+        vk.disableWakeWord();
+    });
+    vk.getEngine().getStreamer().pushSimulatedChunk(midWriteChunk, AUDIO_CHUNK_SAMPLES);
+    vk.getWakeWordManager().getAudioBridge().setSimMidWriteHook(nullptr);
+
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::DISABLED, "Scenario 5 : WakeWord proprement DISABLED apres desactivation concurrente");
+    TEST_ASSERT(vk.getWakeWordManager().getAudioBridge().getOccupancy() == 0, "Scenario 5 : zero trame fantome dans le pont desactive");
+
+    // Scénario 6 : Redémarrages successifs et protection de end() contre libération pendant écriture
+    for (int r = 0; r < 10; ++r) {
+        TEST_ASSERT(bridge.begin(8), "Scenario 6 : re-initialisation begin()");
+        bridge.setEnabled(true);
+        bridge.pushAudioChunk(midWriteChunk, AUDIO_CHUNK_SAMPLES, 500 + r);
+        TEST_ASSERT(bridge.getOccupancy() == 1, "Scenario 6 : 1 trame presente");
+        bridge.clear();
+        TEST_ASSERT(bridge.getOccupancy() == 0, "Scenario 6 : clear() vide la file");
+        bridge.resetMetrics();
+        bridge.end();
+        TEST_ASSERT(bridge.getCapacity() == 0, "Scenario 6 : end() libere les slots quand aucun ecrivain n'est actif");
+    }
+
+    // Scénario 7 : Vérification des séquences et de l'intégrité PCM sur 32 trames consécutives (4 tours complets d'anneau)
+    TEST_ASSERT(bridge.begin(8), "Scenario 7 : begin(8)");
+    bridge.setEnabled(true);
+    for (uint32_t seq = 1; seq <= 32; ++seq) {
+        int16_t pattern[AUDIO_CHUNK_SAMPLES];
+        for (size_t i = 0; i < AUDIO_CHUNK_SAMPLES; ++i) {
+            pattern[i] = static_cast<int16_t>(((seq * 131) ^ (i * 17)) & 0x7FFF);
+        }
+        TEST_ASSERT(bridge.pushAudioChunk(pattern, AUDIO_CHUNK_SAMPLES, seq * 50), "Scenario 7 : push trame");
+        const WakeWordAudioBridge::FrameSlot* s = bridge.peekFrame();
+        TEST_ASSERT(s != nullptr && s->sequence == seq, "Scenario 7 : sequence monotone exacte sur 4 tours d'anneau");
+        bool pcmIntact = (memcmp(s->samples, pattern, sizeof(pattern)) == 0);
+        TEST_ASSERT(pcmIntact, "Scenario 7 : integrite PCM bit-a-bit verifiee sur les 512 echantillons");
+        bridge.consumeFrame();
+    }
+    bridge.end();
+}
+
+// SUITE 90 : Budget CPU borné et fluidité de la boucle principale LVGL (Section 3)
+void test_v0621_cpu_budget_and_lvgl_fluidity() {
+    std::cout << "\n[TEST SUITE 90] v0.6.2.1 : Budget de traitement CPU borne (setMaxFramesPerUpdate / setProcessingBudgetUs)" << std::endl;
+
+    VoiceKit vk;
+    VoiceKitConfig cfg;
+    cfg.apiKey = "";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfg.wakeWordEngine = WakeWordEngineType::TEST;
+    cfg.enableWakeWord = true;
+    vk.begin(cfg);
+
+    int16_t pcm[AUDIO_CHUNK_SAMPLES];
+    for (size_t i = 0; i < AUDIO_CHUNK_SAMPLES; ++i) pcm[i] = static_cast<int16_t>(i * 5);
+
+    // 1. Limitation par nombre maximal de trames : setWakeWordMaxFramesPerUpdate(1)
+    vk.setWakeWordMaxFramesPerUpdate(1);
+    vk.setWakeWordProcessingBudgetUs(5000);
+    TEST_ASSERT(vk.getWakeWordMaxFramesPerUpdate() == 1, "maxFramesPerUpdate configure a 1");
+    TEST_ASSERT(vk.getWakeWordProcessingBudgetUs() == 5000, "processingBudgetUs configure a 5000 us");
+
+    for (int i = 0; i < 4; ++i) {
+        vk.getEngine().getStreamer().pushSimulatedChunk(pcm, AUDIO_CHUNK_SAMPLES);
+    }
+    TEST_ASSERT(vk.getWakeWordMetrics().currentQueueOccupancy == 4, "4 trames en attente avant update()");
+
+    vk.update();
+    WakeWordMetrics m1 = vk.getWakeWordMetrics();
+    TEST_ASSERT(m1.lastFramesProcessedInUpdate == 1, "Exactement 1 trame traitee pendant un seul appel a update()");
+    TEST_ASSERT(m1.framesProcessed == 1, "Total framesProcessed == 1");
+    TEST_ASSERT(m1.currentQueueOccupancy == 3, "3 trames restantes pour les prochains cycles");
+
+    // Drainer les 3 trames restantes en 3 appels successifs
+    for (int i = 0; i < 3; ++i) vk.update();
+    TEST_ASSERT(vk.getWakeWordMetrics().framesProcessed == 4, "Les 4 trames ont ete traitees en 4 cycles non bloquants");
+    TEST_ASSERT(vk.getWakeWordMetrics().currentQueueOccupancy == 0, "File videe");
+
+    // 2. Limitation par budget temporel en microsecondes : setWakeWordProcessingBudgetUs(2000)
+    // On autorise jusqu'à 6 trames par update, mais chaque trame consomme 1200 us :
+    // - Trame 1 : 1200 us (< 2000 us)
+    // - Trame 2 : cumul 2400 us (>= 2000 us) -> dépassement détecté, arrêt immédiat après la 2e trame !
+    vk.setWakeWordMaxFramesPerUpdate(6);
+    vk.setWakeWordProcessingBudgetUs(2000);
+    vk.getWakeWordManager().getTestEngine().setSimulatedProcessDurationUs(1200);
+
+    for (int i = 0; i < 5; ++i) {
+        vk.getEngine().getStreamer().pushSimulatedChunk(pcm, AUDIO_CHUNK_SAMPLES);
+    }
+
+    vk.update();
+    WakeWordMetrics mBudget = vk.getWakeWordMetrics();
+    TEST_ASSERT(mBudget.lastFramesProcessedInUpdate == 2, "Arret anticipe apres 2 trames lorsque le budget de 2000 us est atteint");
+    TEST_ASSERT(mBudget.processingBudgetExceeded == 1, "Depassement de budget detecte et comptabilise (processingBudgetExceeded == 1)");
+    TEST_ASSERT(mBudget.lastWakeProcessDurationUs >= 1200, "lastWakeProcessDurationUs mesure le temps reel consomme par trame");
+    TEST_ASSERT(mBudget.maxWakeProcessDurationUs >= 1200, "maxWakeProcessDurationUs mis a jour");
+    TEST_ASSERT(mBudget.lastUpdateProcessDurationUs >= 2400, "lastUpdateProcessDurationUs mesure le cumul de l'appel update()");
+    TEST_ASSERT(mBudget.maxUpdateProcessDurationUs >= 2400, "maxUpdateProcessDurationUs mis a jour");
+    TEST_ASSERT(mBudget.maxFramesPerUpdate == 6, "Diagnostic maxFramesPerUpdate exact");
+    TEST_ASSERT(mBudget.processingBudgetUs == 2000, "Diagnostic processingBudgetUs exact");
+
+    vk.getWakeWordManager().getTestEngine().setSimulatedProcessDurationUs(0);
+    vk.disableWakeWord();
+}
+
+// SUITE 91 : Arrêt et reprise du microphone — Gestion des échecs de stopLocalCapture() et transitions (Section 4)
+void test_v0621_mic_stop_failure_and_mode_transitions() {
+    std::cout << "\n[TEST SUITE 91] v0.6.2.1 : Verification de stopLocalCapture(), refus sur echec et transitions completes" << std::endl;
+
+    WiFi.setConnected(true);
+    MockLiveTransport mockTransport;
+    VoiceKit vk;
+    VoiceKitConfig cfg;
+    cfg.apiKey = "AIzaSyTestMicStopTransitions";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfg.wakeWordEngine = WakeWordEngineType::TEST;
+    cfg.enableWakeWord = true;
+    cfg.wakeWordAutoResume = true;
+    cfg.wakeWordResumeDelayMs = 150;
+
+    TEST_ASSERT(vk.begin(cfg), "VoiceKit::begin() reussi");
+    prepareMockVoiceKitReady(vk, mockTransport);
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ARMED, "Etat initial WAKE ARMED");
+    TEST_ASSERT(vk.getEngine().getStreamer().isLocalCapture(), "Capture locale active");
+
+    // 1. Simuler un échec d'arrêt de la tâche microphone (timeout de terminaison FreeRTOS)
+    vk.getEngine().getStreamer().setSimMicTerminationTimeout(true);
+
+    // Tentative de passage en écoute STT (listen) alors que stopLocalCapture() échoue
+    bool listenOk = vk.listen();
+    TEST_ASSERT(!listenOk, "listen() refuse proprement le nouveau mode si stopLocalCapture() echoue");
+    TEST_ASSERT(!vk.isListening(), "Aucune seconde initialisation du microphone n'a ete tentee");
+    TEST_ASSERT(vk.getState() == VoiceState::ERROR_STATE, "VoxCoreVoice conserve un etat d'erreur explicite");
+    TEST_ASSERT(vk.isWakeWordError(), "WakeWordManager en etat ERROR explicite");
+    TEST_ASSERT(vk.getWakeWordMetrics().captureStopFailures == 1, "Echec d'arret enregistre dans captureStopFailures (1)");
+    TEST_ASSERT(!vk.getLastError().isEmpty(), "Cause d'erreur enregistree dans les diagnostics");
+
+    // Tant que la tâche en quarantaine n'est pas terminée, ContinuousSTT et Conversation doivent aussi être refusés
+    TEST_ASSERT(!vk.startContinuousListening(), "startContinuousListening() refuse tant que la tache micro est en quarantaine");
+    TEST_ASSERT(!vk.isContinuousListening(), "Mode ContinuousSTT non active");
+
+    // 2. Récupération : la tâche bloquée finit par se terminer -> le microphone ne doit PAS rester bloqué définitivement
+    vk.getEngine().getStreamer().setSimMicTerminationTimeout(false);
+    vk.getEngine().getStreamer().setSimTaskRunning(false);
+    vk.getEngine().getStreamer().checkQuarantinedTasks();
+    TEST_ASSERT(!vk.getEngine().getStreamer().isTaskQuarantined(), "Quarantaine levee des que la tache s'est terminee");
+    TEST_ASSERT(!HardwareManager::getInstance().isMicCaptureReserved(), "Reservation microphone liberee apres levee de quarantaine");
+
+    // Réactivation de WakeWord depuis l'état ERROR : ERROR -> INACTIVE -> INITIALIZING -> ARMED
+    vk.disableWakeWord();
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::DISABLED, "Transition ERROR -> DISABLED (INACTIVE)");
+    TEST_ASSERT(vk.enableWakeWord(true), "Re-activation DISABLED -> INITIALIZING -> ARMED reussie");
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ARMED, "Microphone operationnel en WAKE ARMED (non bloque)");
+
+    // 3. Test de la séquence complète exigée :
+    // WAKE ARMED -> WAKE DETECTED -> WAKE SUSPENDED -> VOICE CONVERSATION -> VOICE FINISHED -> WAKE ARMED
+    const char* setupJson = "{\"setupComplete\":{}}";
+    TEST_ASSERT(vk.startConversation(), "Activation du mode CONVERSATION");
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    vk.update();
+    TEST_ASSERT(vk.isConversationActive(), "Mode CONVERSATION pret");
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ARMED, "1. Etat WAKE ARMED");
+
+    std::vector<WakeWordState> transitionLog;
+    vk.onWakeWordStateChanged([&transitionLog](WakeWordState s) {
+        transitionLog.push_back(s);
+    });
+
+    // Lorsque le mot de réveil est détecté, le callback démarre immédiatement le tour de conversation
+    vk.onWakeWordDetected([&vk](const String& word) {
+        (void)word;
+        vk.getEngine().startListening(); // Démarre le tour de conversation
+    });
+
+    TEST_ASSERT(vk.triggerTestWakeWord("Bonjour ESP"), "Armement du trigger Bonjour ESP");
+    int16_t pcm[AUDIO_CHUNK_SAMPLES] = {300};
+    vk.getEngine().getStreamer().pushSimulatedChunk(pcm, AUDIO_CHUNK_SAMPLES);
+    vk.update();
+
+    TEST_ASSERT(transitionLog.size() >= 2, "Transitions DETECTED puis SUSPENDED enregistrees");
+    TEST_ASSERT(transitionLog[0] == WakeWordState::DETECTED, "2. Etat WAKE DETECTED");
+    TEST_ASSERT(transitionLog[1] == WakeWordState::SUSPENDED, "3. Etat WAKE SUSPENDED");
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::SUSPENDED, "WakeWord est SUSPENDED pendant la conversation");
+    TEST_ASSERT(vk.isListening(), "4. VOICE CONVERSATION (ecoute utilisateur active)");
+
+    // Fin de parole utilisateur et réponse audio de l'assistant
+    vk.getEngine().stopListening();
+    injectGeminiPcmAndDrain(vk.getEngine(), 4, true);
+    drainVoicePlayback(vk.getEngine());
+    vk.update();
+    TEST_ASSERT(!vk.isBusy(), "5. VOICE FINISHED (tour de conversation termine)");
+
+    advanceMockMillis(200);
+    vk.update();
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ARMED, "6. Retour automatique a WAKE ARMED");
+    TEST_ASSERT(vk.getEngine().getStreamer().isLocalCapture(), "Capture locale microphone reactivee pour WakeWord");
+
+    vk.onWakeWordDetected(nullptr);
+    vk.disableWakeWord();
+    vk.getEngine().getClient().setTransport(nullptr);
+}
+
+// SUITE 92 : Machine à états Wake Word, réentrance des callbacks, appels répétés et sûreté mémoire (Section 5)
+void test_v0621_state_machine_callbacks_and_memory_safety() {
+    std::cout << "\n[TEST SUITE 92] v0.6.2.1 : Machine a etats, callbacks reentrants, appels repetes et surete memoire" << std::endl;
+
+    VoiceKit vk;
+    VoiceKitConfig cfg;
+    cfg.apiKey = "";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfg.wakeWordEngine = WakeWordEngineType::TEST;
+    cfg.enableWakeWord = false;
+    vk.begin(cfg);
+
+    std::vector<WakeWordState> states;
+    vk.onWakeWordStateChanged([&states](WakeWordState s) {
+        states.push_back(s);
+    });
+
+    // 1. Vérification des appels répétés idempotents (enable, suspend, resume, disable)
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::DISABLED, "Etat initial INACTIVE (DISABLED)");
+    TEST_ASSERT(vk.enableWakeWord(true), "Premier enableWakeWord(true)");
+    size_t countAfterFirstEnable = states.size();
+    TEST_ASSERT(countAfterFirstEnable == 2 && states[0] == WakeWordState::INITIALIZING && states[1] == WakeWordState::ARMED,
+                "INACTIVE -> INITIALIZING -> ARMED");
+
+    TEST_ASSERT(vk.enableWakeWord(true), "Second enableWakeWord(true) idempotent");
+    TEST_ASSERT(states.size() == countAfterFirstEnable, "Aucune transition parasite sur enableWakeWord(true) repete");
+
+    TEST_ASSERT(vk.suspendWakeWord(), "Premier suspendWakeWord()");
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::SUSPENDED, "Etat SUSPENDED");
+    size_t countAfterSuspend = states.size();
+    TEST_ASSERT(vk.suspendWakeWord(), "Second suspendWakeWord() idempotent");
+    TEST_ASSERT(states.size() == countAfterSuspend, "Aucune transition parasite sur suspendWakeWord() repete");
+
+    TEST_ASSERT(vk.resumeWakeWord(), "Premier resumeWakeWord()");
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ARMED, "SUSPENDED -> ARMED");
+    size_t countAfterResume = states.size();
+    TEST_ASSERT(vk.resumeWakeWord(), "Second resumeWakeWord() idempotent");
+    TEST_ASSERT(states.size() == countAfterResume, "Aucune transition parasite sur resumeWakeWord() repete");
+
+    // 2. Callback onWakeWordDetected déclenchant lui-même disableWakeWord() ou resumeWakeWord()
+    // Cas A : Le callback appelle resumeWakeWord() immédiatement -> l'état final doit être ARMED (et non écrasé par SUSPENDED)
+    vk.onWakeWordDetected([&vk](const String&) {
+        vk.resumeWakeWord();
+    });
+    int16_t pcm[AUDIO_CHUNK_SAMPLES] = {150};
+    vk.triggerTestWakeWord();
+    vk.getEngine().getStreamer().pushSimulatedChunk(pcm, AUDIO_CHUNK_SAMPLES);
+    vk.update();
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ARMED,
+                "Si le callback appelle resumeWakeWord(), update() n'ecrase pas l'etat ARMED par SUSPENDED");
+
+    // Cas B : Le callback appelle disableWakeWord() -> l'état final doit rester DISABLED
+    vk.onWakeWordDetected([&vk](const String&) {
+        vk.disableWakeWord();
+    });
+    vk.triggerTestWakeWord();
+    vk.getEngine().getStreamer().pushSimulatedChunk(pcm, AUDIO_CHUNK_SAMPLES);
+    vk.update();
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::DISABLED,
+                "Si le callback appelle disableWakeWord(), l'etat final reste DISABLED sans transition incoherente");
+    vk.onWakeWordDetected(nullptr);
+
+    // 3. Transition ARMED -> ERROR puis ERROR -> INACTIVE (DISABLED) -> INITIALIZING -> ARMED
+    TEST_ASSERT(vk.enableWakeWord(true), "Re-armement pour test d'erreur");
+    vk.getWakeWordManager().getTestEngine().setSimulateRuntimeError(true);
+    vk.getEngine().getStreamer().pushSimulatedChunk(pcm, AUDIO_CHUNK_SAMPLES);
+    vk.update();
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ERROR, "Transition ARMED -> ERROR");
+    vk.getWakeWordManager().getTestEngine().setSimulateRuntimeError(false);
+
+    vk.disableWakeWord();
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::DISABLED, "Transition ERROR -> INACTIVE (DISABLED)");
+    TEST_ASSERT(vk.enableWakeWord(true), "Transition INACTIVE -> INITIALIZING -> ARMED");
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ARMED, "Retour a ARMED reussi");
+
+    // 4. Sûreté mémoire lors de disableWakeWord() si l'arrêt du producteur audio échoue :
+    // Ne JAMAIS libérer la mémoire du pont tant que la tâche productrice n'est pas confirmée arrêtée
+    vk.getEngine().getStreamer().setSimMicTerminationTimeout(true);
+    vk.disableWakeWord();
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ERROR,
+                "disableWakeWord() passe en ERROR si l'arret du producteur audio echoue");
+    TEST_ASSERT(vk.getWakeWordManager().getAudioBridge().getCapacity() > 0,
+                "SURETE MEMOIRE : Les slots du pont audio NE SONT PAS detruits tant que la tache audio est active");
+
+    // Une fois la tâche arrêtée, disableWakeWord() libère effectivement la mémoire
+    vk.getEngine().getStreamer().setSimMicTerminationTimeout(false);
+    vk.getEngine().getStreamer().setSimTaskRunning(false);
+    vk.disableWakeWord();
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::DISABLED, "disableWakeWord() reussit apres arret confirme");
+    TEST_ASSERT(vk.getWakeWordManager().getAudioBridge().getCapacity() == 0,
+                "Les ressources du pont audio sont liberees apres confirmation de l'arret du producteur");
+}
+
+// SUITE 93 : WakeNetEngine v0.6.2.1 — Continuité 512->480 sur détection, reset, fuites mémoire, confiance et 4 niveaux (Section 6)
+void test_v0621_wakenet_engine_strict_validation() {
+    std::cout << "\n[TEST SUITE 93] v0.6.2.1 : WakeNetEngine (continuite 512->480, reset, liberation ressources, confiance 0.0f, 4 niveaux)" << std::endl;
+
+    WakeNetEngine wn;
+
+    // 1. Continuité des échantillons aux frontières même lorsqu'une détection survient au milieu d'un bloc
+    // Si un bloc de 512 échantillons déclenche une détection sur les 480 premiers échantillons,
+    // les 32 échantillons restants du bloc (indices 480..511) ne doivent PAS être perdus !
+    wn.reset();
+    std::vector<int16_t> stream(512);
+    for (size_t i = 0; i < stream.size(); ++i) {
+        stream[i] = static_cast<int16_t>(i + 1);
+    }
+
+    size_t framesSeen = 0;
+    wn.feedFrameAdapter(stream.data(), 512, [&](const int16_t* f480, size_t count) -> bool {
+        (void)f480;
+        (void)count;
+        framesSeen++;
+        return true; // Détection sur la trame de 480 éch !
+    });
+    // Après la détection sur les 480 premiers éch du bloc de 512, les 32 éch restants sont conservés dans l'accumulateur
+    TEST_ASSERT(wn.getAccumulatorCount() == 32 && wn.getAccumulatorData()[0] == 481 && wn.getAccumulatorData()[31] == 512,
+                "Zero perte aux frontieres : les 32 echantillons restants du bloc de 512 sont conserves dans l'accumulateur");
+
+    // 2. Réinitialisation de l'accumulateur
+    wn.reset();
+    TEST_ASSERT(wn.getAccumulatorCount() == 0, "reset() vide immediatement l'accumulateur");
+
+    // 3. Distinction stricte des 4 niveaux et libération des ressources sur échec d'initialisation
+    // Niveau A : Support non compilé
+    wn.setSimEnvironment(false, false, false, false);
+    TEST_ASSERT(!wn.isCompiledSupportAvailable(), "Niveau 1 : Support compile = false");
+    TEST_ASSERT(!wn.isModelAvailable(), "Niveau 2 : Modele disponible = false");
+    TEST_ASSERT(!wn.isInitialized(), "Niveau 3 : Moteur initialise = false");
+
+    // Niveau B : Support compilé, mais partition srmodels absente
+    wn.setSimEnvironment(true, false, false, false);
+    TEST_ASSERT(wn.isCompiledSupportAvailable(), "Niveau 1 : Support compile = true");
+    TEST_ASSERT(!wn.isModelAvailable(), "Niveau 2 : Modele disponible = false (partition absente)");
+    TEST_ASSERT(!wn.isAvailable(), "La seule presence des en-tetes ne rend pas le moteur disponible sans modele");
+    TEST_ASSERT(!wn.begin(16000, 1), "begin() echoue proprement si la partition modele est absente");
+    TEST_ASSERT(!wn.hasSimResourcesAllocated(), "Aucune fuite de ressources apres echec partition");
+
+    // Niveau C : Partition présente, mais modèle wn10_fr_bonjouresp absent de la partition
+    wn.setSimEnvironment(true, true, false, false);
+    TEST_ASSERT(wn.isCompiledSupportAvailable(), "Support compile = true");
+    TEST_ASSERT(!wn.isModelAvailable(), "Modele cible absent = false");
+    TEST_ASSERT(!wn.begin(16000, 1), "begin() echoue si wn10_fr_bonjouresp est absent");
+    TEST_ASSERT(!wn.hasSimResourcesAllocated(), "Ressources srmodels liberees apres echec de filtre modele");
+
+    // Niveau D : Modèle présent, mais échec d'allocation/création de l'instance iface->create() (createFailure = true)
+    wn.setSimEnvironment(true, true, true, true);
+    TEST_ASSERT(wn.isModelAvailable(), "Modele disponible = true");
+    TEST_ASSERT(!wn.begin(16000, 1), "begin() echoue si iface->create() retourne null");
+    TEST_ASSERT(!wn.isInitialized(), "Moteur non initialise apres echec create()");
+    TEST_ASSERT(!wn.hasSimResourcesAllocated(), "Ressources srmodels liberees apres echec create()");
+
+    // Niveau E : Succès complet des 4 niveaux (createFailure = false) + vérification du score de confiance non inventé
+    wn.setSimEnvironment(true, true, true, false);
+    TEST_ASSERT(wn.isCompiledSupportAvailable(), "1. Support compile = true");
+    TEST_ASSERT(wn.isModelAvailable(), "2. Modele disponible = true");
+    TEST_ASSERT(wn.begin(16000, 1), "3. Initialisation WakeNet reussie");
+    TEST_ASSERT(wn.isInitialized(), "3. Moteur initialise = true");
+    TEST_ASSERT(wn.hasSimResourcesAllocated(), "Ressources actives tant que le moteur est initialise");
+
+    wn.setSimDetectCallback([](const int16_t*, size_t) -> bool {
+        return true; // WAKENET_DETECTED
+    });
+    int16_t chunk512[AUDIO_CHUNK_SAMPLES] = {100};
+    WakeWordResult res = wn.process(chunk512, AUDIO_CHUNK_SAMPLES, 100);
+    TEST_ASSERT(res.detected, "Detection WakeNet active");
+    TEST_ASSERT(!res.isSimulated, "isSimulated == false pour WakeNetEngine");
+    TEST_ASSERT(res.confidence == 0.0f, "WakeNetEngine n'invente JAMAIS un score de confiance fictif (0.0f)");
+
+    wn.end();
+    TEST_ASSERT(!wn.isInitialized(), "end() desinitialise le moteur");
+    TEST_ASSERT(!wn.hasSimResourcesAllocated(), "end() libere toutes les ressources allouees");
+    wn.setSimEnvironment(false, false, false, false);
+    wn.setSimDetectCallback(nullptr);
+}
+
+// SUITE 94 : Vérification de la capture locale, métriques RMS authentiques et non-interférence ContinuousSTT (Section 7)
+void test_v0621_local_capture_offline_rms_and_non_interference() {
+    std::cout << "\n[TEST SUITE 94] v0.6.2.1 : Capture locale ES7210, RMS authentique du signal et non-interference ContinuousSTT" << std::endl;
+
+    WiFi.setConnected(false);
+    VoiceKit vk;
+    VoiceKitConfig cfg;
+    cfg.apiKey = "";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfg.wakeWordEngine = WakeWordEngineType::TEST;
+    cfg.enableWakeWord = true;
+    TEST_ASSERT(vk.begin(cfg), "Demarrage hors ligne sans cle API ni Wi-Fi");
+
+    // 1. Vérifier que le format d'entrée HAL est PCM mono 16 kHz signé 16 bits et issu du microphone ES7210
+    TEST_ASSERT(vk.getEngine().getStreamer().isLocalCapture(), "startLocalCapture() actif");
+    TEST_ASSERT(HardwareManager::getInstance().isMicCaptureReserved(), "ES7210 reserve par l'unique proprietaire");
+
+    // 2. Injecter un signal carré d'amplitude constante +/- 1200 -> RMS théorique = 1200
+    int16_t signal1200[AUDIO_CHUNK_SAMPLES];
+    for (size_t i = 0; i < AUDIO_CHUNK_SAMPLES; ++i) {
+        signal1200[i] = (i % 2 == 0) ? 1200 : -1200;
+    }
+    vk.getEngine().getStreamer().pushSimulatedChunk(signal1200, AUDIO_CHUNK_SAMPLES);
+    vk.update();
+
+    WakeWordMetrics mRms = vk.getWakeWordMetrics();
+    TEST_ASSERT(mRms.lastRms == 1200, "lastRms correspond exactement au signal acquis (1200)");
+    TEST_ASSERT(mRms.peakRms == 1200, "peakRms correspond exactement au signal acquis (1200)");
+    TEST_ASSERT(mRms.framesReceived == 1, "Exactement 1 trame acquise");
+
+    // 3. Vérifier que triggerTestWakeWord() et handleWakeWordSerialCommand() ne polluent PAS le RMS ni framesReceived avec une trame silencieuse fictive
+    vk.setWakeWordAutoResume(false);
+    TEST_ASSERT(vk.triggerTestWakeWord("Bonjour ESP"), "triggerTestWakeWord() sans nouvelle trame micro");
+    TEST_ASSERT(vk.getWakeWordMetrics().framesReceived == 1, "Aucune trame silencieuse fictive injectee dans le pont audio");
+    TEST_ASSERT(vk.getWakeWordMetrics().lastRms == 1200, "lastRms n'est pas écrase par une valeur simulee a 0");
+    vk.update();
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::SUSPENDED, "Detection declenchee dans update() meme si la file est vide");
+    TEST_ASSERT(vk.getWakeWordMetrics().lastRms == 1200, "lastRms conserve la vraie mesure acoustique du signal (1200)");
+
+    // 4. Vérifier la non-interférence avec ContinuousSTT
+    vk.resumeWakeWord();
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ARMED, "WakeWord ARMED");
+    TEST_ASSERT(vk.startContinuousListening(), "Passage en ContinuousSTT");
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::SUSPENDED, "WakeWord immediatement SUSPENDED pour ne pas interferer avec ContinuousSTT");
+    uint32_t wakeFramesBefore = vk.getWakeWordMetrics().framesReceived;
+    vk.getEngine().getStreamer().pushSimulatedChunk(signal1200, AUDIO_CHUNK_SAMPLES);
+    vk.update();
+    TEST_ASSERT(vk.getWakeWordMetrics().framesReceived == wakeFramesBefore,
+                "Aucune trame n'est copiee vers WakeWord pendant que ContinuousSTT utilise le flux audio");
+
+    vk.stopContinuousListening();
+    vk.disableWakeWord();
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.2    " << std::endl;
-    std::cout << "  Wake Word Foundation — M5Stack CoreS3                    " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.2.1  " << std::endl;
+    std::cout << "  Corrective Wake Word Foundation — M5Stack CoreS3         " << std::endl;
     std::cout << "  Architecture Multi-Fournisseurs (Gemini + OpenAI Realtime)" << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
     std::cout << "===========================================================" << std::endl;
@@ -5290,6 +5837,14 @@ int main() {
     test_v062_test_engine_and_state_machine_transitions();
     test_v062_coexistence_suspension_and_resumption_all_modes();
     test_v062_lvgl_event_polling_and_diagnostics_metrics();
+
+    // Nouvelles suites correctives VoiceKit v0.6.2.1 (Fiabilité et performances Wake Word Foundation)
+    test_v0621_audio_bridge_lifetime_concurrency_and_7_scenarios();
+    test_v0621_cpu_budget_and_lvgl_fluidity();
+    test_v0621_mic_stop_failure_and_mode_transitions();
+    test_v0621_state_machine_callbacks_and_memory_safety();
+    test_v0621_wakenet_engine_strict_validation();
+    test_v0621_local_capture_offline_rms_and_non_interference();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

@@ -158,6 +158,14 @@ bool LiveAudioStreamer::checkQuarantinedTasks() {
             _taskQuarantined = false;
             _micTaskHandle = nullptr;
             _micTaskRunning = false;
+            if (!_isStreaming && !_isLocalCapture && !_txTaskRunning && !_txTaskQuarantined) {
+                for (size_t i = 0; i < LIVE_AUDIO_TX_QUEUE_MAX; ++i) {
+                    _ringBuffers[i].state = LiveBufferState::FREE;
+                }
+                if (HardwareManager::getInstance().isMicCaptureReserved()) {
+                    stopMicHardware();
+                }
+            }
             Serial.println("[LiveStreamer] Quarantaine levee pour live_mic_task");
         }
     }
@@ -188,6 +196,14 @@ bool LiveAudioStreamer::checkQuarantinedTasks() {
     if (_taskQuarantined && !_micTaskRunning) {
         _taskQuarantined = false;
         _micTaskHandle = nullptr;
+        if (!_isStreaming && !_isLocalCapture && !_txTaskRunning && !_txTaskQuarantined) {
+            for (size_t i = 0; i < LIVE_AUDIO_TX_QUEUE_MAX; ++i) {
+                _ringBuffers[i].state = LiveBufferState::FREE;
+            }
+            if (HardwareManager::getInstance().isMicCaptureReserved()) {
+                stopMicHardware();
+            }
+        }
     }
 #endif
     return !_taskQuarantined && !_txTaskQuarantined;
@@ -627,7 +643,24 @@ bool LiveAudioStreamer::startLocalCapture() {
 }
 
 bool LiveAudioStreamer::stopLocalCapture() {
+    checkQuarantinedTasks();
+
     if (!_isLocalCapture) {
+        // Si une tentative précédente d'arrêt a échoué (tâche en quarantaine ou matériel non libéré),
+        // permettre une reprise/nettoyage explicite sans laisser le microphone bloqué définitivement (v0.6.2.1).
+        if (_taskQuarantined) {
+            return false;
+        }
+        if (!_isStreaming && !_micTaskRunning && _micTaskHandle == nullptr &&
+            HardwareManager::getInstance().isMicCaptureReserved()) {
+            bool hwRecovered = stopMicHardware();
+            if (hwRecovered) {
+                for (size_t i = 0; i < LIVE_AUDIO_TX_QUEUE_MAX; ++i) {
+                    _ringBuffers[i].state = LiveBufferState::FREE;
+                }
+            }
+            return hwRecovered;
+        }
         return false;
     }
 
@@ -635,15 +668,20 @@ bool LiveAudioStreamer::stopLocalCapture() {
     _isLocalCapture = false;
 
     bool micTermOk = waitForTaskTermination(250);
+    if (!micTermOk) {
+        // Ne pas arrêter ni réinitialiser le matériel tant que live_mic_task est encore active (quarantaine)
+        return false;
+    }
+
     bool hwOk = stopMicHardware();
 
-    if (micTermOk && !_micTaskRunning && !_taskQuarantined) {
+    if (!_micTaskRunning && !_taskQuarantined) {
         for (size_t i = 0; i < LIVE_AUDIO_TX_QUEUE_MAX; ++i) {
             _ringBuffers[i].state = LiveBufferState::FREE;
         }
     }
 
-    return hwOk && micTermOk;
+    return hwOk;
 }
 
 bool LiveAudioStreamer::start(GeminiLiveClient* client) {
@@ -660,9 +698,18 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
         return false;
     }
 
-    // Si une capture locale (Wake Word) est en cours, l'arrêter proprement avant de démarrer le streaming réseau
+    // Si une capture locale (Wake Word) est en cours, l'arrêter proprement avant de démarrer le streaming réseau (v0.6.2.1)
     if (_isLocalCapture) {
-        stopLocalCapture();
+        if (!stopLocalCapture()) {
+            if (_lastError[0] == '\0') {
+                strncpy(_lastError, "Echec arret capture locale Wake Word avant streaming", sizeof(_lastError) - 1);
+            }
+            if (_lastStatus == AudioHardwareStatus::SUCCESS) {
+                _lastStatus = AudioHardwareStatus::DEVICE_BUSY;
+            }
+            Serial.printf("[LiveStreamer] Refus demarrage : %s\n", _lastError);
+            return false;
+        }
     }
 
     // CORRECTION E : Contrôle et levée des quarantaines si les anciennes tâches sont enfin terminées

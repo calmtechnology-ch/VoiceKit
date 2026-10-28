@@ -61,17 +61,76 @@ public:
     const char* getModelName() const override { return _modelName.c_str(); }
 
     void setModelName(const String& modelName) {
-        if (!modelName.isEmpty()) {
+        if (!modelName.isEmpty() && _modelName != modelName) {
             _modelName = modelName;
+            _modelProbed = false;
+            _modelPresent = false;
         }
     }
 
-    bool isAvailable() const override {
+    /**
+     * @brief 1. Support compilé : indique si les en-têtes et l'intégration ESP-SR WakeNet sont compilés.
+     *        La simple présence des en-têtes ne suffit pas à considérer le moteur comme opérationnel.
+     */
+    bool isCompiledSupportAvailable() const override {
 #if VOICEKIT_HAS_ESP_SR_WAKENET
+        return true;
+#elif !defined(ESP32) && !defined(ARDUINO)
+        return _simCompiledSupport;
+#else
+        return false;
+#endif
+    }
+
+    /**
+     * @brief 2. Modèle disponible : vérifie que la partition Flash 'model' (srmodels.bin)
+     *        et le modèle cible (ex: wn10_fr_bonjouresp) sont effectivement présents.
+     */
+    bool isModelAvailable() const override {
+        if (!isCompiledSupportAvailable()) {
+            return false;
+        }
+        if (_initialized) {
+            return true;
+        }
+#if VOICEKIT_HAS_ESP_SR_WAKENET
+        if (_modelProbed) {
+            return _modelPresent;
+        }
+        srmodel_list_t* probeModels = esp_srmodel_init("model");
+        _modelProbed = true;
+        if (!probeModels) {
+            _modelPresent = false;
+            strncpy(_lastError, "Partition Flash 'model' (srmodels.bin) introuvable pour ESP-SR", sizeof(_lastError) - 1);
+            return false;
+        }
+        char* modelNamePtr = esp_srmodel_filter(probeModels, ESP_WN_PREFIX, (char*)_modelName.c_str());
+        _modelPresent = (modelNamePtr != nullptr);
+        if (!_modelPresent) {
+            snprintf(_lastError, sizeof(_lastError), "Modele WakeNet '%s' absent de srmodels.bin", _modelName.c_str());
+        }
+        esp_srmodel_deinit(probeModels);
+        return _modelPresent;
+#elif !defined(ESP32) && !defined(ARDUINO)
+        if (!_simPartitionPresent) {
+            strncpy(_lastError, "Partition Flash 'model' (srmodels.bin) introuvable pour ESP-SR", sizeof(_lastError) - 1);
+            return false;
+        }
+        if (!_simModelPresent) {
+            snprintf(_lastError, sizeof(_lastError), "Modele WakeNet '%s' absent de srmodels.bin", _modelName.c_str());
+            return false;
+        }
         return true;
 #else
         return false;
 #endif
+    }
+
+    /**
+     * @brief Indique si le moteur est réellement disponible (support compilé ET modèle binaire présent).
+     */
+    bool isAvailable() const override {
+        return isCompiledSupportAvailable() && isModelAvailable();
     }
 
     bool isSimulatedEngine() const override {
@@ -83,7 +142,9 @@ public:
     }
 
     bool begin(uint32_t sampleRateHz = 16000, uint8_t channels = 1) override {
-        reset();
+        // Libérer systématiquement toute ressource antérieure avant réinitialisation (v0.6.2.1)
+        end();
+
         if (sampleRateHz != 16000 || channels != 1) {
             strncpy(_lastError, "WakeNet10 requiert PCM 16000 Hz mono (1 canal)", sizeof(_lastError) - 1);
             _initialized = false;
@@ -92,32 +153,72 @@ public:
 
 #if VOICEKIT_HAS_ESP_SR_WAKENET
         _models = esp_srmodel_init("model");
+        _modelProbed = true;
         if (!_models) {
+            _modelPresent = false;
             strncpy(_lastError, "Partition Flash 'model' (srmodels.bin) introuvable pour ESP-SR", sizeof(_lastError) - 1);
             _initialized = false;
             return false;
         }
         char* modelNamePtr = esp_srmodel_filter(_models, ESP_WN_PREFIX, (char*)_modelName.c_str());
         if (!modelNamePtr) {
+            _modelPresent = false;
             snprintf(_lastError, sizeof(_lastError), "Modele WakeNet '%s' absent de srmodels.bin", _modelName.c_str());
+            esp_srmodel_deinit(_models);
+            _models = nullptr;
             _initialized = false;
             return false;
         }
+        _modelPresent = true;
         _wakenet = (esp_wn_iface_t*)esp_wn_handle_from_name(modelNamePtr);
         if (!_wakenet) {
             snprintf(_lastError, sizeof(_lastError), "Echec esp_wn_handle_from_name('%s')", modelNamePtr);
+            esp_srmodel_deinit(_models);
+            _models = nullptr;
             _initialized = false;
             return false;
         }
         _modelData = _wakenet->create(modelNamePtr, DET_MODE_90);
         if (!_modelData) {
             snprintf(_lastError, sizeof(_lastError), "Echec creation instance WakeNet ('%s')", modelNamePtr);
+            _wakenet = nullptr;
+            esp_srmodel_deinit(_models);
+            _models = nullptr;
             _initialized = false;
             return false;
         }
         _lastError[0] = '\0';
         _initialized = true;
         return true;
+#elif !defined(ESP32) && !defined(ARDUINO)
+        if (_simCompiledSupport) {
+            if (!_simPartitionPresent) {
+                strncpy(_lastError, "Partition Flash 'model' (srmodels.bin) introuvable pour ESP-SR", sizeof(_lastError) - 1);
+                _initialized = false;
+                return false;
+            }
+            _simResourcesAllocated = true; // Simule esp_srmodel_init("model")
+            if (!_simModelPresent) {
+                snprintf(_lastError, sizeof(_lastError), "Modele WakeNet '%s' absent de srmodels.bin", _modelName.c_str());
+                _simResourcesAllocated = false; // Libération garantie après échec filtre modèle
+                _initialized = false;
+                return false;
+            }
+            if (_simCreateFailure) {
+                snprintf(_lastError, sizeof(_lastError), "Echec creation instance WakeNet ('%s')", _modelName.c_str());
+                _simResourcesAllocated = false; // Libération garantie après échec create()
+                _initialized = false;
+                return false;
+            }
+            _lastError[0] = '\0';
+            _initialized = true;
+            return true;
+        }
+        strncpy(_lastError,
+                "ESP-SR WakeNet10 (wn10_fr_bonjouresp) non disponible dans cet environnement Arduino-ESP32 (IDF 4.4.7)",
+                sizeof(_lastError) - 1);
+        _initialized = false;
+        return false;
 #else
         strncpy(_lastError,
                 "ESP-SR WakeNet10 (wn10_fr_bonjouresp) non disponible dans cet environnement Arduino-ESP32 (IDF 4.4.7)",
@@ -138,6 +239,8 @@ public:
             esp_srmodel_deinit(_models);
             _models = nullptr;
         }
+#elif !defined(ESP32) && !defined(ARDUINO)
+        _simResourcesAllocated = false;
 #endif
         _initialized = false;
         reset();
@@ -150,12 +253,14 @@ public:
     void reset() override {
         _accumCount = 0;
         _frames480Produced = 0;
+        memset(_accumulator, 0, sizeof(_accumulator));
     }
 
     /**
      * @brief Alimente l'adaptateur de cadrage 512 -> 480 échantillons (32 ms -> 30 ms).
      *        Permet de découper tout flux PCM 16 kHz (ex: blocs DMA de 512 échantillons)
-     *        en fenêtres exactes de 480 échantillons (30 ms) attendues par WakeNet.
+     *        en fenêtres exactes de 480 échantillons (30 ms) attendues par WakeNet,
+     *        sans aucune perte aux frontières des trames même lorsqu'une détection survient.
      * @param samples Échantillons PCM entrants.
      * @param sampleCount Nombre d'échantillons entrants.
      * @param onFrame480 Callback invoqué sur chaque trame complète de 480 échantillons.
@@ -180,9 +285,7 @@ public:
                 produced++;
                 _accumCount = 0;
                 if (onFrame480) {
-                    if (onFrame480(_accumulator, WAKENET_FRAME_SAMPLES)) {
-                        break;
-                    }
+                    (void)onFrame480(_accumulator, WAKENET_FRAME_SAMPLES);
                 }
             }
         }
@@ -194,6 +297,7 @@ public:
         const uint32_t startUs = micros();
         WakeWordResult res;
         res.isSimulated = false;
+        res.confidence = 0.0f; // Ne jamais inventer un score de confiance non fourni par WakeNet (v0.6.2.1)
 
         if (!_initialized) {
             return res;
@@ -207,10 +311,18 @@ public:
                 if (state == WAKENET_DETECTED) {
                     res.detected = true;
                     res.word = _targetWakeWord;
-                    res.confidence = 0.95f;
+                    res.confidence = 0.0f; // WakeNet detect() ne fournit pas de score de probabilité flottant
                     res.isSimulated = false;
-                    return true; // Arrêter le découpage sur détection
+                    return true;
                 }
+            }
+#elif !defined(ESP32) && !defined(ARDUINO)
+            if (_simDetectCallback && _simDetectCallback(frame480, count)) {
+                res.detected = true;
+                res.word = _targetWakeWord;
+                res.confidence = 0.0f;
+                res.isSimulated = false;
+                return true;
             }
 #else
             (void)frame480;
@@ -238,12 +350,33 @@ public:
 
     size_t getAccumulatorCount() const { return _accumCount; }
     uint32_t getFrames480Produced() const { return _frames480Produced; }
+    const int16_t* getAccumulatorData() const { return _accumulator; }
+
+#if !defined(ESP32) && !defined(ARDUINO)
+    void setSimEnvironment(bool compiledSupport, bool partitionPresent, bool modelPresent, bool createFailure = false) {
+        _simCompiledSupport = compiledSupport;
+        _simPartitionPresent = partitionPresent;
+        _simModelPresent = modelPresent;
+        _simCreateFailure = createFailure;
+        _modelProbed = false;
+        _modelPresent = false;
+        if (!compiledSupport) {
+            strncpy(_lastError,
+                    "ESP-SR WakeNet10 (wn10_fr_bonjouresp) non disponible dans cet environnement Arduino-ESP32 (IDF 4.4.7)",
+                    sizeof(_lastError) - 1);
+        }
+    }
+    bool hasSimResourcesAllocated() const { return _simResourcesAllocated; }
+    void setSimDetectCallback(Frame480Callback cb) { _simDetectCallback = std::move(cb); }
+#endif
 
 private:
     String _modelName;
     String _targetWakeWord;
     bool _initialized = false;
-    char _lastError[160] = {};
+    mutable bool _modelProbed = false;
+    mutable bool _modelPresent = false;
+    mutable char _lastError[160] = {};
 
     // Adaptateur de cadrage 512 échantillons (32 ms) -> 480 échantillons (30 ms @ 16 kHz)
     int16_t _accumulator[WAKENET_FRAME_SAMPLES];
@@ -254,6 +387,13 @@ private:
     srmodel_list_t* _models = nullptr;
     esp_wn_iface_t* _wakenet = nullptr;
     model_iface_data_t* _modelData = nullptr;
+#elif !defined(ESP32) && !defined(ARDUINO)
+    bool _simCompiledSupport = false;
+    bool _simPartitionPresent = false;
+    bool _simModelPresent = false;
+    bool _simCreateFailure = false;
+    bool _simResourcesAllocated = false;
+    Frame480Callback _simDetectCallback;
 #endif
 };
 
