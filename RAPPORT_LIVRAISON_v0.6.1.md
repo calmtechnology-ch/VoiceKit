@@ -189,3 +189,4 @@ Essai exécuté sur le M5Stack CoreS3 connecté sur `COM4` avec deux tours TTS s
 ## 7. Limitations Restantes Éventuelles
 
 - Dans l'ESP-IDF v4.4 utilisé par `framework-arduinoespressif32` (`espressif32@6.9.0`), la structure `esp_websocket_client_config_t` ne comporte pas de champ `task_core` (introduit uniquement dans ESP-IDF v5.x). L'ordonnancement mis en place en `v0.6.1` (`cfg.task_prio = 1` pendant le handshake TLS puis `2` après `WEBSOCKET_EVENT_CONNECTED`) contourne proprement cette limitation du SDK sans modifier ESP-IDF, réduisant l'interruption apparente de `loopTask` de ~1 550 ms à 12 ms sur matériel réel tout en maintenant la validation complète des certificats racine TLS.
+
