@@ -17,6 +17,7 @@
 #include "core/LiveSessionController.h"
 #include "core/LiveAudioStreamer.h"
 #include "core/ConversationController.h"
+#include "core/WakeWordManager.h"
 #include "WiFiManager.h"
 
 /**
@@ -40,6 +41,9 @@ public:
     using TranscriptionCallback = std::function<void(const String& text, bool isFinal)>;
     using AssistantTextCallback = std::function<void(const String& text)>;
     using TurnFinishedCallback = std::function<void(const ConversationMetrics& metrics)>;
+    using WakeWordCallback = WakeWordManager::WakeWordDetectedCallback;
+    using WakeWordEventCallback = WakeWordManager::WakeWordEventCallback;
+    using WakeWordStateCallback = WakeWordManager::WakeWordStateCallback;
 
 
     VoxCoreVoice();
@@ -311,6 +315,56 @@ public:
     ConversationController& getConversationController() { return _conversationController; }
     const ConversationController& getConversationController() const { return _conversationController; }
 
+    // =========================================================================
+    // API Détection Locale de Mot de Réveil — Wake Word Foundation (v0.6.2)
+    // =========================================================================
+
+    bool enableWakeWord(bool enable = true);
+    void disableWakeWord();
+    bool suspendWakeWord();
+    bool resumeWakeWord();
+
+    bool isWakeWordEnabled() const { return _wakeWordManager.isEnabled(); }
+    bool isWakeWordEngineAvailable() const { return _wakeWordManager.isEngineAvailable(); }
+    bool isWakeWordEngineAvailable(WakeWordEngineType type) const { return _wakeWordManager.isEngineAvailable(type); }
+    bool isWakeWordEngineInitialized() const { return _wakeWordManager.isEngineInitialized(); }
+    bool isWakeWordListening() const { return _wakeWordManager.isListening(); }
+    bool isWakeWordSimulated() const { return _wakeWordManager.isSimulated(); }
+    bool isWakeWordRealRecognitionActive() const { return _wakeWordManager.isRealRecognitionActive(); }
+    bool isWakeWordError() const { return _wakeWordManager.isError(); }
+
+    WakeWordState getWakeWordState() const { return _wakeWordManager.getState(); }
+    String getWakeWordLastError() const { return _wakeWordManager.getLastError(); }
+    String getLastDetectedWakeWord() const { return _wakeWordManager.getLastDetectedWord(); }
+
+    bool setWakeWordEngine(WakeWordEngineType type) { return _wakeWordManager.setEngineType(type); }
+    bool setWakeWordEngine(IWakeWordEngine* customEngine) { return _wakeWordManager.setCustomEngine(customEngine); }
+    WakeWordEngineType getWakeWordEngineType() const { return _wakeWordManager.getEngineType(); }
+    const char* getWakeWordEngineName() const { return _wakeWordManager.getEngineName(); }
+    const char* getWakeWordModelName() const { return _wakeWordManager.getModelName(); }
+
+    void setWakeWordPhrase(const String& phrase) { _wakeWordManager.setTargetWakeWord(phrase); }
+    String getWakeWordPhrase() const { return _wakeWordManager.getTargetWakeWord(); }
+
+    void setWakeWordAutoResume(bool autoResume) { _wakeWordManager.setAutoResumeAfterVoiceActivity(autoResume); }
+    bool isWakeWordAutoResume() const { return _wakeWordManager.isAutoResumeAfterVoiceActivity(); }
+    void setWakeWordResumeDelayMs(uint32_t delayMs) { _wakeWordManager.setResumeDelayMs(delayMs); }
+    uint32_t getWakeWordResumeDelayMs() const { return _wakeWordManager.getResumeDelayMs(); }
+
+    bool triggerTestWakeWord(const String& customWord = "") { return _wakeWordManager.triggerTestDetection(customWord); }
+    bool handleWakeWordSerialCommand(const String& cmd) { return _wakeWordManager.handleSerialCommand(cmd); }
+
+    void onWakeWordDetected(WakeWordCallback cb) { _wakeWordManager.onWakeWordDetected(std::move(cb)); }
+    void onWakeWordEvent(WakeWordEventCallback cb) { _wakeWordManager.onWakeWordEvent(std::move(cb)); }
+    void onWakeWordStateChanged(WakeWordStateCallback cb) { _wakeWordManager.onStateChanged(std::move(cb)); }
+    void onWakeWordError(ErrorCallback cb) { _wakeWordManager.onError(std::move(cb)); }
+    bool pollWakeWordEvent(WakeWordEvent& outEvent) { return _wakeWordManager.pollEvent(outEvent); }
+    bool hasPendingWakeWordEvent() const { return _wakeWordManager.hasPendingEvent(); }
+
+    const WakeWordMetrics& getWakeWordMetrics() const { return _wakeWordManager.getMetrics(); }
+    WakeWordManager& getWakeWordManager() { return _wakeWordManager; }
+    const WakeWordManager& getWakeWordManager() const { return _wakeWordManager; }
+
     // Accès directs aux composants VoxCore sous-jacents (diagnostics / instrumentation)
     LiveAudioPlayer& getPlayer() { return _player; }
     const LiveAudioPlayer& getPlayer() const { return _player; }
@@ -387,6 +441,7 @@ private:
     LiveSessionController _session;
     WiFiManager _wifi;
     ConversationController _conversationController;
+    WakeWordManager _wakeWordManager;
     bool _conversationEnabled = false;
 
     std::queue<String> _textQueue;

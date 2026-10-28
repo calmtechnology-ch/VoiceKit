@@ -7,6 +7,46 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.2] - 2026-10-28 (Wake Word Foundation — M5Stack CoreS3)
+
+### Capture Audio Partagée Hors Ligne (`LiveAudioStreamer` & `VoxCoreVoice`)
+- **Propriété Unique du Microphone CoreS3 ES7210** :
+  - Ajout du mode d'acquisition locale hors ligne (`startLocalCapture()`, `stopLocalCapture()`, `isLocalCapture()`) dans `LiveAudioStreamer` sans nécessiter de connexion Wi-Fi ni de session WebSocket Gemini/OpenAI.
+  - Exécution de `live_mic_task` seule en mode local (sans créer `live_tx_task`, économisant 10 Ko de pile FreeRTOS et zéro tâche supplémentaire).
+  - Ajout d'un canal dédié non bloquant (`setWakeWordAudioCallback`) pour alimenter le pont Wake Word en parallèle du callback utilisateur `onAudioChunk()` sans duplication du flux I2S/DMA.
+  - Bascule transparente et sans conflit de la capture locale vers le streaming réseau lorsque `start(provider)` est invoqué (STT / Conversation), et reprise automatique à la fin de l'opération vocale.
+  - Prise en charge de l'initialisation hors ligne dans `VoxCoreVoice::begin(config)` lorsque `config.apiKey` est vide.
+
+### Nouvelle Architecture Wake Word (`IWakeWordEngine`, `WakeWordAudioBridge`, `WakeWordManager`)
+- **Interface Abstraite de Moteur (`IWakeWordEngine.h`)** :
+  - Découplage complet entre la fondation audio/logicielle de VoiceKit et le moteur de détection (`WakeNetEngine`, `TestWakeWordEngine`, futur `microWakeWord` ou moteur personnalisé).
+  - Distinction stricte et honnête entre : fonction activée (`isWakeWordEnabled`), moteur disponible (`isWakeWordEngineAvailable`), moteur initialisé (`isWakeWordEngineInitialized`), écoute réellement active (`isWakeWordListening`), détection simulée (`isWakeWordSimulated`) et reconnaissance acoustique réelle (`isWakeWordRealRecognitionActive`).
+- **Pont Audio Temps Réel Borné (`WakeWordAudioBridge.h/.cpp`)** :
+  - File circulaire SPSC sans verrou (8 slots de 512 échantillons = 256 ms @ 16 kHz 16-bit mono, ~8,3 Ko).
+  - Contrôle strict des copies : exactement 1 copie (`memcpy` DMA $\to$ slot) dans la tâche audio (< 15 µs), 0 copie supplémentaire côté consommateur (`peekFrame()` / `consumeFrame()` dans `voice.update()`).
+  - Zéro allocation dynamique et zéro écriture `Serial` dans le callback audio critique.
+  - Politiques explicites de saturation (`DROP_NEWEST` par défaut ou `DROP_OLDEST`) et métriques atomiques de saturation/abandon.
+- **Machine à États & Coexistence (`WakeWordManager.h/.cpp`)** :
+  - États : `DISABLED` $\to$ `INITIALIZING` $\to$ `ARMED` $\to$ `DETECTED` $\to$ `SUSPENDED` $\to$ `ARMED`, ainsi que `ERROR`.
+  - Suspension automatique pendant toute activité vocale (TTS `say()`, STT `listen()`, `ContinuousSTT`, `Conversation`) afin d'éviter tout conflit d'accès I2S et tout faux réveil provoqué par le haut-parleur AW88298.
+  - Reprise contrôlée vers `ARMED` après la fin de la réponse vocale (avec délai d'extinction acoustique configurable, 250 ms par défaut).
+  - La détection n'ouvre jamais automatiquement une connexion réseau.
+- **Étude & Adaptateur Espressif ESP-SR WakeNet10 (`WakeNetEngine.h`)** :
+  - Analyse complète d'ESP-SR et du modèle français `wn10_fr_bonjouresp` (« Bonjour ESP »).
+  - Intégration d'un adaptateur de cadrage sans perte `512 -> 480` échantillons (`32 ms -> 30 ms` @ 16 kHz) garantissant la continuité bit-à-bit pour WakeNet10 (`15 * 512 == 16 * 480`).
+  - Dans l'environnement actuel Arduino-ESP32 2.0.17 / ESP-IDF 4.4.7 (`espressif32@6.9.0`), `WakeNetEngine::isAvailable()` retourne `false` et passe explicitement en état `ERROR` sans jamais simuler une reconnaissance vocale.
+- **Détecteur de Test Déterministe (`TestWakeWordEngine.h`)** :
+  - Moteur léger implémentant `IWakeWordEngine` pour valider la capture PCM 16 kHz, le pont audio, la machine à états, les callbacks, la suspension/reprise et les erreurs par commande série (`"bonjour esp"`, `"wake"`) ou appel explicite (`triggerTestWakeWord()`), toujours identifié comme simulé (`isSimulatedEngine() == true`).
+- **Compatibilité Future LVGL & Diagnostics (`pollWakeWordEvent` & `WakeWordMetrics`)** :
+  - File d'événements thread-safe (`pollWakeWordEvent`) permettant à `CoreS3-VoiceUI-Demo` de consommer un événement Wake Word dans la boucle LVGL principale sans dépendance LVGL dans VoiceKit.
+  - Métriques à faible coût : RAM interne libre/minimale, PSRAM libre/minimale, temps max push audio, temps max traitement Wake Word, trames reçues/traitées/abandonnées, saturations, détections, erreurs et transitions d'état.
+
+### Nouvel Exemple & Tests
+- **Exemple Autonome `examples/WakeWordFoundation/`** : Démonstration sans LVGL et sans réseau sur M5Stack CoreS3.
+- **6 Nouvelles Suites de Tests Unitaires (Suites 83 à 88)** : **1 457 validations réussies avec 0 échec** (88 suites au total).
+
+---
+
 ## [0.6.1] - 2026-10-28 (Correctif de Stabilité — Gemini Live, WebSocket TLS et Wi-Fi FastConnect)
 
 ### Correction A — Réinitialisation Polymorphe des Métriques PCM entre Tours (`IVoiceProvider` & `LiveSessionController`)

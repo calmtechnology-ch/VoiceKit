@@ -4,6 +4,7 @@
 #include <cstddef>
 #include "hal/IAudioOutput.h"
 #include "hal/IAudioInput.h"
+#include "core/IWakeWordEngine.h"
 
 /**
  * @brief Mode de gestion du reseau Wi-Fi.
@@ -437,6 +438,13 @@ struct VoiceKitConfig {
     // Mode conversationnel bidirectionnel natif (Mode B v0.4.0)
     bool enableConversation = false;
     String conversationInstruction = VOICEKIT_DEFAULT_CONVERSATION_INSTRUCTION;
+
+    // Fondation Wake Word locale (v0.6.2 — optionnelle, désactivée par défaut)
+    bool enableWakeWord = false;                                    ///< Active le détecteur au démarrage si true
+    WakeWordEngineType wakeWordEngine = WakeWordEngineType::WAKENET;///< Moteur ciblé (WAKENET par défaut, ou TEST)
+    String wakeWordPhrase = "Bonjour ESP";                          ///< Mot de réveil cible
+    bool wakeWordAutoResume = true;                                 ///< Reprise automatique après fin de conversation/TTS
+    uint32_t wakeWordResumeDelayMs = 250;                           ///< Délai d'extinction acoustique avant réarmement (ms)
 
     // Champs de compatibilite ascendante pour applications hotes autonomes
     bool hardwareAlreadyInitialized = true;
