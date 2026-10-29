@@ -97,6 +97,9 @@ bool ContinuousListeningController::start() {
             setState(ContinuousState::LISTENING);
             return true;
         }
+        _isActive.store(false, std::memory_order_release);
+        setState(ContinuousState::INACTIVE);
+        return false;
     }
 
     setState(ContinuousState::IDLE);
@@ -149,6 +152,9 @@ bool ContinuousListeningController::resume() {
             setState(ContinuousState::LISTENING);
             return true;
         }
+        _isPaused.store(true, std::memory_order_release);
+        setState(ContinuousState::PAUSED);
+        return false;
     }
 
     setState(ContinuousState::IDLE);

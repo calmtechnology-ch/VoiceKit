@@ -1,4 +1,4 @@
-# VoiceKit v0.6.2 — Wake Word Foundation & Architecture Multi-Fournisseurs (Gemini Live & OpenAI Realtime)
+# VoiceKit v0.6.2.1 — Corrective Wake Word Foundation & Architecture Multi-Fournisseurs (Gemini Live & OpenAI Realtime)
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -9,12 +9,17 @@ Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TT
 
 Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)** supportant à la fois **Google Gemini Live** (moteur par défaut, 100% rétrocompatible) et **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`), construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
 
-La version **v0.6.2** prépare et stabilise la **fondation locale de détection de mot de réveil (« Bonjour ESP »)** hors ligne sur M5Stack CoreS3 tout en préservant intégralement la `v0.6.1` :
+La version **v0.6.2.1** est une version corrective qui fiabilise et durcit la **fondation locale de détection de mot de réveil (« Bonjour ESP »)** avant son intégration dans une application LVGL 9 (`CoreS3-VoiceUI-Demo`) sur M5Stack CoreS3 :
+- **Correctifs de Fiabilité & Performances Wake Word Foundation (v0.6.2.1)** :
+  - **Sûreté Concurrente SPSC de `WakeWordAudioBridge`** : Désactivation propre de la politique `DROP_OLDEST` (repli automatique sur `DROP_NEWEST`) afin de garantir mathématiquement que le producteur audio ne modifie jamais `_tail` et n'invalide jamais un pointeur `peekFrame()` pendant `IWakeWordEngine::process()`. Ajout d'un compteur d'écrivains actifs sans verrou (`_activeWriters`) et d'une époque de génération (`_epoch`) protégeant `clear()`, `setEnabled(false)`, `begin()` et `end()` contre toute trame partiellement écrite ou fantôme.
+  - **Budget CPU Borné & Fluidité LVGL (`WakeWordManager`)** : Introduction de `setWakeWordMaxFramesPerUpdate()` (défaut : `2`) et `setWakeWordProcessingBudgetUs()` (défaut : `5000 µs`) pour borner le temps consommé dans `voice.update()`, avec détection des dépassements (`processingBudgetExceeded`) et télémétrie fine (`lastUpdateProcessDurationUs`, `maxUpdateProcessDurationUs`, `lastWakeProcessDurationUs`, `maxWakeProcessDurationUs`).
+  - **Vérification Stricte d'Arrêt Microphone (`stopLocalCapture`)** : Contrôle systématique du résultat de `stopLocalCapture()` lors des transitions vers STT, TTS, ContinuousSTT et Conversation ; refus propre en cas d'échec sans double initialisation du micro ES7210 (`captureStopFailures`), et récupération complète dès levée de quarantaine FreeRTOS sans blocage définitif du microphone.
+  - **Durcissement de `WakeNetEngine` & Métriques RMS Authentiques** : Distinction stricte à 4 niveaux (`isWakeWordEngineCompiledSupportAvailable`, `isWakeWordEngineModelAvailable`, `isWakeWordEngineInitialized`, `isWakeWordRealRecognitionActive`), libération garantie des modèles ESP-SR sur tout échec partiel de `begin()`, suppression du score de confiance fictif (`0.0f` au lieu de `0.95f`), continuité sans perte de l'adaptateur `512 -> 480` sur détection, et suppression de l'injection de trame silencieuse fictive dans `triggerTestWakeWord()` pour préserver les métriques RMS réelles (`lastRms`, `peakRms`).
 - **Fondation Wake Word Locale Hors Ligne (v0.6.2)** :
   - **Capture Audio Partagée Hors Ligne** : VoiceKit (`LiveAudioStreamer` + `HardwareManager`) demeure l'unique propriétaire du microphone CoreS3 ES7210 (PCM 16 kHz mono 16 bits signé), utilisable sans Wi-Fi ni connexion Gemini/OpenAI via `startLocalCapture()` sans aucune tâche FreeRTOS supplémentaire.
-  - **Architecture Découplée (`IWakeWordEngine`, `WakeWordAudioBridge`, `WakeWordManager`)** : Pont audio temps réel à file SPSC bornée (1 seule copie DMA $\to$ slot, 0 copie au dépilage, politiques `DROP_NEWEST` / `DROP_OLDEST`), machine à états complète (`DISABLED` $\to$ `INITIALIZING` $\to$ `ARMED` $\to$ `DETECTED` $\to$ `SUSPENDED` $\to$ `ARMED`, `ERROR`), suspension automatique pendant TTS/STT/Conversation et reprise contrôlée après la réponse vocale.
+  - **Architecture Découplée (`IWakeWordEngine`, `WakeWordAudioBridge`, `WakeWordManager`)** : Pont audio temps réel à file SPSC bornée (1 seule copie DMA $\to$ slot, 0 copie au dépilage, politique sécurisée `DROP_NEWEST`), machine à états complète (`DISABLED` $\to$ `INITIALIZING` $\to$ `ARMED` $\to$ `DETECTED` $\to$ `SUSPENDED` $\to$ `ARMED`, `ERROR`), suspension automatique pendant TTS/STT/Conversation et reprise contrôlée après la réponse vocale.
   - **Étude & Adaptateur Espressif ESP-SR WakeNet10 (`WakeNetEngine`)** : Adaptateur pour le modèle français `wn10_fr_bonjouresp` avec recadrage sans perte `512 -> 480` échantillons (`32 ms -> 30 ms` @ 16 kHz). Rapporte honnêtement son indisponibilité (`ERROR`) sous Arduino-ESP32 2.0.17 / ESP-IDF 4.4.7 sans jamais simuler silencieusement une reconnaissance vocale.
-  - **Moteur de Test Déterministe (`TestWakeWordEngine`) & Compatibilité LVGL (`pollWakeWordEvent`)** : Validation complète du pipeline par commande série ou injection explicite, diagnostics mémoire/CPU (`WakeWordMetrics`) et nouvel exemple autonome `examples/WakeWordFoundation/`.
+  - **Moteur de Test Déterministe (`TestWakeWordEngine`) & Compatibilité LVGL (`pollWakeWordEvent`)** : Validation complète du pipeline par commande série ou injection explicite, diagnostics mémoire/CPU (`WakeWordMetrics`) et exemple autonome `examples/WakeWordFoundation/`.
 - **Correctifs de Stabilité Temps Réel (v0.6.1)** :
   - **Correction A (Métriques PCM Multi-Tours)** : Réinitialisation polymorphe des métriques audio RX via `IVoiceProvider` (`resetTurnRxMetrics`, `getTurnDecodedSamples`, `getPostTurnCompleteBlocks`), éliminant les fausses alertes d'ordre après `turnComplete` à partir du 2ᵉ tour tout en préservant la détection stricte des véritables blocs tardifs.
   - **Correction B (Ordonnancement FreeRTOS TLS)** : Ajustement de la priorité de `websocket_task` pendant le handshake mbedTLS (`prio = 1`, puis `2` une fois connecté) pour supprimer la préemption prolongée (~1,55 s) de `loopTask` (LVGL/tactile) et ajout de l'instrumentation complète TLS/FreeRTOS/RAM interne.
@@ -24,7 +29,7 @@ La version **v0.6.2** prépare et stabilise la **fondation locale de détection 
 - **Sélection par Configuration Zéro-Code** : Bascule instantanée entre Gemini et OpenAI par simple configuration (`config.provider = VoiceProviderType::OPENAI;`). Aucune modification requise dans le code métier de l'application !
 - **Rééchantillonneur Dédié 16 kHz $\to$ 24 kHz (`AudioResampler`)** : Algorithme linéaire ultra-rapide en virgule fixe entière (512 in $\to$ 768 out en moins de 15 µs sur Core 1), n'impactant aucunement la tâche audio critique.
 - **Sanctuaire Audio VoxCore Intact** : Conservation intégrale de la tâche FreeRTOS Mode 2, du buffer circulaire PSRAM 120 000 échantillons (~5 s), des buffers DMA et du protocole de vidage exact sans coupure de la syllabe finale (*« alpha tango terminé »*).
-- **Validation Exhaustive & Zéro Régression** : **1 457 tests unitaires réussis avec 0 échec** (88 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
+- **Validation Exhaustive & Zéro Régression** : **1 844 tests unitaires réussis avec 0 échec** (94 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
 
 ---
 
@@ -143,8 +148,8 @@ VoiceKit v0.6.0 introduit une architecture ouverte découplée reposant sur l'in
 
 ```text
 VoiceKit/
-├── library.json                 # Manifeste PlatformIO (v0.6.2)
-├── library.properties           # Manifeste Arduino IDE (v0.6.2)
+├── library.json                 # Manifeste PlatformIO (v0.6.2.1)
+├── library.properties           # Manifeste Arduino IDE (v0.6.2.1)
 ├── LICENSE                      # Licence MIT
 ├── README.md                    # Documentation complète
 ├── CHANGELOG.md                 # Historique des versions
@@ -569,12 +574,12 @@ La bibliothèque fournit 11 exemples complets prêts à l'emploi :
 
 ## 10. Garanties de Non-Régression & Sécurité
 
-La version **v0.6.2** garantit une non-régression absolue sur l'ensemble des modules préexistants :
+La version **v0.6.2.1** garantit une non-régression absolue sur l'ensemble des modules préexistants :
 - **Intégrité absolue du moteur audio VoxCore** : Aucune réduction arbitraire du buffer circulaire PSRAM (120 000 échantillons @ 24 kHz) ni des marges DMA (160 ms). Préservation intégrale de la tâche FreeRTOS Mode 2 et du vidage exact sans coupure de syllabe.
 - **Validation Repère Acoustique (« alpha tango terminé »)** : Vérification rigoureuse que les derniers mots émis (par Gemini Live comme par OpenAI) sont intégralement restitués sans troncature, y compris lors de la réception de `response.done`.
 - **Rééchantillonnage 16k $\to$ 24k en arithmétique entière** : Exécution en < 15 µs sur ESP32-S3 Core 1 sans blocage de la boucle de capture audio.
 - **Zéro identifiant en clair** : Aucun secret, SSID Wi-Fi ni clé API n'est publié dans le dépôt. Masquage systématique des clés dans les logs.
-- **Suite de tests automatisés** : 88 suites de tests unitaires et 1 457 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
+- **Suite de tests automatisés** : 94 suites de tests unitaires et 1 805 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
 - **Compilations d'exemples validées à 100%** : Tous les exemples cibles PlatformIO compilent sans aucune erreur.
 
-Consultez le [Rapport Technique v0.6.2](RAPPORT_v0.6.2.md) (ainsi que le [Rapport de Livraison v0.6.1](RAPPORT_LIVRAISON_v0.6.1.md) et le [Rapport de Livraison v0.6.0](RAPPORT_LIVRAISON_v0.6.0.md)) pour les détails d'architecture, l'étude WakeNet10 / ESP-SR et les métriques exposées.
+Consultez le [Rapport Technique v0.6.2.1](RAPPORT_v0.6.2.1.md) (ainsi que le [Rapport Technique v0.6.2](RAPPORT_v0.6.2.md), le [Rapport de Livraison v0.6.1](RAPPORT_LIVRAISON_v0.6.1.md) et le [Rapport de Livraison v0.6.0](RAPPORT_LIVRAISON_v0.6.0.md)) pour les détails d'architecture, l'étude WakeNet10 / ESP-SR et les métriques exposées.

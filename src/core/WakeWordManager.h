@@ -122,7 +122,30 @@ public:
     bool isUsingLocalMicCapture() const { return _useLocalMicCapture; }
 
     // =========================================================================
-    // États & Distinctions Explicites (Section 6)
+    // Budget CPU et Fluidité Boucle Principale / LVGL (Section 3 — v0.6.2.1)
+    // =========================================================================
+    static constexpr size_t DEFAULT_MAX_FRAMES_PER_UPDATE = 2;
+    static constexpr uint32_t DEFAULT_PROCESSING_BUDGET_US = 5000;
+
+    /**
+     * @brief Limite le nombre maximal de trames audio traitées par appel à update().
+     * @param maxFrames Nombre maximal de trames (1 .. MAX_QUEUE_CAPACITY, défaut : 2).
+     */
+    void setMaxFramesPerUpdate(size_t maxFrames);
+    size_t getMaxFramesPerUpdate() const { return _maxFramesPerUpdate; }
+
+    /**
+     * @brief Définit le budget temporel maximal cumulé dans update() en microsecondes.
+     *        Au moins 1 trame est toujours traitée par appel pour garantir la progression,
+     *        puis la boucle s'interrompt dès que le budget est atteint.
+     * @param budgetUs Budget en microsecondes (0 = sans limite de temps, défaut : 5000 µs).
+     */
+    void setProcessingBudgetUs(uint32_t budgetUs);
+    uint32_t getProcessingBudgetUs() const { return _processingBudgetUs; }
+    uint32_t getProcessingBudgetExceededCount() const { return _metrics.processingBudgetExceeded; }
+
+    // =========================================================================
+    // États & Distinctions Explicites (Sections 6 — v0.6.2 / v0.6.2.1)
     // =========================================================================
 
     /**
@@ -131,7 +154,17 @@ public:
     bool isEnabled() const { return _enabled.load(std::memory_order_acquire); }
 
     /**
-     * @brief 2. Moteur disponible : indique si le moteur sélectionné est disponible dans cet environnement.
+     * @brief 2a. Support compilé : indique si le support binaire du moteur sélectionné est compilé.
+     */
+    bool isEngineCompiledSupportAvailable() const;
+
+    /**
+     * @brief 2b. Modèle disponible : indique si le modèle binaire (ex: wn10_fr_bonjouresp) est présent.
+     */
+    bool isEngineModelAvailable() const;
+
+    /**
+     * @brief 2. Moteur disponible : indique si le moteur sélectionné est disponible (support compilé + modèle).
      */
     bool isEngineAvailable() const;
     bool isEngineAvailable(WakeWordEngineType type) const;
@@ -219,7 +252,7 @@ private:
     void setState(WakeWordState newState);
     void selectActiveEnginePointer();
     bool startCaptureIfNeeded();
-    void stopCaptureIfNeeded();
+    bool stopCaptureIfNeeded();
     void refreshMemoryMetrics() const;
 
     LiveAudioStreamer* _streamer = nullptr;
@@ -244,8 +277,12 @@ private:
     bool _voiceActivitySeenSinceSuspend = false;
     bool _wasVoiceBusy = false;
     bool _resumePendingAfterBusy = false;
+    bool _hasArmedOnce = false;
+    bool _inUpdate = false;
     uint32_t _lastVoiceActivityEndMs = 0;
     uint32_t _resumeDelayMs = 250;
+    size_t _maxFramesPerUpdate = DEFAULT_MAX_FRAMES_PER_UPDATE;
+    uint32_t _processingBudgetUs = DEFAULT_PROCESSING_BUDGET_US;
 
     mutable WakeWordMetrics _metrics;
     WakeWordEvent _pendingEvent;

@@ -1,7 +1,7 @@
 {
   "name": "VoiceKit",
-  "version": "0.6.2",
-  "description": "Bibliothèque C++/Arduino multi-fournisseurs (Gemini Live & OpenAI Realtime) de synthèse vocale (TTS), reconnaissance vocale (STT), dictée continue (ContinuousSTT), conversation bidirectionnelle native, fondation locale de détection de mot de réveil (Wake Word Foundation hors ligne) et moteur VoxCore stabilisé pour M5Stack CoreS3 — v0.6.2",
+  "version": "0.6.2.1",
+  "description": "Bibliothèque C++/Arduino multi-fournisseurs (Gemini Live & OpenAI Realtime) de synthèse vocale (TTS), reconnaissance vocale (STT), dictée continue (ContinuousSTT), conversation bidirectionnelle native, fondation locale de détection de mot de réveil (Wake Word Foundation hors ligne stabilisée) et moteur VoxCore stabilisé pour M5Stack CoreS3 — v0.6.2.1",
   "keywords": [
     "voicekit",
     "voxcore",
@@ -44,10 +44,18 @@
     "m5stack/M5Unified": "0.2.23"
   },
   "build": {
+    "extraScript": "extra_script.py",
+    "srcFilter": [
+      "+<*>",
+      "+<core/*>",
+      "+<hal/*>",
+      "+<esp_sr/*>"
+    ],
     "flags": [
       "-std=gnu++17",
       "-DVOXCORE_AUDIO_MODE=2",
-      "-Isrc"
+      "-Isrc",
+      "-Isrc/esp_sr/include"
     ]
   }
 }

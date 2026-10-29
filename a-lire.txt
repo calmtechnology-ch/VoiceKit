@@ -21,3 +21,6 @@ pio device monitor -d examples/MinimalTTS -b 115200
 
 - bon pour publication ?
 
+pio run -d examples/WakeWordFoundation -t upload
+
+Go rule by rule, with ✅ or ❌ and one line on why:

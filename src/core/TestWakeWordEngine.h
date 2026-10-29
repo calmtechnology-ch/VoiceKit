@@ -122,7 +122,9 @@ public:
             _triggersFired.fetch_add(1, std::memory_order_relaxed);
         }
 
-        res.processingTimeUs = micros() - startUs;
+        uint32_t elapsedUs = micros() - startUs;
+        uint32_t simDurUs = _simulatedProcessDurationUs.load(std::memory_order_relaxed);
+        res.processingTimeUs = (simDurUs > elapsedUs) ? simDurUs : elapsedUs;
         return res;
     }
 
@@ -182,6 +184,8 @@ public:
     void setSimulateInitFailure(bool fail) { _simulateInitFailure.store(fail, std::memory_order_relaxed); }
     void setSimulateRuntimeError(bool err) { _simulateRuntimeError.store(err, std::memory_order_relaxed); }
     bool isSimulatingRuntimeError() const { return _simulateRuntimeError.load(std::memory_order_relaxed); }
+    void setSimulatedProcessDurationUs(uint32_t us) { _simulatedProcessDurationUs.store(us, std::memory_order_relaxed); }
+    uint32_t getSimulatedProcessDurationUs() const { return _simulatedProcessDurationUs.load(std::memory_order_relaxed); }
 
     // Compteurs de vérification du transport audio
     uint32_t getFramesProcessed() const { return _framesProcessed.load(std::memory_order_relaxed); }
@@ -204,6 +208,7 @@ private:
     std::atomic<bool> _simulateUnavailable{false};
     std::atomic<bool> _simulateInitFailure{false};
     std::atomic<bool> _simulateRuntimeError{false};
+    std::atomic<uint32_t> _simulatedProcessDurationUs{0};
 
     std::atomic<uint32_t> _framesProcessed{0};
     std::atomic<uint32_t> _samplesProcessed{0};

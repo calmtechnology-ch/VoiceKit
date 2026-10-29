@@ -7,6 +7,51 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.2.1] - 2026-10-28 (Corrective Wake Word Foundation — Fiabilité et performances)
+
+### Correction Critique — Sûreté Concurrente de `WakeWordAudioBridge`
+- **Protection de la Durée de Vie des Trames Consultées (`peekFrame`)** :
+  - Désactivation propre de la politique `DROP_OLDEST` dans `setOverflowPolicy()` et `pushAudioChunk()` avec repli automatique sur `DROP_NEWEST` (et compteur de diagnostic `getUnsupportedPolicyRequestCount()`).
+  - Garantie mathématique SPSC : seul le consommateur (`update()`) modifie `_tail` via `consumeFrame()`, et lorsque `used < _capacity`, `head % _capacity != tail % _capacity`. Le producteur audio (`live_mic_task`) ne peut donc jamais écraser ni invalider un slot détenu par `peekFrame()` pendant `IWakeWordEngine::process()`.
+- **Synchronisation Sans Verrou Bloquant lors des Suspensions et Réinitialisations** :
+  - Ajout d'un compteur atomique d'écrivains actifs (`_activeWriters`) avec garde RAII et d'un compteur d'époque (`_epoch`) dans `WakeWordAudioBridge`.
+  - Si `setEnabled(false)`, `clear()`, `begin()` ou `end()` est appelé concurremment pendant une écriture `pushAudioChunk()`, l'incrémentation de `_epoch` invalide l'écriture en cours à sa sortie, empêchant toute visibilité d'une trame partiellement écrite ou post-suspension.
+  - Protection de `end()` : refus de libérer `_slots` si `_activeWriters > 0`.
+
+### Budget CPU Borné & Fluidité LVGL (`WakeWordManager`)
+- **Contrôle du Temps Passé dans `voice.update()`** :
+  - Introduction de `setMaxFramesPerUpdate(size_t)` (défaut : `2` trames au lieu de `8`) et `setProcessingBudgetUs(uint32_t)` (défaut : `5000 µs`), exposés sur `WakeWordManager`, `VoxCoreVoice`, `VoiceKit` et `VoiceKitConfig`.
+  - Mesure du temps réel consommé par trame (`lastWakeProcessDurationUs`, `maxWakeProcessDurationUs`) et par appel `update()` (`lastUpdateProcessDurationUs`, `maxUpdateProcessDurationUs`).
+  - Détection et comptabilisation des dépassements de budget (`processingBudgetExceeded`) avec arrêt anticipé de la boucle de dépilement dès que le budget est atteint.
+
+### Arrêt et Reprise du Microphone (`LiveAudioStreamer` & `WakeWordManager`)
+- **Gestion Explicite des Échecs de `stopLocalCapture()`** :
+  - Vérification systématique du retour de `stopLocalCapture()` dans `LiveAudioStreamer::start()`, `WakeWordManager::stopCaptureIfNeeded()`, `VoxCoreVoice::say()`, `VoxCoreVoice::startListening()` et `VoiceKit::startContinuousListening()`.
+  - En cas d'échec d'arrêt de la capture locale : refus propre du nouveau mode sans seconde initialisation du microphone ES7210, transition vers un état d'erreur explicite (`WakeWordState::ERROR` / `VoiceState::ERROR_STATE`) et incrémentation de `captureStopFailures`.
+  - Dans `LiveAudioStreamer::stopLocalCapture()` et `checkQuarantinedTasks()`, `stopMicHardware()` n'est appelé qu'après terminaison confirmée de `live_mic_task`, et la levée ultérieure de quarantaine libère les tampons et la réservation microphone afin que le microphone ne reste jamais bloqué définitivement.
+
+### Machine à États Wake Word, `WakeNetEngine` & Capture Locale
+- **Machine à États & Sûreté Mémoire (`WakeWordManager`)** :
+  - Protection anti-réentrance dans `update()` (`_inUpdate`) et respect des transitions déclenchées depuis les callbacks (`listen()`, `say()`, `resumeWakeWord()`, `disableWakeWord()`).
+  - Idempotence des appels répétés à `enableWakeWord()`, `disableWakeWord()`, `suspendWakeWord()`, `resumeWakeWord()` et transition propre `ERROR -> DISABLED (INACTIVE) -> INITIALIZING -> ARMED`.
+  - Lors de `disableWakeWord()`, `_bridge.end()` et `_activeEngine->end()` ne sont appelés qu'après confirmation de l'arrêt du producteur audio.
+- **Durcissement de `WakeNetEngine` (`src/core/WakeNetEngine.h`)** :
+  - Distinction stricte à 4 niveaux : (1) support compilé (`isCompiledSupportAvailable`), (2) modèle disponible en flash (`isModelAvailable`), (3) moteur initialisé (`isInitialized`), (4) reconnaissance acoustique réellement active (`isRealRecognitionActive`).
+  - Libération systématique de `esp_srmodel_deinit(_models)` sur tous les chemins d'échec partiel de `begin()`.
+  - Suppression du score de confiance fictif (`res.confidence = 0.0f` au lieu de `0.95f`).
+  - Continuité bit-à-bit de l'adaptateur `512 -> 480` sans perte d'échantillons aux frontières même lors d'une détection en milieu de bloc, et remise à zéro complète de `_accumulator` dans `reset()`.
+- **Métriques RMS Authentiques, Compteurs & Clarification de l'Affichage `WakeWordFoundation`** :
+  - Suppression de l'injection de trame silencieuse fictive (`rms = 0`) dans `triggerTestDetection()` et `handleSerialCommand()`, garantissant que `lastRms`, `peakRms` et `framesReceived` reflètent exclusivement le signal acquis sur le microphone ES7210.
+  - Ajout du compteur de réarmements (`rearmCount` dans `WakeWordMetrics`, incrémenté lors de chaque retour à l'état `ARMED` après l'activation initiale), en complément des compteurs de détections (`detectionCount`, comptabilisées une seule fois par événement réel) et d'erreurs (`errorCount`).
+  - Clarification de l'affichage série dans `examples/WakeWordFoundation/src/main.cpp` :
+    - Encadré très visible `MOT DE RÉVEIL DÉTECTÉ` affichant le texte `Bonjour ESP`, le moteur actif (`RECONNAISSANCE RÉELLE` ou `SIMULATION (TEST)`) et les compteurs de détections, de réarmements et d'erreurs.
+    - Distinction explicite des états en français : `ARMED — En écoute`, `DETECTED — Mot reconnu`, `SUSPENDED — Détection suspendue`, puis `ARMED — Écoute réactivée`.
+    - Conservation de l'affichage complet des métriques mémoire (RAM/PSRAM) et CPU via la commande série `'m'`, et de la commande `'c'` de cycles d'activation/désactivation.
+    - Zéro journal répétitif dans `loop()` (affichage uniquement sur transitions, détections ou commandes) et zéro impression série dans le callback audio critique.
+- **6 Nouvelles Suites de Tests Unitaires (Suites 89 à 94)** : **1 844 validations réussies avec 0 échec** (94 suites au total).
+
+---
+
 ## [0.6.2] - 2026-10-28 (Wake Word Foundation — M5Stack CoreS3)
 
 ### Capture Audio Partagée Hors Ligne (`LiveAudioStreamer` & `VoxCoreVoice`)

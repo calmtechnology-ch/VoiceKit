@@ -251,6 +251,27 @@ bool VoiceKit::startContinuousListening() {
         return true;
     }
 
+    // Suspendre Wake Word avant de démarrer l'écoute continue et vérifier le résultat de stopLocalCapture()
+    if (_voice.isWakeWordEnabled() &&
+        (_voice.getWakeWordState() == WakeWordState::ARMED ||
+         _voice.getWakeWordState() == WakeWordState::DETECTED ||
+         _voice.getStreamer().isLocalCapture())) {
+        _voice.getWakeWordManager().notifyVoiceActivity(true, isSpeaking());
+        if (_voice.isWakeWordError()) {
+            return false;
+        }
+    } else if (_voice.isWakeWordEnabled() && _voice.isWakeWordError() &&
+               (_voice.getStreamer().isLocalCapture() || _voice.getStreamer().isTaskQuarantined())) {
+        _voice.getStreamer().checkQuarantinedTasks();
+        if (_voice.getStreamer().isLocalCapture() || _voice.getStreamer().isTaskQuarantined()) {
+            return false;
+        }
+    } else if (_voice.getStreamer().isLocalCapture()) {
+        if (!_voice.getStreamer().stopLocalCapture()) {
+            return false;
+        }
+    }
+
     bool started = _continuousController.start();
     if (started) {
         _mode.store(VoiceKitMode::CONTINUOUS_LISTENING, std::memory_order_release);
