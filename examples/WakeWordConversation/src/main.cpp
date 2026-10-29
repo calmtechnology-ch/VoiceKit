@@ -1,4 +1,5 @@
 #include <M5Unified.h>
+#include <WiFi.h>
 #include <VoiceKit.h>
 
 #if __has_include("secrets.h")
@@ -190,10 +191,10 @@ void setup() {
     vcfg.volume = 75;
     vcfg.language = "fr-FR";
 
-    // Activation du mode Wake Word Conversation (v0.6.3) avec WakeNet « Bonjour ESP »
+    // Configuration de WakeNet « Bonjour ESP » (activation différée après connexion Wi-Fi)
     vcfg.wakeWordEngine = WakeWordEngineType::WAKENET;
     vcfg.wakeWordPhrase = "Bonjour ESP";
-    vcfg.enableWakeWordConversation = true;
+    vcfg.enableWakeWordConversation = false;
     vcfg.wakeConversationSilenceTimeoutMs = 30000;      // 30 s d'inactivité par défaut
     vcfg.wakeConversationMaxSessionDurationMs = 180000; // 3 min max par session
     vcfg.wakeConversationVoiceStopEnabled = true;       // Fermeture vocale (« Au revoir »)
@@ -265,7 +266,21 @@ void setup() {
         gUiDirty = true;
     });
 
+    gBannerSubText = "Connexion Wi-Fi en cours...";
+    drawInterface();
+
     voice.begin(vcfg);
+
+    // Attente non-bloquante de la synchronisation Wi-Fi / NTP initiale
+    // afin d'éviter toute interférence RF pendant la recherche de canaux sur le bus I2S
+    uint32_t waitWifiStart = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - waitWifiStart < 10000)) {
+        voice.update();
+        delay(50);
+    }
+
+    voice.enableWakeWordConversation(true);
+    gBannerSubText = "Dites « Bonjour ESP » pour demarrer une conversation";
     drawInterface();
 }
 
