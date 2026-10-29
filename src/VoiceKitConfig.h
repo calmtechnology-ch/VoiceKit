@@ -448,6 +448,19 @@ struct VoiceKitConfig {
     size_t wakeWordMaxFramesPerUpdate = 2;                          ///< Nombre max de trames PCM traitées par appel à update() (fluidité LVGL)
     uint32_t wakeWordProcessingBudgetUs = 5000;                     ///< Budget max de traitement Wake Word par appel à update() en µs (0 = illimité)
 
+    // Conversation mains libres pilotée par mot de réveil (v0.6.3 — optionnelle, désactivée par défaut)
+    bool enableWakeWordConversation = false;                        ///< Active automatiquement le cycle Wake Word -> Conversation -> Retour ARMED
+    uint32_t wakeConversationSilenceTimeoutMs = 30000;              ///< Timeout de silence/inactivité par défaut : 30 s
+    uint32_t wakeConversationMaxSessionDurationMs = 180000;         ///< Durée maximale d'une session (3 min par défaut, 0 = illimitée)
+    uint32_t wakeConversationConnectTimeoutMs = 15000;              ///< Timeout d'établissement de session vocale (15 s)
+    uint32_t wakeConversationResponseTimeoutMs = 15000;             ///< Timeout d'attente de réponse serveur (15 s)
+    uint32_t wakeConversationMaxTurnDurationMs = 20000;             ///< Durée maximale de capture continue par tour (20 s)
+    uint32_t wakeConversationTurnRestartDelayMs = 150;              ///< Délai acoustique entre fin de réponse TTS et écoute du tour suivant (ms)
+    uint32_t wakeConversationErrorRecoveryDelayMs = 1500;           ///< Délai de stabilisation avant réarmement après erreur récupérable (ms)
+    uint16_t wakeConversationVadThresholdRms = 400;                 ///< Seuil RMS du VAD local pendant la conversation mains libres
+    bool wakeConversationVoiceStopEnabled = true;                   ///< Autorise la fermeture par commande vocale confirmée (transcription finale)
+    bool wakeConversationDisconnectAfterSession = true;             ///< Libère la session WebSocket à la fin de la conversation
+
     // Champs de compatibilite ascendante pour applications hotes autonomes
     bool hardwareAlreadyInitialized = true;
     bool connectOnDemand = false;

@@ -138,6 +138,7 @@ public:
     using AudioChunkCallback = std::function<void(const int16_t* samples, size_t count, uint32_t rms)>;
     void onAudioChunk(AudioChunkCallback cb) { _chunkCallback = std::move(cb); }
     void setWakeWordAudioCallback(AudioChunkCallback cb) { _wakeWordChunkCallback = std::move(cb); }
+    void setConversationAudioCallback(AudioChunkCallback cb) { _conversationChunkCallback = std::move(cb); }
 
     bool isActivityStartConfirmed() const { return _activityStartSent; }
     bool isActivityEndConfirmed() const { return _activityEndSent; }
@@ -273,6 +274,7 @@ private:
     volatile uint32_t _lastChunkRms = 0;
     AudioChunkCallback _chunkCallback = nullptr;
     AudioChunkCallback _wakeWordChunkCallback = nullptr;
+    AudioChunkCallback _conversationChunkCallback = nullptr;
     bool _activityStartSent = false;
     bool _activityEndSent = false;
     uint32_t _micStoppedMs = 0;

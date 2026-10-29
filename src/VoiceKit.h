@@ -429,6 +429,52 @@ public:
     const WakeWordManager& getWakeWordManager() const { return _voice.getWakeWordManager(); }
 
     // =========================================================================
+    // 6. Conversation Mains Libres par Mot de Réveil (Wake Word Conversation — v0.6.3)
+    // =========================================================================
+
+    bool enableWakeWordConversation(bool enable = true) { return _voice.enableWakeWordConversation(enable); }
+    void disableWakeWordConversation() { _voice.disableWakeWordConversation(); }
+    bool isWakeWordConversationEnabled() const { return _voice.isWakeWordConversationEnabled(); }
+    bool isWakeWordConversationActive() const { return _voice.isWakeWordConversationActive(); }
+    bool isWakeWordConversationInProgress() const { return _voice.isWakeWordConversationInProgress(); }
+
+    bool stopWakeWordConversationSession(bool immediate = true) { return _voice.stopWakeWordConversationSession(immediate); }
+    bool requestEndWakeWordConversationAfterTurn() { return _voice.requestEndWakeWordConversationAfterTurn(); }
+
+    WakeWordConversationState getWakeWordConversationState() const { return _voice.getWakeWordConversationState(); }
+    WakeWordSessionEndReason getWakeWordConversationEndReason() const { return _voice.getWakeWordConversationEndReason(); }
+    const char* getWakeWordConversationStatusText() const { return _voice.getWakeWordConversationStatusText(); }
+    const WakeWordConversationMetrics& getWakeWordConversationMetrics() const { return _voice.getWakeWordConversationMetrics(); }
+    void resetWakeWordConversationMetrics() { _voice.resetWakeWordConversationMetrics(); }
+    void printWakeWordConversationDiagnostics() const { _voice.printWakeWordConversationDiagnostics(); }
+    bool pollWakeWordConversationEvent(WakeWordConversationEvent& outEvent) { return _voice.pollWakeWordConversationEvent(outEvent); }
+
+    void setWakeConversationSilenceTimeoutMs(uint32_t timeoutMs) { _voice.setWakeConversationSilenceTimeoutMs(timeoutMs); }
+    uint32_t getWakeConversationSilenceTimeoutMs() const { return _voice.getWakeConversationSilenceTimeoutMs(); }
+    void setWakeConversationMaxSessionDurationMs(uint32_t maxDurationMs) { _voice.setWakeConversationMaxSessionDurationMs(maxDurationMs); }
+    uint32_t getWakeConversationMaxSessionDurationMs() const { return _voice.getWakeConversationMaxSessionDurationMs(); }
+    void setWakeConversationVoiceStopEnabled(bool enabled) { _voice.setWakeConversationVoiceStopEnabled(enabled); }
+    bool isWakeConversationVoiceStopEnabled() const { return _voice.isWakeConversationVoiceStopEnabled(); }
+    void setWakeConversationDisconnectAfterSession(bool disconnectAfter) { _voice.setWakeConversationDisconnectAfterSession(disconnectAfter); }
+    bool isWakeConversationDisconnectAfterSession() const { return _voice.isWakeConversationDisconnectAfterSession(); }
+    void addWakeConversationStopPhrase(const String& phrase) { _voice.addWakeConversationStopPhrase(phrase); }
+
+    void onWakeConvDetected(WakeWordConversationController::WakeDetectedCallback cb) { _voice.onWakeConvDetected(std::move(cb)); }
+    void onWakeConvDetectedSimple(WakeWordConversationController::WakeWordSimpleCallback cb) { _voice.onWakeConvDetectedSimple(std::move(cb)); }
+    void onWakeConvConnecting(VoidCallback cb) { _voice.onWakeConvConnecting(std::move(cb)); }
+    void onWakeConvReady(VoidCallback cb) { _voice.onWakeConvReady(std::move(cb)); }
+    void onWakeConvListening(VoidCallback cb) { _voice.onWakeConvListening(std::move(cb)); }
+    void onWakeConvSpeaking(VoidCallback cb) { _voice.onWakeConvSpeaking(std::move(cb)); }
+    void onWakeConvEnded(WakeWordConversationController::SessionEndedCallback cb) { _voice.onWakeConvEnded(std::move(cb)); }
+    void onWakeConvEndedSimple(VoidCallback cb) { _voice.onWakeConvEndedSimple(std::move(cb)); }
+    void onWakeConvReturnedToWake(VoidCallback cb) { _voice.onWakeConvReturnedToWake(std::move(cb)); }
+    void onWakeConvRecoverableError(ErrorCallback cb) { _voice.onWakeConvRecoverableError(std::move(cb)); }
+    void onWakeConvStateChanged(WakeWordConversationController::StateCallback cb) { _voice.onWakeConvStateChanged(std::move(cb)); }
+
+    WakeWordConversationController& getWakeWordConversationController() { return _voice.getWakeWordConversationController(); }
+    const WakeWordConversationController& getWakeWordConversationController() const { return _voice.getWakeWordConversationController(); }
+
+    // =========================================================================
     // Configuration Vocale & Profils (v0.4.1)
     // =========================================================================
 

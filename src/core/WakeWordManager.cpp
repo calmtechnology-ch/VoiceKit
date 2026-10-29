@@ -594,6 +594,9 @@ void WakeWordManager::update() {
         _hasPendingEvent.store(true, std::memory_order_release);
 
         // Transition 1 : ARMED -> DETECTED
+        if (_internalEventHook && _enabled.load(std::memory_order_acquire)) {
+            _internalEventHook(_pendingEvent);
+        }
         setState(WakeWordState::DETECTED);
 
         // Vérifier que le callback onStateChanged(DETECTED) n'a pas désactivé le gestionnaire

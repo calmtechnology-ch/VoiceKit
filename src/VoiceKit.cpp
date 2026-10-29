@@ -107,9 +107,10 @@ bool VoiceKit::begin(const VoiceKitConfig& config) {
 
     bool ok = _voice.begin(config);
 
-    // Surcharge du callback de vérification d'occupation pour inclure ContinuousSTT
+    // Surcharge du callback de vérification d'occupation pour inclure ContinuousSTT et WakeWordConversation
     _voice.getWakeWordManager().setVoiceBusyCheckCallback([this]() {
         return this->isBusy() || this->isSpeaking() ||
+               _voice.isWakeWordConversationInProgress() ||
                (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING &&
                 !_continuousController.isPaused());
     });

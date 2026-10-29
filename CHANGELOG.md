@@ -7,6 +7,55 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.3] - 2026-10-29 (Wake Word Driven Conversation — Conversation vocale mains libres déclenchée par « Bonjour ESP »)
+
+### Nouveau Composant Réutilisable `WakeWordConversationController` (`src/core/WakeWordConversationController.h/.cpp`)
+- **Orchestration Mains Libres Non Bloquante (`update()`)** :
+  - Implémentation du cycle complet et répétable sans redémarrage sur M5Stack CoreS3 :
+    1. Écoute locale hors ligne de « Bonjour ESP » via `WakeWordManager` (`WAKE_ARMED`).
+    2. Détection acoustique confirmée (`WAKE_DETECTED`).
+    3. Suspension de WakeNet et libération contrôlée du microphone ES7210 (`PREPARING_SESSION`).
+    4. Connexion au fournisseur vocal configuré (`CONNECTING` — Gemini Live par défaut ou OpenAI Realtime).
+    5. Activation automatique de la conversation après confirmation `setupComplete` (`CONVERSATION_LISTENING`).
+    6. Échanges vocaux bidirectionnels multi-tours (`CONVERSATION_LISTENING` $\leftrightarrow$ `CONVERSATION_SPEAKING`).
+    7. Détection de la fin de session (timeout de silence 30 s, durée maximale, arrêt manuel ou commande vocale confirmée).
+    8. Arrêt complet de la conversation après restitution intégrale des derniers échantillons audio et libération des ressources réseau/audio (`ENDING_SESSION`).
+    9. Réactivation contrôlée de WakeNet (`RETURNING_TO_WAKE`).
+    10. Retour à l'état `WAKE_ARMED`.
+  - Séparation stricte des états de la session conversationnelle (`WakeWordConversationState`) et des états internes du détecteur (`WakeWordState` dans `WakeWordManager`).
+  - Réutilisation intégrale des composants existants (`LiveAudioStreamer`, `LiveSessionController`, `ConversationController`, `LiveAudioPlayer`, `IVoiceProvider`) sans second gestionnaire microphone, sans second transport WebSocket, sans seconde chaîne de lecture audio et sans tâche FreeRTOS supplémentaire.
+
+### Gestion des Événements & Protections de Concurrence
+- **Traitement Différé dans `update()`** :
+  - Le callback `onWakeWordDetected()` (via le hook interne `setInternalEventHook()` de `WakeWordManager`) n'exécute aucune opération longue : il enregistre uniquement une demande atomique de démarrage (`_wakeRequestPending`), traitée ensuite par `WakeWordConversationController::update()`.
+- **Protections Systématiques** :
+  - Rejet et comptabilisation des détections simultanées ou concurrentes pendant une connexion ou une session active (`ignoredConcurrentDetections`).
+  - Garde anti-réentrance (`_inUpdate`) protégeant tous les callbacks utilisateur (`stopWakeWordConversation()`, `requestEndWakeWordConversationAfterTurn()`, `disableWakeWordConversation()`).
+  - Interdiction de réactivation prématurée de WakeNet tant que la capture réseau, la lecture audio ou la quarantaine FreeRTOS ne sont pas formellement terminées.
+  - Vérification stricte de `stopLocalCapture()` et de `HardwareManager::isMicCaptureReserved()` avant toute ouverture de capture conversationnelle.
+  - Nettoyage automatique des sessions WebSocket résiduelles avant connexion et en fin de session.
+
+### Conversation Multi-Tours, Fournisseurs Vocaux & Gestion Audio
+- **Compatibilité `IVoiceProvider` (Gemini Live & OpenAI Realtime)** :
+  - Fournisseur par défaut : `VoiceProviderType::GEMINI` (`GeminiVoiceProvider`).
+  - Fournisseur alternatif : `VoiceProviderType::OPENAI` (`OpenAIRealtimeClient`).
+  - Démarrage de la capture conversationnelle uniquement lorsque `isConnected() && isSetupComplete()` sont confirmés.
+- **Session Multi-Tours & Conditions de Fin** :
+  - La fin d'un tour de réponse TTS (`CONVERSATION_SPEAKING` $\to$ `CONVERSATION_LISTENING`) relance automatiquement l'écoute du tour suivant sans répéter « Bonjour ESP » et n'est jamais confondue avec la fin de la session.
+  - Timeout configurable de silence / d'inactivité (30 000 ms par défaut), durée maximale de session configurable, arrêt manuel explicite (`stopWakeWordConversation(immediate)`) et fermeture par commande vocale (*« au revoir »*, *« arrête la conversation »*, *« fin de conversation »*, *« stop »*, *« quitter »*) **uniquement** sur transcription finale confirmée (`isFinal == true`).
+  - En fermeture normale (commande vocale ou fin après tour), attente de la restitution intégrale de tous les échantillons PCM 24 kHz dans `LiveAudioPlayer` avant la fermeture de session.
+
+### Interface Applicative, Compatibilité LVGL 9, Nouvel Exemple & Diagnostics
+- **API Rétrocompatible sur `VoxCoreVoice` et `VoiceKit`** :
+  - Activation/désactivation (`enableWakeWordConversation()`, `disableWakeWordConversation()`, `config.enableWakeWordConversation`), 8 callbacks dédiés exécutés sur la boucle principale (`onWakeConvDetected`, `onWakeConvConnecting`, `onWakeConvReady`, `onWakeConvListening`, `onWakeConvSpeaking`, `onWakeConvEnded`, `onWakeConvReturnedToWake`, `onWakeConvError`) et file d'événements non bloquante (`pollWakeWordConversationEvent()`) pour LVGL 9.
+- **Nouvel Exemple `examples/WakeWordConversation/`** :
+  - Application M5Stack CoreS3 avec affichage M5GFX (sans LVGL) présentant les 9 bandeaux d'état requis en français, la distinction stricte entre reconnaissance acoustique réelle (`WAKENET`) et détection simulée (`TEST`), et les compteurs de sessions, détections, reconnexions et erreurs.
+- **Métriques Diagnostiques (`WakeWordConversationMetrics`)** :
+  - Durées `wakeToConnectStartMs`, `wakeToConversationReadyMs`, `wsConnectMs`, `lastSessionDurationMs`, `totalSessionDurationMs`, `returnToArmedMs`, compteurs d'échecs microphone (`micTransitionFailures`) et réseau (`networkFailures`), mémoire RAM interne et PSRAM libre/minimale, et temps maximal dans `voice.update()` et `controller.update()`.
+- **6 Nouvelles Suites de Tests Unitaires (Suites 95 à 100)** : Couverture complète des 12 scénarios de validation et non-régression (**1 989 validations réussies avec 0 échec** sur 100 suites).
+
+---
+
 ## [0.6.2.1] - 2026-10-28 (Corrective Wake Word Foundation — Fiabilité et performances)
 
 ### Correction Critique — Sûreté Concurrente de `WakeWordAudioBridge`

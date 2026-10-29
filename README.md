@@ -1,4 +1,4 @@
-# VoiceKit v0.6.2.1 — Corrective Wake Word Foundation & Architecture Multi-Fournisseurs (Gemini Live & OpenAI Realtime)
+# VoiceKit v0.6.3 — Wake Word Driven Conversation & Architecture Multi-Fournisseurs (Gemini Live & OpenAI Realtime)
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -8,6 +8,13 @@
 Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)**, de **conversation vocale bidirectionnelle native (Mode B)** et de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** pour **M5Stack CoreS3** (ESP32-S3).
 
 Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)** supportant à la fois **Google Gemini Live** (moteur par défaut, 100% rétrocompatible) et **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`), construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
+
+La version **v0.6.3** introduit la **conversation vocale entièrement mains libres déclenchée par le mot de réveil local « Bonjour ESP » (`WakeWordConversationController`)** sur M5Stack CoreS3, tout en préservant intégralement la reconnaissance acoustique WakeNet et les modes existants :
+- **Conversation Mains Libres Déclenchée par « Bonjour ESP » (v0.6.3)** :
+  - **Composant Réutilisable `WakeWordConversationController`** : Machine à états non bloquante pilotée par `update()` (`WAKE_ARMED`, `WAKE_DETECTED`, `PREPARING_SESSION`, `CONNECTING`, `CONVERSATION_LISTENING`, `CONVERSATION_SPEAKING`, `ENDING_SESSION`, `RETURNING_TO_WAKE`, `RECOVERABLE_ERROR`), strictement séparée des états internes de `WakeWordManager`.
+  - **Cycle Complet & Répétable Sans Redémarrage** : Écoute locale WakeNet $\to$ détection acoustique confirmée $\to$ suspension de WakeNet et libération contrôlée du microphone $\to$ connexion au fournisseur vocal configuré (`Gemini Live` par défaut ou `OpenAI Realtime`) $\to$ échanges vocaux bidirectionnels multi-tours sans répéter le mot de réveil $\to$ détection de fin de session (timeout de silence 30 s, durée maximale, arrêt manuel ou commande vocale confirmée sur transcription finale) $\to$ restitution intégrale des derniers échantillons audio et libération des ressources réseau/audio $\to$ réactivation de WakeNet $\to$ retour à `WAKE_ARMED`.
+  - **Protections de Concurrence & Sûreté Audio** : Traitement différé dans `update()` (aucune opération longue dans `onWakeWordDetected()`), rejet des détections concurrentes, garde anti-réentrance, interdiction de réactivation prématurée de WakeNet, vérification stricte de `stopLocalCapture()` sans double réservation du microphone, et nettoyage des sessions WebSocket résiduelles.
+  - **API Applicative & Compatibilité LVGL 9** : 8 callbacks dédiés exécutés sur la boucle principale (`onWakeConvDetected`, `onWakeConvConnecting`, `onWakeConvReady`, `onWakeConvListening`, `onWakeConvSpeaking`, `onWakeConvEnded`, `onWakeConvReturnedToWake`, `onWakeConvError`), file d'événements non bloquante (`pollWakeWordConversationEvent()`), diagnostics complets (`WakeWordConversationMetrics`) et nouvel exemple `examples/WakeWordConversation/`.
 
 La version **v0.6.2.1** est une version corrective qui fiabilise et durcit la **fondation locale de détection de mot de réveil (« Bonjour ESP »)** avant son intégration dans une application LVGL 9 (`CoreS3-VoiceUI-Demo`) sur M5Stack CoreS3 :
 - **Correctifs de Fiabilité & Performances Wake Word Foundation (v0.6.2.1)** :
@@ -29,7 +36,7 @@ La version **v0.6.2.1** est une version corrective qui fiabilise et durcit la **
 - **Sélection par Configuration Zéro-Code** : Bascule instantanée entre Gemini et OpenAI par simple configuration (`config.provider = VoiceProviderType::OPENAI;`). Aucune modification requise dans le code métier de l'application !
 - **Rééchantillonneur Dédié 16 kHz $\to$ 24 kHz (`AudioResampler`)** : Algorithme linéaire ultra-rapide en virgule fixe entière (512 in $\to$ 768 out en moins de 15 µs sur Core 1), n'impactant aucunement la tâche audio critique.
 - **Sanctuaire Audio VoxCore Intact** : Conservation intégrale de la tâche FreeRTOS Mode 2, du buffer circulaire PSRAM 120 000 échantillons (~5 s), des buffers DMA et du protocole de vidage exact sans coupure de la syllabe finale (*« alpha tango terminé »*).
-- **Validation Exhaustive & Zéro Régression** : **1 844 tests unitaires réussis avec 0 échec** (94 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
+- **Validation Exhaustive & Zéro Régression** : **1 989 tests unitaires réussis avec 0 échec** (100 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
 
 ---
 
@@ -162,6 +169,7 @@ VoiceKit/
 │   ├── VoiceKitConfig.h         # Configuration, choix du fournisseur, profils & Wake Word
 │   ├── Utf8Utils.h              # Utilitaires UTF-8 & échappement JSON RFC 8259
 │   ├── core/                    # Moteur interne VoxCore, Fournisseurs & Wake Word
+│   │   ├── WakeWordConversationController (.h/.cpp) # Contrôleur de conversation déclenchée par mot de réveil (v0.6.3)
 │   │   ├── IWakeWordEngine.h              # Interface abstraite des moteurs de mot de réveil (v0.6.2)
 │   │   ├── WakeWordAudioBridge (.h/.cpp)  # Pont audio temps réel SPSC borné 16 kHz (v0.6.2)
 │   │   ├── WakeWordManager (.h/.cpp)      # Machine à états & cycle de vie Wake Word (v0.6.2)
@@ -203,7 +211,7 @@ VoiceKit/
 │   └── MinimalTTS_Arduino/      # Exemple autonome Arduino IDE (.ino)
 └── tests/
     ├── run_tests.bat            # Lanceur des tests automatisés MinGW
-    └── test_voicekit_all.cpp    # 88 suites de tests unitaires (1 457 validations, 0 échec)
+    └── test_voicekit_all.cpp    # 100 suites de tests unitaires (1 989 validations, 0 échec)
 ```
 
 ---
@@ -483,6 +491,21 @@ voice.onWakeWordDetected([](const String& word) {
     Serial.println(word); // ex: "Bonjour ESP"
 });
 voice.enableWakeWord(true);
+
+// 8. Conversation mains libres déclenchée par « Bonjour ESP » (Wake Word Conversation — v0.6.3)
+voice.onWakeConvDetected([](const String& word, float conf, bool isSim) {
+    Serial.printf("[WAKE CONV] Détection %s : %s\n", isSim ? "SIMULÉE" : "ACOUSTIQUE", word.c_str());
+});
+voice.onWakeConvConnecting([]() { Serial.println("[WAKE CONV] Connexion au fournisseur..."); });
+voice.onWakeConvReady([]()      { Serial.println("[WAKE CONV] Session prête — parlez"); });
+voice.onWakeConvListening([]()  { Serial.println("[WAKE CONV] Écoute utilisateur active"); });
+voice.onWakeConvSpeaking([]()   { Serial.println("[WAKE CONV] Réponse vocale en cours"); });
+voice.onWakeConvEnded([](WakeWordSessionEndReason r) {
+    Serial.printf("[WAKE CONV] Fin de session : %s\n", wakeWordSessionEndReasonToString(r));
+});
+voice.onWakeConvReturnedToWake([]() { Serial.println("[WAKE CONV] Retour à WAKE_ARMED"); });
+voice.onWakeConvError([](const String& err) { Serial.printf("[WAKE CONV] Erreur : %s\n", err.c_str()); });
+voice.enableWakeWordConversation(true);
 ```
 
 ---
@@ -545,7 +568,10 @@ Pour assurer une rétrocompatibilité ascendante stricte à 100%, la classe `Vox
 
 ## 9. Exemples Inclus
 
-La bibliothèque fournit 11 exemples complets prêts à l'emploi :
+La bibliothèque fournit 12 exemples complets prêts à l'emploi :
+
+1. **`examples/WakeWordConversation/`** (PlatformIO) — **NOUVEAU v0.6.3** :  
+   Application de conversation vocale entièrement mains libres sur M5Stack CoreS3 (affichage M5GFX 320 × 240, sans LVGL), déclenchée par le mot de réveil local « Bonjour ESP ». Affiche clairement les 9 états en français (`EN ATTENTE — « Bonjour ESP »`, `MOT DE RÉVEIL DÉTECTÉ`, `CONNEXION GEMINI / OPENAI`, `PRÊT — PARLEZ`, `ÉCOUTE`, `RÉPONSE VOCALE`, `FIN DE CONVERSATION`, `RETOUR EN ÉCOUTE`, `ERREUR / RÉCUPÉRATION`), les compteurs de sessions, détections, reconnexions et erreurs, et distingue strictement une détection acoustique réelle (`WAKENET`) d'une détection simulée (`TEST`).
 
 1. **`examples/WakeWordFoundation/`** (PlatformIO) — **NOUVEAU v0.6.2** :  
    Exemple autonome sur M5Stack CoreS3 **sans écran LVGL et sans connexion réseau**. Valide la capture PCM 16 kHz / 16 bits partagée du microphone ES7210, le pont audio borné `WakeWordAudioBridge`, la machine à états `WakeWordManager` (`DISABLED` $\to$ `INITIALIZING` $\to$ `ARMED` $\to$ `DETECTED` $\to$ `SUSPENDED` $\to$ `ARMED`), l'état explicite d'indisponibilité de `WAKENET` sous IDF 4.4 et le moteur de test déterministe `TEST`.
@@ -574,12 +600,12 @@ La bibliothèque fournit 11 exemples complets prêts à l'emploi :
 
 ## 10. Garanties de Non-Régression & Sécurité
 
-La version **v0.6.2.1** garantit une non-régression absolue sur l'ensemble des modules préexistants :
+La version **v0.6.3** garantit une non-régression absolue sur l'ensemble des modules préexistants :
 - **Intégrité absolue du moteur audio VoxCore** : Aucune réduction arbitraire du buffer circulaire PSRAM (120 000 échantillons @ 24 kHz) ni des marges DMA (160 ms). Préservation intégrale de la tâche FreeRTOS Mode 2 et du vidage exact sans coupure de syllabe.
 - **Validation Repère Acoustique (« alpha tango terminé »)** : Vérification rigoureuse que les derniers mots émis (par Gemini Live comme par OpenAI) sont intégralement restitués sans troncature, y compris lors de la réception de `response.done`.
 - **Rééchantillonnage 16k $\to$ 24k en arithmétique entière** : Exécution en < 15 µs sur ESP32-S3 Core 1 sans blocage de la boucle de capture audio.
 - **Zéro identifiant en clair** : Aucun secret, SSID Wi-Fi ni clé API n'est publié dans le dépôt. Masquage systématique des clés dans les logs.
-- **Suite de tests automatisés** : 94 suites de tests unitaires et 1 805 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
+- **Suite de tests automatisés** : 100 suites de tests unitaires et 1 989 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
 - **Compilations d'exemples validées à 100%** : Tous les exemples cibles PlatformIO compilent sans aucune erreur.
 
-Consultez le [Rapport Technique v0.6.2.1](RAPPORT_v0.6.2.1.md) (ainsi que le [Rapport Technique v0.6.2](RAPPORT_v0.6.2.md), le [Rapport de Livraison v0.6.1](RAPPORT_LIVRAISON_v0.6.1.md) et le [Rapport de Livraison v0.6.0](RAPPORT_LIVRAISON_v0.6.0.md)) pour les détails d'architecture, l'étude WakeNet10 / ESP-SR et les métriques exposées.
+Consultez le [Rapport Technique v0.6.3](RAPPORT_v0.6.3.md) (ainsi que le [Rapport Technique v0.6.2.1](RAPPORT_v0.6.2.1.md), le [Rapport Technique v0.6.2](RAPPORT_v0.6.2.md), le [Rapport de Livraison v0.6.1](RAPPORT_LIVRAISON_v0.6.1.md) et le [Rapport de Livraison v0.6.0](RAPPORT_LIVRAISON_v0.6.0.md)) pour les détails d'architecture, la machine à états `WakeWordConversationController`, l'étude WakeNet10 / ESP-SR et les métriques exposées.

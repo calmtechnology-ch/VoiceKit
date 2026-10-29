@@ -224,6 +224,7 @@ public:
     void onStateChanged(WakeWordStateCallback cb) { _onStateChanged = std::move(cb); }
     void onError(WakeWordErrorCallback cb) { _onError = std::move(cb); }
     void setVoiceBusyCheckCallback(VoiceBusyCheckCallback cb) { _voiceBusyCheck = std::move(cb); }
+    void setInternalEventHook(WakeWordEventCallback cb) { _internalEventHook = std::move(cb); }
 
     /**
      * @brief Récupère et acquitte le dernier événement Wake Word en attente (compatible boucle LVGL).
@@ -293,4 +294,5 @@ private:
     WakeWordStateCallback _onStateChanged;
     WakeWordErrorCallback _onError;
     VoiceBusyCheckCallback _voiceBusyCheck;
+    WakeWordEventCallback _internalEventHook;
 };

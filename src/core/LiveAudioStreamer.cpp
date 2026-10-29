@@ -408,6 +408,9 @@ void LiveAudioStreamer::micTaskLoop() {
             if (_wakeWordChunkCallback) {
                 _wakeWordChunkCallback(_ringBuffers[currentSlot].samples, AUDIO_CHUNK_SAMPLES, rms);
             }
+            if (_conversationChunkCallback) {
+                _conversationChunkCallback(_ringBuffers[currentSlot].samples, AUDIO_CHUNK_SAMPLES, rms);
+            }
             if (_chunkCallback) {
                 _chunkCallback(_ringBuffers[currentSlot].samples, AUDIO_CHUNK_SAMPLES, rms);
             }
@@ -1253,6 +1256,9 @@ bool LiveAudioStreamer::pushSimulatedChunk(const int16_t* samples, size_t count)
         if (_wakeWordChunkCallback) {
             _wakeWordChunkCallback(samples, count, rms);
         }
+        if (_conversationChunkCallback) {
+            _conversationChunkCallback(samples, count, rms);
+        }
         if (_chunkCallback) {
             _chunkCallback(samples, count, rms);
         }
@@ -1287,6 +1293,9 @@ bool LiveAudioStreamer::pushSimulatedChunk(const int16_t* samples, size_t count)
     uint32_t rms = computeRms(samples, count);
     if (_wakeWordChunkCallback) {
         _wakeWordChunkCallback(samples, count, rms);
+    }
+    if (_conversationChunkCallback) {
+        _conversationChunkCallback(samples, count, rms);
     }
     if (_chunkCallback) {
         _chunkCallback(samples, count, rms);

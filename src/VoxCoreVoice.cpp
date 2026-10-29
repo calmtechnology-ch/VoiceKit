@@ -13,11 +13,19 @@ VoxCoreVoice::VoxCoreVoice() {
     _activeProvider = &_geminiProvider;
     _wakeWordManager.begin(&_streamer);
     _wakeWordManager.setVoiceBusyCheckCallback([this]() {
-        return this->isBusy() || this->isSpeaking();
+        return this->isBusy() || this->isSpeaking() || _wakeWordConversationController.isSessionInProgress();
     });
+    _wakeWordManager.setInternalEventHook([this](const WakeWordEvent& ev) {
+        if (_wakeWordConversationController.isEnabled()) {
+            _wakeWordConversationController.notifyWakeWordDetected(ev);
+        }
+    });
+    _wakeWordConversationController.begin(&_wakeWordManager, _activeProvider, &_session,
+                                          &_conversationController, &_streamer, &_player);
 }
 
 VoxCoreVoice::~VoxCoreVoice() {
+    _wakeWordConversationController.disable();
     _wakeWordManager.disable();
     _onStateChanged = nullptr;
     _onReady = nullptr;
@@ -191,7 +199,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     // 4b. Liaison du gestionnaire Wake Word sur le streamer audio partagé (v0.6.2 / v0.6.2.1)
     _wakeWordManager.begin(&_streamer);
     _wakeWordManager.setVoiceBusyCheckCallback([this]() {
-        return this->isBusy() || this->isSpeaking();
+        return this->isBusy() || this->isSpeaking() || _wakeWordConversationController.isSessionInProgress();
     });
     if (!_config.wakeWordPhrase.isEmpty()) {
         _wakeWordManager.setTargetWakeWord(_config.wakeWordPhrase);
@@ -200,6 +208,11 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _wakeWordManager.setResumeDelayMs(_config.wakeWordResumeDelayMs);
     _wakeWordManager.setMaxFramesPerUpdate(_config.wakeWordMaxFramesPerUpdate);
     _wakeWordManager.setProcessingBudgetUs(_config.wakeWordProcessingBudgetUs);
+    _wakeWordManager.setInternalEventHook([this](const WakeWordEvent& ev) {
+        if (_wakeWordConversationController.isEnabled()) {
+            _wakeWordConversationController.notifyWakeWordDetected(ev);
+        }
+    });
 
     // 5. Initialisation du fournisseur vocal actif (Gemini Live ou OpenAI Realtime, ou mode hors ligne sans clé API)
     if (_config.provider == VoiceProviderType::OPENAI) {
@@ -239,6 +252,9 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         if (_conversationEnabled) {
             _conversationController.handleUserTranscription(text, isFinal);
         }
+        if (_wakeWordConversationController.isEnabled()) {
+            _wakeWordConversationController.notifyUserTranscription(text, isFinal);
+        }
         handleIncomingTranscription(text, isFinal);
     });
 
@@ -269,6 +285,9 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _session.setOnTurnFinished([this](uint64_t turnId) {
         if (_conversationEnabled) {
             _conversationController.handleTurnFinished(turnId);
+        }
+        if (_wakeWordConversationController.isEnabled()) {
+            _wakeWordConversationController.notifyTurnFinished(turnId);
         }
     });
 
@@ -459,11 +478,47 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         setState(VoiceState::IDLE);
     }
 
-    // 8. Configuration optionnelle du détecteur Wake Word (v0.6.2)
+    // 8. Configuration optionnelle du détecteur Wake Word (v0.6.2) et du contrôleur Wake Word Conversation (v0.6.3)
+    WakeWordConversationConfig wakeConvCfg;
+    wakeConvCfg.silenceTimeoutMs = _config.wakeConversationSilenceTimeoutMs;
+    wakeConvCfg.maxSessionDurationMs = _config.wakeConversationMaxSessionDurationMs;
+    wakeConvCfg.connectTimeoutMs = _config.wakeConversationConnectTimeoutMs;
+    wakeConvCfg.responseTimeoutMs = _config.wakeConversationResponseTimeoutMs;
+    wakeConvCfg.maxTurnDurationMs = _config.wakeConversationMaxTurnDurationMs;
+    wakeConvCfg.turnRestartDelayMs = _config.wakeConversationTurnRestartDelayMs;
+    wakeConvCfg.returnToWakeDelayMs = _config.wakeWordResumeDelayMs;
+    wakeConvCfg.errorRecoveryDelayMs = _config.wakeConversationErrorRecoveryDelayMs;
+    wakeConvCfg.vadThresholdRms = _config.wakeConversationVadThresholdRms;
+    wakeConvCfg.vadSilenceDurationMs = _config.vadSilenceDurationMs;
+    wakeConvCfg.enableVoiceStopCommand = _config.wakeConversationVoiceStopEnabled;
+    wakeConvCfg.disconnectAfterSession = _config.wakeConversationDisconnectAfterSession;
+
+    _wakeWordConversationController.begin(&_wakeWordManager, _activeProvider, &_session,
+                                          &_conversationController, &_streamer, &_player, wakeConvCfg);
+    _wakeWordConversationController.setProvider(_activeProvider, _config.provider);
+    _wakeWordConversationController.setNetworkReadyCallback([this]() {
+        if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
+            return _wifi.isConnected() && _wifi.isTimeSynced();
+        } else {
+            return (WiFi.status() == WL_CONNECTED && isSystemTimeValid());
+        }
+    });
+    _wakeWordConversationController.setEnableConversationCallback([this]() {
+        _conversationEnabled = true;
+        _config.enableConversation = true;
+        if (_activeProvider) {
+            _activeProvider->setSystemInstruction(_config.conversationInstruction);
+            _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
+            _activeProvider->setConversationMode(true);
+        }
+        return true;
+    });
     if (_config.wakeWordEngine != _wakeWordManager.getEngineType()) {
         _wakeWordManager.setEngineType(_config.wakeWordEngine);
     }
-    if (_config.enableWakeWord) {
+    if (_config.enableWakeWordConversation) {
+        enableWakeWordConversation(true);
+    } else if (_config.enableWakeWord) {
         _wakeWordManager.enable(true);
     }
 
@@ -514,7 +569,7 @@ void VoxCoreVoice::update() {
         _wifi.tick();
         _connectionMetrics.lastWifiTickDurationUs = _wifi.getLastTickDurationUs();
         _connectionMetrics.maxWifiTickDurationUs = _wifi.getMaxTickDurationUs();
-        if (_wifi.isConnected() && _wifi.isTimeSynced() && !_config.apiKey.isEmpty()) {
+        if (!_config.connectOnDemand && !_wakeWordConversationController.isEnabled() && _wifi.isConnected() && _wifi.isTimeSynced() && !_config.apiKey.isEmpty()) {
             if (_state == VoiceState::CONNECTING_WIFI || _state == VoiceState::IDLE || _state == VoiceState::DISCONNECTED || _state == VoiceState::ERROR_STATE) {
                 if ((!_activeProvider || !_activeProvider->isConnected()) && (_session.getState() == LiveSessionState::DISCONNECTED || _session.getState() == LiveSessionState::ERROR)) {
                     Serial.println("[VoiceKit] Wi-Fi et NTP valides -> Connexion au service vocal...");
@@ -532,7 +587,7 @@ void VoxCoreVoice::update() {
     } else {
         // En mode EXTERNAL_WIFI : connexion automatique dès que l'application hôte a établi le réseau (si une clé API est fournie)
         if (_state == VoiceState::IDLE || _state == VoiceState::CONNECTING_WIFI || _state == VoiceState::DISCONNECTED || _state == VoiceState::ERROR_STATE) {
-            if (!_config.apiKey.isEmpty() && WiFi.status() == WL_CONNECTED && isSystemTimeValid()) {
+            if (!_config.connectOnDemand && !_wakeWordConversationController.isEnabled() && !_config.apiKey.isEmpty() && WiFi.status() == WL_CONNECTED && isSystemTimeValid()) {
                 if ((!_activeProvider || !_activeProvider->isConnected()) && (_session.getState() == LiveSessionState::DISCONNECTED || _session.getState() == LiveSessionState::ERROR)) {
                     Serial.println("[VoiceKit] Reseau hote & NTP valides -> Connexion au service vocal...");
                     setState(VoiceState::CONNECTING_SERVICE);
@@ -640,8 +695,12 @@ void VoxCoreVoice::update() {
 
     // 7. Mise à jour du gestionnaire de mot de réveil (suspension/reprise et traitement hors callback audio)
     if (_wakeWordManager.isEnabled()) {
-        _wakeWordManager.notifyVoiceActivity(isBusy(), isSpeaking());
+        bool busyForWake = isBusy() || isSpeaking() || _wakeWordConversationController.isSessionInProgress();
+        _wakeWordManager.notifyVoiceActivity(busyForWake, isSpeaking());
         _wakeWordManager.update();
+    }
+    if (_wakeWordConversationController.isEnabled()) {
+        _wakeWordConversationController.update(now);
     }
 
     const uint32_t updateDurUs = micros() - updateStartUs;
@@ -649,6 +708,7 @@ void VoxCoreVoice::update() {
     if (updateDurUs > _connectionMetrics.maxUpdateDurationUs) {
         _connectionMetrics.maxUpdateDurationUs = updateDurUs;
     }
+    _wakeWordConversationController.recordVoiceUpdateDurationUs(updateDurUs);
 }
 
 // =============================================================================
@@ -778,6 +838,9 @@ bool VoxCoreVoice::dispatchSpeech(const String& text) {
 
 void VoxCoreVoice::stop() {
     Serial.println("[VoiceKit] Arret demande (stop)");
+    if (_wakeWordConversationController.isEnabled() && _wakeWordConversationController.isSessionInProgress()) {
+        _wakeWordConversationController.stopSession(true);
+    }
     if (_conversationEnabled && _conversationController.isTurnActive()) {
         _conversationController.requestStop();
     }
@@ -1208,7 +1271,8 @@ void VoxCoreVoice::cancelListening() {
     _lastFinalText = "";
     _player.setPlaybackAllowed(true);
     setState(VoiceState::READY);
-    _wakeWordManager.notifyVoiceActivity(isBusy(), isSpeaking());
+    bool busyForWake = isBusy() || isSpeaking() || _wakeWordConversationController.isSessionInProgress();
+    _wakeWordManager.notifyVoiceActivity(busyForWake, isSpeaking());
 }
 
 bool VoxCoreVoice::isListening() const {
@@ -1246,7 +1310,8 @@ void VoxCoreVoice::handleIncomingTranscription(const String& text, bool isFinal)
             if (_state == VoiceState::TRANSCRIBING || _state == VoiceState::LISTENING) {
                 setState(VoiceState::READY);
             }
-            _wakeWordManager.notifyVoiceActivity(isBusy(), isSpeaking());
+            bool busyForWake = isBusy() || isSpeaking() || _wakeWordConversationController.isSessionInProgress();
+        _wakeWordManager.notifyVoiceActivity(busyForWake, isSpeaking());
         }
 
         if (_onTranscription) {
@@ -1280,7 +1345,8 @@ void VoxCoreVoice::notifySpeechEndDetected(uint32_t ms) {
 
 bool VoxCoreVoice::enableWakeWord(bool enable) {
     if (enable) {
-        _wakeWordManager.notifyVoiceActivity(isBusy(), isSpeaking());
+        bool busyForWake = isBusy() || isSpeaking() || _wakeWordConversationController.isSessionInProgress();
+        _wakeWordManager.notifyVoiceActivity(busyForWake, isSpeaking());
     }
     return _wakeWordManager.enable(enable);
 }
@@ -1294,6 +1360,36 @@ bool VoxCoreVoice::suspendWakeWord() {
 }
 
 bool VoxCoreVoice::resumeWakeWord() {
-    _wakeWordManager.notifyVoiceActivity(isBusy(), isSpeaking());
+    bool busyForWake = isBusy() || isSpeaking() || _wakeWordConversationController.isSessionInProgress();
+    _wakeWordManager.notifyVoiceActivity(busyForWake, isSpeaking());
     return _wakeWordManager.resume();
+}
+
+// =============================================================================
+// Implémentation Conversation Mains Libres par Mot de Réveil (v0.6.3)
+// =============================================================================
+
+bool VoxCoreVoice::enableWakeWordConversation(bool enable) {
+    if (!enable) {
+        disableWakeWordConversation();
+        return true;
+    }
+
+    _conversationEnabled = true;
+    _config.enableConversation = true;
+    if (_activeProvider) {
+        _activeProvider->setSystemInstruction(_config.conversationInstruction);
+        _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
+        _activeProvider->setConversationMode(true);
+    }
+
+    if (!isBusy() && _wakeWordConversationController.isDisconnectAfterSession() && _session.isActive()) {
+        _session.deactivate();
+    }
+
+    return _wakeWordConversationController.enable(true);
+}
+
+void VoxCoreVoice::disableWakeWordConversation() {
+    _wakeWordConversationController.disable();
 }
