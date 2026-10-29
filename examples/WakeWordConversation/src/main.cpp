@@ -8,9 +8,9 @@
 #endif
 
 // =============================================================================
-// VoiceKit v0.6.3.1 — Exemple WakeWordConversation (M5Stack CoreS3, M5GFX pur)
+// VoiceKit v0.6.3.2 — Exemple WakeWordConversation (M5Stack CoreS3, M5GFX pur)
 //
-// Cycle complet mains libres :
+// Cycle complet mains libres (exclusivement WakeNet acoustique « Bonjour ESP ») :
 //   1. WakeNet écoute localement « Bonjour ESP » (WAKE_ARMED)
 //   2. Détection acoustique confirmée (WAKE_DETECTED : BONJOUR ESP DÉTECTÉ)
 //   3. Suspension de WakeNet et libération contrôlée du microphone (PREPARING_SESSION)
@@ -29,12 +29,12 @@
 #endif
 
 static VoiceKit voice;
-static M5Canvas canvas(&M5.Display);
 
 static String gLastUserText = "";
 static String gLastAssistantText = "";
 static String gBannerSubText = "Dites « Bonjour ESP » pour demarrer une conversation";
-static uint32_t gLastUiRedrawMs = 0;
+static uint32_t gLastRmsRedrawMs = 0;
+static int gLastRmsBarW = -1;
 static bool gUiDirty = true;
 
 // Couleurs M5GFX
@@ -47,13 +47,21 @@ static constexpr uint16_t COL_READY_SPEAK = 0x2689; // Vert clair (prêt — par
 static constexpr uint16_t COL_LISTENING   = 0xFFE0; // Jaune (écoute parole utilisateur)
 static constexpr uint16_t COL_SPEAKING    = 0x3BFF; // Bleu ciel (réponse vocale IA)
 static constexpr uint16_t COL_ENDING      = 0xB596; // Gris bleuté (fin / retour écoute)
-static constexpr uint16_t COL_ERROR       = 0xF800; // Rouge (erreur récupérable)
-static constexpr uint16_t COL_SIMULATED   = 0xFBE0; // Ambre (avertissement mode TEST simulé)
+static constexpr uint16_t COL_ERROR       = 0xF800; // Rouge (erreur explicite)
+
+static bool isWakeNetUnavailable() {
+    return !voice.isWakeWordEngineAvailable() ||
+           !voice.isWakeWordEngineInitialized() ||
+           voice.isWakeWordError();
+}
 
 static uint16_t getBannerColor(WakeWordConversationState state, bool userSpokeInTurn) {
+    if (isWakeNetUnavailable()) {
+        return COL_ERROR;
+    }
     switch (state) {
         case WakeWordConversationState::WAKE_ARMED:
-            return voice.isWakeWordSimulated() ? COL_SIMULATED : COL_ARMED;
+            return COL_ARMED;
         case WakeWordConversationState::WAKE_DETECTED:
         case WakeWordConversationState::PREPARING_SESSION:
             return COL_DETECTED;
@@ -73,103 +81,126 @@ static uint16_t getBannerColor(WakeWordConversationState state, bool userSpokeIn
     }
 }
 
-static void drawInterface() {
-    canvas.fillScreen(COL_BG);
+static void drawRmsBar(bool forceRedraw) {
+    const WakeWordConversationController& ctrl = voice.getWakeWordConversationController();
+    uint32_t rms = voice.getEngine().getAudioLevel();
+    int barW = (int)((rms > 3000 ? 3000 : rms) * 296 / 3000);
+    if (!forceRedraw && barW == gLastRmsBarW) {
+        return;
+    }
+    gLastRmsBarW = barW;
 
+    M5.Display.startWrite();
+    if (barW > 0) {
+        M5.Display.fillRect(12, 188, barW, 6, ctrl.hasUserSpokenInTurn() ? TFT_YELLOW : TFT_GREEN);
+    }
+    if (barW < 296) {
+        M5.Display.fillRect(12 + barW, 188, 296 - barW, 6, 0x0000);
+    }
+    M5.Display.endWrite();
+}
+
+static void drawInterface() {
     const WakeWordConversationState state = voice.getWakeWordConversationState();
     const WakeWordConversationMetrics& m = voice.getWakeWordConversationMetrics();
     const WakeWordConversationController& ctrl = voice.getWakeWordConversationController();
-    const bool simulatedEngine = voice.isWakeWordSimulated();
-    const char* statusLabel = voice.getWakeWordConversationBannerText();
+    const bool wakeNetUnavailable = isWakeNetUnavailable();
+    const char* statusLabel = wakeNetUnavailable
+        ? "ERREUR WAKENET INDISPONIBLE"
+        : voice.getWakeWordConversationBannerText();
     const uint16_t bannerCol = getBannerColor(state, ctrl.hasUserSpokenInTurn());
 
-    // 1. En-tête : Titre + badge d'authenticité acoustique (ne jamais confondre TEST et WAKENET)
-    canvas.fillRect(0, 0, 320, 24, 0x0000);
-    canvas.setTextColor(TFT_WHITE, 0x0000);
-    canvas.setTextDatum(middle_left);
-    canvas.setFont(&fonts::Font2);
-    canvas.drawString("VoiceKit v0.6.3.1 - WakeConv", 6, 12);
+    M5.Display.startWrite();
+    M5.Display.fillScreen(COL_BG);
 
-    canvas.setTextDatum(middle_right);
-    if (simulatedEngine) {
-        canvas.setTextColor(COL_SIMULATED, 0x0000);
-        canvas.drawString("[MODE TEST SIMULE]", 314, 12);
+    // 1. En-tête : Titre + statut du moteur acoustique WakeNet
+    M5.Display.fillRect(0, 0, 320, 24, 0x0000);
+    M5.Display.setTextColor(TFT_WHITE, 0x0000);
+    M5.Display.setTextDatum(middle_left);
+    M5.Display.setFont(&fonts::Font2);
+    M5.Display.drawString("VoiceKit v0.6.3.2 - WakeConv", 6, 12);
+
+    M5.Display.setTextDatum(middle_right);
+    if (wakeNetUnavailable) {
+        M5.Display.setTextColor(COL_ERROR, 0x0000);
+        M5.Display.drawString("[ERREUR WAKENET]", 314, 12);
     } else {
-        canvas.setTextColor(0x07E0, 0x0000);
-        canvas.drawString("[WAKENET ACOUSTIQUE]", 314, 12);
+        M5.Display.setTextColor(0x07E0, 0x0000);
+        M5.Display.drawString("[WAKENET ACOUSTIQUE]", 314, 12);
     }
 
     // 2. Bandeau principal d'état (Section 8)
-    canvas.fillRoundRect(6, 28, 308, 42, 6, bannerCol);
-    uint16_t bannerTextCol = (bannerCol == COL_LISTENING || bannerCol == COL_DETECTED || bannerCol == COL_SIMULATED)
+    M5.Display.fillRoundRect(6, 28, 308, 42, 6, bannerCol);
+    uint16_t bannerTextCol = (bannerCol == COL_LISTENING || bannerCol == COL_DETECTED)
         ? TFT_BLACK : TFT_WHITE;
-    canvas.setTextColor(bannerTextCol, bannerCol);
-    canvas.setTextDatum(middle_center);
-    canvas.drawString(statusLabel, 160, 42);
-    canvas.drawString(gBannerSubText.c_str(), 160, 59);
+    M5.Display.setTextColor(bannerTextCol, bannerCol);
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.drawString(statusLabel, 160, 42);
+    String subText = gBannerSubText;
+    if (wakeNetUnavailable) {
+        String wakeErr = voice.getWakeWordLastError();
+        if (!wakeErr.isEmpty()) {
+            subText = wakeErr;
+        } else if (subText.isEmpty()) {
+            subText = "Modele WakeNet wn10_fr_bonjouresp indisponible";
+        }
+    }
+    if (subText.length() > 46) {
+        subText = subText.substring(0, 46) + "...";
+    }
+    M5.Display.drawString(subText.c_str(), 160, 59);
 
-    // 3. Compteurs de sessions, détections (réelles vs simulées), reconnexions et erreurs
-    canvas.fillRoundRect(6, 74, 308, 44, 5, COL_CARD);
-    canvas.setTextColor(TFT_CYAN, COL_CARD);
-    canvas.setTextDatum(top_left);
+    // 3. Compteurs de sessions, détections acoustiques, reconnexions et erreurs
+    M5.Display.fillRoundRect(6, 74, 308, 44, 5, COL_CARD);
+    M5.Display.setTextColor(TFT_CYAN, COL_CARD);
+    M5.Display.setTextDatum(top_left);
 
     char line1[64];
-    snprintf(line1, sizeof(line1), "Sessions: %u | Detections: %u (Acoust:%u / Sim:%u)",
+    snprintf(line1, sizeof(line1), "Sessions: %u | Detections acoustiques: %u",
              (unsigned)m.sessionCount,
-             (unsigned)m.detectionCount,
-             (unsigned)m.realDetectionCount,
-             (unsigned)m.simulatedDetectionCount);
-    canvas.drawString(line1, 12, 78);
+             (unsigned)m.realDetectionCount);
+    M5.Display.drawString(line1, 12, 78);
 
     char line2[64];
     snprintf(line2, sizeof(line2), "Tours: %u | Reconnexions: %u | Erreurs: %u",
              (unsigned)m.turnCount,
              (unsigned)m.reconnectCount,
              (unsigned)m.errorCount);
-    canvas.setTextColor(TFT_LIGHTGREY, COL_CARD);
-    canvas.drawString(line2, 12, 97);
+    M5.Display.setTextColor(TFT_LIGHTGREY, COL_CARD);
+    M5.Display.drawString(line2, 12, 97);
 
     // 4. Zone de dialogue (Utilisateur / Assistant)
-    canvas.fillRoundRect(6, 122, 308, 78, 5, COL_CARD);
-    canvas.setTextColor(TFT_YELLOW, COL_CARD);
+    M5.Display.fillRoundRect(6, 122, 308, 78, 5, COL_CARD);
+    M5.Display.setTextColor(TFT_YELLOW, COL_CARD);
     String userDisplay = gLastUserText.isEmpty() ? String("Vous : (en attente de parole)") : ("Vous : " + gLastUserText);
     if (userDisplay.length() > 44) userDisplay = userDisplay.substring(0, 44) + "...";
-    canvas.drawString(userDisplay.c_str(), 12, 127);
+    M5.Display.drawString(userDisplay.c_str(), 12, 127);
 
-    canvas.setTextColor(TFT_WHITE, COL_CARD);
+    M5.Display.setTextColor(TFT_WHITE, COL_CARD);
     String aiDisplay = gLastAssistantText.isEmpty() ? String("IA : ---") : ("IA : " + gLastAssistantText);
     if (aiDisplay.length() > 44) {
-        canvas.drawString(aiDisplay.substring(0, 44).c_str(), 12, 149);
+        M5.Display.drawString(aiDisplay.substring(0, 44).c_str(), 12, 149);
         String line2Ai = aiDisplay.substring(44);
         if (line2Ai.length() > 44) line2Ai = line2Ai.substring(0, 44) + "...";
-        canvas.drawString(line2Ai.c_str(), 12, 167);
+        M5.Display.drawString(line2Ai.c_str(), 12, 167);
     } else {
-        canvas.drawString(aiDisplay.c_str(), 12, 149);
+        M5.Display.drawString(aiDisplay.c_str(), 12, 149);
     }
+
+    // 5. Deux boutons tactiles répartis sur la largeur de l'écran 320 x 240
+    M5.Display.fillRoundRect(6, 204, 150, 32, 5, ctrl.isSessionInProgress() ? 0xC800 : 0x3186);
+    M5.Display.setTextColor(TFT_WHITE);
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.drawString("STOP SESSION", 81, 220);
+
+    M5.Display.fillRoundRect(164, 204, 150, 32, 5, 0x2965);
+    M5.Display.setTextColor(TFT_WHITE);
+    M5.Display.drawString("DIAGNOSTICS", 239, 220);
+
+    M5.Display.endWrite();
 
     // Barre de niveau micro RMS en temps réel
-    uint32_t rms = voice.getEngine().getAudioLevel();
-    int barW = (int)((rms > 3000 ? 3000 : rms) * 296 / 3000);
-    canvas.fillRect(12, 188, 296, 6, 0x0000);
-    if (barW > 0) {
-        canvas.fillRect(12, 188, barW, 6, ctrl.hasUserSpokenInTurn() ? TFT_YELLOW : TFT_GREEN);
-    }
-
-    // 5. Boutons tactiles bas d'écran (STOP manuel / Moteur / Diagnostics)
-    canvas.fillRoundRect(6, 204, 98, 32, 5, ctrl.isSessionInProgress() ? 0xC800 : 0x3186);
-    canvas.setTextColor(TFT_WHITE);
-    canvas.setTextDatum(middle_center);
-    canvas.drawString("STOP SESSION", 55, 220);
-
-    canvas.fillRoundRect(111, 204, 98, 32, 5, simulatedEngine ? COL_SIMULATED : 0x13A8);
-    canvas.setTextColor(simulatedEngine ? TFT_BLACK : TFT_WHITE);
-    canvas.drawString(simulatedEngine ? "SIMULER WAKE" : "MODE TEST", 160, 220);
-
-    canvas.fillRoundRect(216, 204, 98, 32, 5, 0x2965);
-    canvas.setTextColor(TFT_WHITE);
-    canvas.drawString("DIAG SERIE", 265, 220);
-
-    canvas.pushSprite(0, 0);
+    drawRmsBar(true);
 }
 
 void setup() {
@@ -182,8 +213,6 @@ void setup() {
     delay(200);
 
     M5.Display.setRotation(1);
-    canvas.setColorDepth(16);
-    canvas.createSprite(320, 240);
 
     VoiceKitConfig vcfg;
     vcfg.provider = ACTIVE_VOICE_PROVIDER;
@@ -194,7 +223,7 @@ void setup() {
     vcfg.volume = 75;
     vcfg.language = "fr-FR";
 
-    // Activation du mode Wake Word Conversation (v0.6.3.1) avec WakeNet « Bonjour ESP »
+    // Activation exclusive du moteur acoustique WakeNet « Bonjour ESP » (wn10_fr_bonjouresp)
     vcfg.wakeWordEngine = WakeWordEngineType::WAKENET;
     vcfg.wakeWordPhrase = "Bonjour ESP";
     vcfg.wakeWordModelName = "wn10_fr_bonjouresp";
@@ -204,65 +233,63 @@ void setup() {
     vcfg.wakeConversationVoiceStopEnabled = true;       // Fermeture vocale (« Au revoir »)
     vcfg.wakeConversationDisconnectAfterSession = true; // Libération réseau entre sessions
 
-    auto redrawImmediately = []() {
-        drawInterface();
-        gUiDirty = false;
-        gLastUiRedrawMs = millis();
-    };
-
-    // Callbacks applicatifs (Section 6 & 7 — tous exécutés depuis les événements réels du contrôleur)
-    voice.onWakeConvDetected([redrawImmediately](const String& word, float, bool isSim) {
+    // Callbacks applicatifs (exécutés depuis les événements réels du contrôleur)
+    voice.onWakeConvDetected([](const String& word, float, bool) {
         gLastUserText = "";
         gLastAssistantText = "";
-        gBannerSubText = isSim
-            ? ("Declenchement SIMULE : " + word)
-            : ("Detection ACOUSTIQUE : « " + word + " »");
-        redrawImmediately();
+        gBannerSubText = "Detection ACOUSTIQUE : « " + word + " »";
+        gUiDirty = true;
     });
 
-    voice.onWakeConvConnecting([redrawImmediately]() {
+    voice.onWakeConvConnecting([]() {
         gBannerSubText = (voice.getConfig().provider == VoiceProviderType::OPENAI)
             ? "Etablissement WebSocket OpenAI Realtime..."
             : "Etablissement WebSocket Gemini Live...";
-        redrawImmediately();
+        gUiDirty = true;
     });
 
-    voice.onWakeConvReady([redrawImmediately]() {
+    voice.onWakeConvReady([]() {
         gBannerSubText = "Session prete — Parlez librement";
-        redrawImmediately();
+        gUiDirty = true;
     });
 
-    voice.onWakeConvListening([redrawImmediately]() {
+    voice.onWakeConvListening([]() {
         gBannerSubText = voice.getWakeWordConversationController().hasUserSpokenInTurn()
             ? "Parole en cours d'acquisition..."
             : "Ecoute active (dites « Au revoir » pour terminer)";
-        redrawImmediately();
+        gUiDirty = true;
     });
 
-    voice.onWakeConvSpeaking([redrawImmediately]() {
+    voice.onWakeConvSpeaking([]() {
         gBannerSubText = "Restitution de la reponse vocale...";
-        redrawImmediately();
+        gUiDirty = true;
     });
 
-    voice.onWakeConvEnded([redrawImmediately](WakeWordSessionEndReason reason) {
+    voice.onWakeConvEnded([](WakeWordSessionEndReason reason) {
         gBannerSubText = String("Session terminee (") + wakeWordSessionEndReasonToString(reason) + ")";
-        redrawImmediately();
+        gUiDirty = true;
     });
 
-    voice.onWakeConvReturnedToWake([redrawImmediately]() {
-        gBannerSubText = voice.isWakeWordSimulated()
-            ? "Mode TEST actif (non acoustique)"
-            : "Dites « Bonjour ESP » pour parler";
-        redrawImmediately();
+    voice.onWakeConvReturnedToWake([]() {
+        gBannerSubText = "Dites « Bonjour ESP » pour parler";
+        gUiDirty = true;
     });
 
-    voice.onWakeConvRecoverableError([redrawImmediately](const String& err) {
+    voice.onWakeConvRecoverableError([](const String& err) {
         gBannerSubText = err;
-        redrawImmediately();
+        gUiDirty = true;
     });
 
-    voice.onWakeConvStateChanged([redrawImmediately](WakeWordConversationState) {
-        redrawImmediately();
+    voice.onWakeWordError([](const String& err) {
+        gBannerSubText = err.isEmpty()
+            ? String("Erreur : WakeNet (wn10_fr_bonjouresp) indisponible")
+            : err;
+        Serial.printf("[WakeWordConversation] ERREUR WakeNet : %s\n", gBannerSubText.c_str());
+        gUiDirty = true;
+    });
+
+    voice.onWakeConvStateChanged([](WakeWordConversationState) {
+        gUiDirty = true;
     });
 
     voice.onUserText([](const String& text, bool isFinal) {
@@ -279,50 +306,44 @@ void setup() {
     });
 
     voice.begin(vcfg);
+
+    if (isWakeNetUnavailable()) {
+        String wakeErr = voice.getWakeWordLastError();
+        if (wakeErr.isEmpty()) {
+            wakeErr = "Erreur : WakeNet (wn10_fr_bonjouresp) indisponible";
+        }
+        gBannerSubText = wakeErr;
+        Serial.printf("[WakeWordConversation] ERREUR EXPLICITE : %s\n", wakeErr.c_str());
+    }
+
     drawInterface();
+    gUiDirty = false;
+    gLastRmsRedrawMs = millis();
 }
 
 void loop() {
     M5.update();
     voice.update();
 
-    // Gestion tactile simple M5GFX (sans LVGL)
+    // Gestion tactile M5GFX : deux boutons répartis sur la largeur de l'écran (320 x 240)
     if (M5.Touch.getCount() > 0) {
         auto t = M5.Touch.getDetail(0);
         if (t.wasPressed() && t.y >= 200) {
-            if (t.x < 106) {
-                // Bouton 1 : Arrêt manuel explicite de la session
+            if (t.x < 160) {
+                // Bouton 1 : STOP SESSION (arrêt manuel explicite de la conversation)
                 if (voice.isWakeWordConversationInProgress()) {
                     voice.stopWakeWordConversationSession(true);
                     gBannerSubText = "Arret manuel demande";
                     gUiDirty = true;
                 }
-            } else if (t.x >= 106 && t.x < 212) {
-                // Bouton 2 : En mode TEST simulé -> déclenche un réveil simulé ;
-                //            En mode WAKENET au repos -> bascule vers TEST ou revient à WAKENET
-                if (voice.isWakeWordSimulated() &&
-                    voice.getWakeWordConversationState() == WakeWordConversationState::WAKE_ARMED) {
-                    voice.triggerTestWakeWord("Bonjour ESP");
-                } else if (!voice.isWakeWordConversationInProgress()) {
-                    WakeWordEngineType nextEngine = voice.isWakeWordSimulated()
-                        ? WakeWordEngineType::WAKENET
-                        : WakeWordEngineType::TEST;
-                    voice.disableWakeWordConversation();
-                    voice.setWakeWordEngine(nextEngine);
-                    voice.enableWakeWordConversation(true);
-                    gBannerSubText = voice.isWakeWordSimulated()
-                        ? "Moteur TEST actif (simulation uniquement)"
-                        : "WakeNet acoustique « Bonjour ESP » actif";
-                    gUiDirty = true;
-                }
             } else {
-                // Bouton 3 : Impression des diagnostics complets sur le port série
+                // Bouton 2 : DIAGNOSTICS (affichage des informations techniques)
                 voice.printWakeWordConversationDiagnostics();
             }
         }
     }
 
-    // Commandes série optionnelles ("diag", "stop", "wake")
+    // Commandes série ("diag", "stop") — aucune commande de simulation ("wake") n'est acceptée
     if (Serial.available()) {
         String cmd = Serial.readStringUntil('\n');
         cmd.trim();
@@ -330,16 +351,18 @@ void loop() {
             voice.printWakeWordConversationDiagnostics();
         } else if (cmd.equalsIgnoreCase("stop")) {
             voice.stopWakeWordConversationSession(true);
-        } else {
-            voice.handleWakeWordSerialCommand(cmd);
         }
     }
 
     const uint32_t now = millis();
-    if (gUiDirty || (now - gLastUiRedrawMs >= 150)) {
+    if (gUiDirty) {
         gUiDirty = false;
-        gLastUiRedrawMs = now;
+        gLastRmsRedrawMs = now;
         drawInterface();
+    } else if (now - gLastRmsRedrawMs >= 120) {
+        gLastRmsRedrawMs = now;
+        drawRmsBar(false);
     }
-}
 
+    delay(5);
+}

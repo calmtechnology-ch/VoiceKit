@@ -1,10 +1,10 @@
-# WakeWordConversation — VoiceKit v0.6.3
+# WakeWordConversation — VoiceKit v0.6.3.2
 
-Exemple de conversation vocale entièrement mains libres déclenchée par le mot de réveil acoustique local **« Bonjour ESP »** sur **M5Stack CoreS3**, avec affichage direct **M5GFX** (sans LVGL).
+Exemple de conversation vocale entièrement mains libres déclenchée exclusivement par le mot de réveil acoustique local **« Bonjour ESP »** (`wn10_fr_bonjouresp`) sur **M5Stack CoreS3**, avec affichage direct **M5GFX** (sans LVGL).
 
 ## Cycle fonctionnel
 
-1. **EN ATTENTE — « Bonjour ESP »** (`WAKE_ARMED`) : WakeNet (`wn9l_fr_bonjouresp_tts3`) écoute localement en hors ligne sur le microphone ES7210.
+1. **EN ATTENTE — « Bonjour ESP »** (`WAKE_ARMED`) : WakeNet (`wn10_fr_bonjouresp`) écoute localement en hors ligne sur le microphone ES7210.
 2. **MOT DE RÉVEIL DÉTECTÉ** (`WAKE_DETECTED` / `PREPARING_SESSION`) : Suspension contrôlée de WakeNet et libération vérifiée du microphone.
 3. **CONNEXION GEMINI / CONNEXION OPENAI** (`CONNECTING`) : Établissement de la session WebSocket TLS et confirmation `setupComplete`.
 4. **PRÊT — PARLEZ** / **ÉCOUTE** (`CONVERSATION_LISTENING`) : Capture vocale automatique avec détection locale de fin de phrase (VAD) et timeout d'inactivité configurable (30 s par défaut).
@@ -22,4 +22,3 @@ Copiez `include/secrets.example.h` vers `include/secrets.h` et renseignez vos id
 pio run -e m5stack-cores3
 pio run -e m5stack-cores3 -t upload
 ```
-
