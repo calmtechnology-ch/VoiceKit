@@ -263,3 +263,151 @@ pio device monitor -b 115200
 5. **Inspection des métriques diagnostiques** :
    - Touchez le bouton `DIAGNOSTICS` à l'écran ou envoyez `'d'` dans le moniteur série pour relever les durées `Wake -> debut connexion`, `Wake -> conversation prete`, `Temps etablissement WS`, la mémoire RAM interne / PSRAM libre et minimale, ainsi que les temps maximaux dans `voice.update()` et `controller.update()`.
 
+---
+
+## 10. Trace de Validation Matérielle Réelle sur M5Stack CoreS3
+
+Le relevé série suivant, capturé sur un **M5Stack CoreS3 réel** (29 octobre 2026), confirme l'exécution complète du cycle mains libres déclenché par la détection acoustique locale **« Bonjour ESP »** (`WAKENET`), l'enchaînement de plusieurs tours de conversation sans répéter le mot de réveil, la restitution audio 24 kHz sans aucune perte d'échantillons, la fermeture par commande vocale confirmée (`"au revoir"`) et le réarmement automatique vers `WAKE_ARMED` :
+
+```text
+ [DIAGNOSTICS] WakeWordConversationController (VoiceKit v0.6.3)        
+
+--------------------------------------------------------------------------------
+  - Etat controleur          : WAKE_ARMED (EN ATTENTE — « Bonjour ESP »)
+  - Etat WakeWordManager     : ARMED | Moteur : WAKENET (ACOUSTIQUE REEL)
+  - Fournisseur vocal        : Gemini Live
+  - Sessions / Detections    : 1 sessions | 2 detections (2 reelles, 0 simulees, 0 ignorees)
+  - Tours / Reconnexions     : 1 tours | 1 reconnexions | 1 erreurs | 1 recuperations
+  - Latences de transition   : Wake->Connect=214 ms | Wake->Ready=3288 ms | WS=2673 ms | Retour ARMED=649 ms
+  - Duree de session         : Derniere=18132 ms | Cumulee=18132 ms | Fin=VOICE_COMMAND
+  - Echecs Micro / Reseau    : Micro=0 | Reseau=1
+  - Temps max update()       : voice.update()=582701 us | controller.update()=582454 us
+  - Memoire Interne / PSRAM  : Int=193620 oct (min 67296) | PSRAM=7619671 oct (min 7504455)
+================================================================================
+[WakeConv] WAKE_ARMED -> WAKE_DETECTED (Bonjour ESP)
+[WakeConv] WAKE_DETECTED -> PREPARING_SESSION (Suspension WakeNet et verification micro)
+[WakeConv] PREPARING_SESSION -> CONNECTING (Connexion Gemini Live)
+[LiveSession] Transition : DISCONNECTED -> CONNECTING (Activation session LIVE)
+[LiveClient] Demarrage connexion WebSocket TLS vers Gemini Live...      
+[WS] WebSocket TLS connecte (core=0, prio=1->2, ramInt=87716, maxBlk=73716)
+[LiveClient] WebSocket TLS etabli en 2649 ms
+[LiveClient] Envoi setup Gemini Live (VAD manuelle, transcriptions, 0 outil(s) declare(s))...
+[LiveClient] Session Gemini Live initialisee avec succes (setupComplete en 409 ms)
+[LiveSession] Setup termine : session Live prete
+[LiveSession] Transition : CONNECTING -> CONNECTED (Setup confirme)     
+[LiveSession] Transition : CONNECTED -> LISTENING (Debut tour vocal audio conversation)
+[LiveClient] Signalisation debut d'activite vocale (activityStart)      
+[LiveStreamer] Demarrage streaming micro PCM 16 kHz vers Gemini Live (Pipeline TX decouple)
+[Conversation] Transition : PRET -> ECOUTE_EN_COURS
+[Conversation] Tour #3 demarre (ecoute micro active)
+[WakeConv] CONNECTING -> CONVERSATION_LISTENING (Premier tour d'ecoute actif)
+[LiveStreamer TX] Blocs: acq=94, env=92, perdus=0 | File: 0/8 (pic 1) | Envoi: der=8805 us, max=9823 us (>32ms: 0, >100ms: 0) | Statut: OK      
+[Conversation] Fin parole : 4321 ms de capture, 133 blocs audio emis
+[LiveClient] Signalisation fin d'activite vocale (activityEnd)
+[LiveSession] Transition : LISTENING -> WAITING_RESPONSE (Attente reponse serveur (fin parole))
+[Conversation] Transition : ECOUTE_EN_COURS -> REFLEXION_EN_COURS       
+[LiveClient] Transcription utilisateur finale : "Quelle heure est-il ?"
+[VoiceKit] Transcription FINALE recue : "Quelle heure est-il ?"
+[AUDIO] Lecture PCM 24 kHz
+[LiveSession] Premier bloc audio recu en 700 ms !
+[LiveSession] Transition : WAITING_RESPONSE -> PLAYING (Premier son recu)
+[LivePlayer] Demarrage restitution audio 24 kHz (8161 echantillons en tampon)
+[Conversation] Reponse audio recue (latence premier son : 700 ms)
+[Conversation] Transition : REFLEXION_EN_COURS -> RESTITUTION_EN_COURS  
+[WakeConv] CONVERSATION_LISTENING -> CONVERSATION_SPEAKING (Restitution reponse vocale)
+[LiveClient] Fin de generation audio (turnComplete)
+[LivePlayer] Restitution audio completee
+[GEMINI] Il est sept heures cinquante-cinq.
+--------------------------------------------------------------------------------
+[STATUS] Tour #3 termine : 36961 ech decodes, 36961 ech joues (0 rejet, 0 perte)
+--------------------------------------------------------------------------------
+================================================================================
+[Conversation] Tour #3 TERMINE en 6816 ms | Blocs TX: 133 | Blocs RX: 7 | Pertes: 0
+[Conversation] Utilisateur : "Quelle heure est-il ?"
+[Conversation] Gemini     : "heures cinquante-cinq."
+--------------------------------------------------------------------------------
+  [LATENCY] Metriques de latence du tour vocal (v0.5.3 / v0.6.0) :      
+
+  - Fin de parole (VAD) -> Fin de capture micro : 1 ms
+  - Fin de capture micro -> Envoi activityEnd    : 61 ms
+  - Envoi activityEnd -> 1er audio IA            : 747 ms
+  - 1er audio recu -> Debut restitution DMA      : 107 ms
+  - Latence de reponse vocale percue             : 916 ms
+  - Duree totale du tour vocal                   : 6816 ms
+================================================================================
+[Conversation] Transition : RESTITUTION_EN_COURS -> PRET
+[LiveSession] Transition : PLAYING -> CONNECTED (Fin lecture audio)     
+[LiveSession] Transition : CONNECTED -> LISTENING (Debut tour vocal audio conversation)
+[LiveClient] Signalisation debut d'activite vocale (activityStart)
+[LiveStreamer] Demarrage streaming micro PCM 16 kHz vers Gemini Live (Pipeline TX decouple)
+[Conversation] Transition : PRET -> ECOUTE_EN_COURS
+[Conversation] Tour #4 demarre (ecoute micro active)
+[WakeConv] CONVERSATION_SPEAKING -> CONVERSATION_LISTENING (Tour d'ecoute suivant actif)
+[LiveStreamer TX] Blocs: acq=94, env=92, perdus=0 | File: 0/8 (pic 1) | Envoi: der=8822 us, max=10132 us (>32ms: 0, >100ms: 0) | Statut: OK     
+[LiveStreamer TX] Blocs: acq=188, env=186, perdus=0 | File: 0/8 (pic 1) | Envoi: der=8801 us, max=21233 us (>32ms: 0, >100ms: 0) | Statut: OK   
+[LiveStreamer TX] Blocs: acq=282, env=279, perdus=0 | File: 0/8 (pic 1) | Envoi: der=7286 us, max=21233 us (>32ms: 0, >100ms: 0) | Statut: OK   
+[Conversation] Fin parole : 9281 ms de capture, 288 blocs audio emis
+[LiveClient] Signalisation fin d'activite vocale (activityEnd)
+[LiveSession] Transition : LISTENING -> WAITING_RESPONSE (Attente reponse serveur (fin parole))
+[Conversation] Transition : ECOUTE_EN_COURS -> REFLEXION_EN_COURS       
+[LiveClient] Transcription utilisateur finale : "Tu es sûr ?"
+[VoiceKit] Transcription FINALE recue : "Tu es sûr ?"
+[AUDIO] Lecture PCM 24 kHz
+[LiveSession] Premier bloc audio recu en 649 ms !
+[LiveSession] Transition : WAITING_RESPONSE -> PLAYING (Premier son recu)
+[WakeConv] CONVERSATION_LISTENING -> CONVERSATION_SPEAKING (Restitution reponse vocale)
+[LivePlayer] Demarrage restitution audio 24 kHz (4801 echantillons en tampon)
+[Conversation] Reponse audio recue (latence premier son : 649 ms)       
+[Conversation] Transition : REFLEXION_EN_COURS -> RESTITUTION_EN_COURS  
+[LiveClient] Fin de generation audio (turnComplete)
+[LivePlayer] Restitution audio completee
+[GEMINI] Oui, il est bien sept heures cinquante-cinq.
+--------------------------------------------------------------------------------
+[STATUS] Tour #4 termine : 53761 ech decodes, 53761 ech joues (0 rejet, 0 perte)
+--------------------------------------------------------------------------------
+================================================================================
+[Conversation] Tour #4 TERMINE en 12429 ms | Blocs TX: 288 | Blocs RX: 11 | Pertes: 0
+[Conversation] Utilisateur : "Tu es sûr ?"
+[Conversation] Gemini     : "sept heures cinquante-cinq."
+--------------------------------------------------------------------------------
+  [LATENCY] Metriques de latence du tour vocal (v0.5.3 / v0.6.0) :      
+
+  - Fin de parole (VAD) -> Fin de capture micro : 0 ms
+  - Fin de capture micro -> Envoi activityEnd    : 61 ms
+  - Envoi activityEnd -> 1er audio IA            : 695 ms
+  - 1er audio recu -> Debut restitution DMA      : 60 ms
+  - Latence de reponse vocale percue             : 816 ms
+  - Duree totale du tour vocal                   : 12429 ms
+================================================================================
+[Conversation] Transition : RESTITUTION_EN_COURS -> PRET
+[LiveSession] Transition : PLAYING -> CONNECTED (Fin lecture audio)     
+[LiveSession] Transition : CONNECTED -> LISTENING (Debut tour vocal audio conversation)
+[LiveClient] Signalisation debut d'activite vocale (activityStart)      
+[LiveStreamer] Demarrage streaming micro PCM 16 kHz vers Gemini Live (Pipeline TX decouple)
+[Conversation] Transition : PRET -> ECOUTE_EN_COURS
+[Conversation] Tour #5 demarre (ecoute micro active)
+[WakeConv] CONVERSATION_SPEAKING -> CONVERSATION_LISTENING (Tour d'ecoute suivant actif)
+[LiveStreamer TX] Blocs: acq=94, env=92, perdus=0 | File: 0/8 (pic 1) | Envoi: der=8796 us, max=10064 us (>32ms: 0, >100ms: 0) | Statut: OK     
+[Conversation] Fin parole : 5975 ms de capture, 185 blocs audio emis
+[LiveClient] Signalisation fin d'activite vocale (activityEnd)
+[LiveSession] Transition : LISTENING -> WAITING_RESPONSE (Attente reponse serveur (fin parole))
+[Conversation] Transition : ECOUTE_EN_COURS -> REFLEXION_EN_COURS       
+[LiveClient] Transcription utilisateur finale : "au revoir"
+[VoiceKit] Transcription FINALE recue : "au revoir"
+[WakeConv] Commande vocale de fermeture confirmee : "au revoir"
+[Conversation] Interruption STOP demandee
+
+[LiveSession] >>> DEMANDE INTERRUPTION STOP PRIORITAIRE <<<
+[LivePlayer] Arret immediat et vidage des tampons
+[AUDIO END CHECK][STOP] Decodes: 0 | Joues: 0
+[LiveSession] Transition : WAITING_RESPONSE -> CONNECTED (Interruption STOP demandee)
+[LivePlayer] Arret immediat et vidage des tampons
+[Conversation] Transition : REFLEXION_EN_COURS -> STOPPE
+[Conversation] Transition : STOPPE -> PRET
+[WakeConv] CONVERSATION_LISTENING -> ENDING_SESSION (Commande vocale de fermeture)
+[LivePlayer] Arret immediat et vidage des tampons
+[LiveSession] Transition : CONNECTED -> DISCONNECTED (Desactivation LIVE)
+[WakeConv] ENDING_SESSION -> RETURNING_TO_WAKE (Preparation reactivation WakeNet)
+[WakeConv] RETURNING_TO_WAKE -> WAKE_ARMED (WakeNet actif et arme)
+```
+
