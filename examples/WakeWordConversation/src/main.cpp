@@ -155,19 +155,15 @@ static void drawInterface() {
         canvas.fillRect(12, 188, barW, 6, ctrl.hasUserSpokenInTurn() ? TFT_YELLOW : TFT_GREEN);
     }
 
-    // 5. Boutons tactiles bas d'écran (STOP manuel / Moteur / Diagnostics)
-    canvas.fillRoundRect(6, 204, 98, 32, 5, ctrl.isSessionInProgress() ? 0xC800 : 0x3186);
+    // 5. Boutons tactiles bas d'écran (STOP manuel / Diagnostics)
+    canvas.fillRoundRect(6, 204, 148, 32, 5, ctrl.isSessionInProgress() ? 0xC800 : 0x3186);
     canvas.setTextColor(TFT_WHITE);
     canvas.setTextDatum(middle_center);
-    canvas.drawString("STOP SESSION", 55, 220);
+    canvas.drawString("STOP SESSION", 80, 220);
 
-    canvas.fillRoundRect(111, 204, 98, 32, 5, simulatedEngine ? COL_SIMULATED : 0x13A8);
-    canvas.setTextColor(simulatedEngine ? TFT_BLACK : TFT_WHITE);
-    canvas.drawString(simulatedEngine ? "SIMULER WAKE" : "MODE TEST", 160, 220);
-
-    canvas.fillRoundRect(216, 204, 98, 32, 5, 0x2965);
+    canvas.fillRoundRect(166, 204, 148, 32, 5, 0x2965);
     canvas.setTextColor(TFT_WHITE);
-    canvas.drawString("DIAG SERIE", 265, 220);
+    canvas.drawString("DIAG SERIE", 240, 220);
 
     canvas.pushSprite(0, 0);
 }
@@ -281,33 +277,15 @@ void loop() {
     if (M5.Touch.getCount() > 0) {
         auto t = M5.Touch.getDetail(0);
         if (t.wasPressed() && t.y >= 200) {
-            if (t.x < 106) {
-                // Bouton 1 : Arrêt manuel explicite de la session
+            if (t.x < 160) {
+                // Bouton 1 (gauche) : Arrêt manuel explicite de la session
                 if (voice.isWakeWordConversationInProgress()) {
                     voice.stopWakeWordConversationSession(true);
                     gBannerSubText = "Arret manuel demande";
                     gUiDirty = true;
                 }
-            } else if (t.x >= 106 && t.x < 212) {
-                // Bouton 2 : En mode TEST simulé -> déclenche un réveil simulé ;
-                //            En mode WAKENET au repos -> bascule vers TEST ou revient à WAKENET
-                if (voice.isWakeWordSimulated() &&
-                    voice.getWakeWordConversationState() == WakeWordConversationState::WAKE_ARMED) {
-                    voice.triggerTestWakeWord("Bonjour ESP");
-                } else if (!voice.isWakeWordConversationInProgress()) {
-                    WakeWordEngineType nextEngine = voice.isWakeWordSimulated()
-                        ? WakeWordEngineType::WAKENET
-                        : WakeWordEngineType::TEST;
-                    voice.disableWakeWordConversation();
-                    voice.setWakeWordEngine(nextEngine);
-                    voice.enableWakeWordConversation(true);
-                    gBannerSubText = voice.isWakeWordSimulated()
-                        ? "Moteur TEST actif (simulation uniquement)"
-                        : "WakeNet acoustique « Bonjour ESP » actif";
-                    gUiDirty = true;
-                }
             } else {
-                // Bouton 3 : Impression des diagnostics complets sur le port série
+                // Bouton 2 (droite) : Impression des diagnostics complets sur le port série
                 voice.printWakeWordConversationDiagnostics();
             }
         }
