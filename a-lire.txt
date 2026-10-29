@@ -24,3 +24,29 @@ pio device monitor -d examples/MinimalTTS -b 115200
 pio run -d examples/WakeWordFoundation -t upload
 
 Go rule by rule, with ✅ or ❌ and one line on why:
+
+6. Instructions de Validation sur M5Stack CoreS3 Réel
+Renseigner les identifiants dans examples/WakeWordConversation/include/secrets.h (WIFI_SSID, WIFI_PASS, GEMINI_API_KEY ou OPENAI_API_KEY).
+Téléverser et ouvrir le moniteur série :
+powershell
+cd examples/WakeWordConversation
+pio run -t upload
+pio device monitor -b 115200
+Vérifier le cycle mains libres :
+Vérifier à l'écran EN ATTENTE — « Bonjour ESP » et le badge vert MOTEUR : WAKENET ACOUSTIQUE RÉEL.
+Prononcer « Bonjour ESP » : vérifier le passage par MOT DE RÉVEIL DÉTECTÉ 
+→
+→ CONNEXION GEMINI 
+→
+→ PRÊT — PARLEZ, et l'incrémentation du compteur Réel.
+Poser plusieurs questions successives sans répéter « Bonjour ESP » (ÉCOUTE 
+↔
+↔ RÉPONSE VOCALE 
+→
+→ PRÊT — PARLEZ).
+Prononcer « Au revoir » (ou attendre 30 s de silence, ou toucher STOP) : vérifier le passage par FIN DE CONVERSATION 
+→
+→ RETOUR EN ÉCOUTE 
+→
+→ EN ATTENTE — « Bonjour ESP ».
+Toucher DIAGNOSTICS (ou envoyer 'd' sur le port série) pour afficher le rapport complet des métriques.
