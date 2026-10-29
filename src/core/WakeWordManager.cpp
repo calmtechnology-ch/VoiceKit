@@ -10,6 +10,7 @@
 WakeWordManager::WakeWordManager() {
     _selectedEngineType = WakeWordEngineType::WAKENET;
     _activeEngine = &_wakeNetEngine;
+    _wakeNetEngine.setModelName(_configuredModelName);
     _wakeNetEngine.setTargetWakeWord(_targetWakeWord);
     _testEngine.setTargetWakeWord(_targetWakeWord);
 }
@@ -150,7 +151,55 @@ void WakeWordManager::setTargetWakeWord(const String& word) {
         if (_customEngine) {
             _customEngine->setTargetWakeWord(word);
         }
+        if (_selectedEngineType == WakeWordEngineType::WAKENET && !_wakeNetEngine.isPhraseConsistentWithModel()) {
+            Serial.printf("[WakeWord] AVERTISSEMENT : wakeWordPhrase modifiee ('%s') alors que le modele acoustique actif reste '%s' (« Bonjour ESP »). Modifier wakeWordPhrase n'entraine pas l'apprentissage d'une nouvelle phrase.\n",
+                          _targetWakeWord.c_str(), _wakeNetEngine.getModelName());
+        }
     }
+}
+
+bool WakeWordManager::isWakeWordPhraseConsistentWithModel() const {
+    if (_selectedEngineType == WakeWordEngineType::WAKENET) {
+        return _wakeNetEngine.isPhraseConsistentWithModel();
+    }
+    return true;
+}
+
+bool WakeWordManager::setWakeWordModelName(const String& modelName) {
+    String clean = modelName;
+    clean.trim();
+    if (clean.isEmpty()) {
+        clean = WakeNetEngine::DEFAULT_MODEL_NAME;
+    }
+
+    if (_state.load(std::memory_order_acquire) == WakeWordState::ARMED || _localCaptureStartedByWake) {
+        _bridge.setEnabled(false);
+        if (!stopCaptureIfNeeded()) {
+            _lastError = (_streamer && strlen(_streamer->getLastError()) > 0)
+                ? String(_streamer->getLastError())
+                : String("Echec arret capture locale microphone lors du changement de modele WakeNet");
+            _metrics.errorCount++;
+            setState(WakeWordState::ERROR);
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+    }
+
+    if (_activeEngine && _activeEngine->isInitialized()) {
+        _activeEngine->end();
+    }
+
+    _configuredModelName = clean;
+    _wakeNetEngine.setModelName(_configuredModelName);
+    if (_customEngine) {
+        _customEngine->setModelName(_configuredModelName);
+    }
+
+    if (_enabled.load(std::memory_order_acquire)) {
+        setState(WakeWordState::INACTIVE);
+        return enable(true);
+    }
+    return true;
 }
 
 const char* WakeWordManager::getEngineName() const {
@@ -164,7 +213,14 @@ const char* WakeWordManager::getModelName() const {
     if (_activeEngine) {
         return _activeEngine->getModelName();
     }
-    return "";
+    return _configuredModelName.c_str();
+}
+
+const char* WakeWordManager::getResolvedModelName() const {
+    if (_selectedEngineType == WakeWordEngineType::WAKENET) {
+        return _wakeNetEngine.getResolvedModelName();
+    }
+    return getModelName();
 }
 
 bool WakeWordManager::isEngineCompiledSupportAvailable() const {
@@ -228,6 +284,7 @@ bool WakeWordManager::startCaptureIfNeeded() {
 }
 
 bool WakeWordManager::stopCaptureIfNeeded() {
+    _deferredCaptureStopPending = false;
     if (!_useLocalMicCapture || !_streamer) {
         _localCaptureStartedByWake = false;
         return true;
@@ -247,17 +304,34 @@ bool WakeWordManager::stopCaptureIfNeeded() {
     return true;
 }
 
+bool WakeWordManager::ensureCaptureStopped() {
+    if (!stopCaptureIfNeeded()) {
+        _lastError = (_streamer && strlen(_streamer->getLastError()) > 0)
+            ? String(_streamer->getLastError())
+            : String("Echec arret capture locale microphone apres detection Wake Word");
+        _metrics.errorCount++;
+        setState(WakeWordState::ERROR);
+        if (_onError) {
+            _onError(_lastError);
+        }
+        return false;
+    }
+    return true;
+}
+
 bool WakeWordManager::enable(bool en) {
     if (!en) {
         disable();
         return !isError();
     }
 
+    uint32_t t0Us = micros();
     WakeWordState curState = _state.load(std::memory_order_acquire);
 
     // Idempotence sur appels répétés à enable(true) lorsque déjà armé et opérationnel (Section 5 — v0.6.2.1)
     if (_enabled.load(std::memory_order_acquire) && isEngineInitialized()) {
         if (curState == WakeWordState::ARMED && _bridge.isEnabled()) {
+            recordReactivationDurationUs(micros() - t0Us);
             return true;
         }
         if (curState == WakeWordState::SUSPENDED) {
@@ -265,6 +339,7 @@ bool WakeWordManager::enable(bool en) {
             if (!voiceBusy) {
                 return resume();
             }
+            recordReactivationDurationUs(micros() - t0Us);
             return true;
         }
     }
@@ -278,6 +353,7 @@ bool WakeWordManager::enable(bool en) {
                 : String("Impossible de reinitialiser : producteur audio precedent non arrete");
             _metrics.errorCount++;
             if (_onError) _onError(_lastError);
+            recordReactivationDurationUs(micros() - t0Us);
             return false;
         }
         if (_activeEngine && _activeEngine->isInitialized()) {
@@ -294,55 +370,74 @@ bool WakeWordManager::enable(bool en) {
     setState(WakeWordState::INITIALIZING);
     selectActiveEnginePointer();
 
-    // 1. Initialisation du pont audio borné
+    // Initialisation du pont audio borné
     if (!_bridge.begin(WakeWordAudioBridge::DEFAULT_QUEUE_CAPACITY)) {
         _lastError = "Echec allocation memoire WakeWordAudioBridge";
         _metrics.errorCount++;
         setState(WakeWordState::ERROR);
         if (_onError) _onError(_lastError);
+        recordReactivationDurationUs(micros() - t0Us);
         return false;
     }
     _metrics.queueCapacity = _bridge.getCapacity();
 
-    // 2. Vérification de la disponibilité réelle du moteur (support compilé + modèle disponible)
     if (!_activeEngine) {
         _lastError = "Aucun moteur Wake Word configure (NONE)";
         _metrics.errorCount++;
         _bridge.setEnabled(false);
         setState(WakeWordState::ERROR);
         if (_onError) _onError(_lastError);
+        recordReactivationDurationUs(micros() - t0Us);
         return false;
     }
 
-    if (!_activeEngine->isAvailable()) {
+    // Vérification stricte en 4 étapes avant utilisation du modèle (Section 3 — v0.6.3.1) :
+    // Étape 1 : Vérifier le support WakeNet / moteur compilé
+    if (!_activeEngine->isCompiledSupportAvailable()) {
         _lastError = _activeEngine->getLastError();
         if (_lastError.isEmpty()) {
-            _lastError = "Moteur Wake Word non disponible dans cet environnement";
+            _lastError = "Support WakeNet non compile dans cet environnement";
         }
         _metrics.errorCount++;
         _bridge.setEnabled(false);
         setState(WakeWordState::ERROR);
         if (_onError) _onError(_lastError);
+        recordReactivationDurationUs(micros() - t0Us);
         return false;
     }
 
-    // 3. Initialisation du moteur (PCM 16 000 Hz mono 16 bits)
+    // Étape 2 : Vérifier la présence du modèle dans la partition Flash (sans jamais remplacer par TEST)
+    if (!_activeEngine->isModelAvailable() || !_activeEngine->isAvailable()) {
+        _lastError = _activeEngine->getLastError();
+        if (_lastError.isEmpty()) {
+            _lastError = "Modele WakeNet absent de la partition Flash";
+        }
+        _metrics.errorCount++;
+        _bridge.setEnabled(false);
+        setState(WakeWordState::ERROR);
+        if (_onError) _onError(_lastError);
+        recordReactivationDurationUs(micros() - t0Us);
+        return false;
+    }
+
+    // Étape 3 : Vérifier son initialisation (PCM 16 000 Hz mono 16 bits)
     if (_activeEngine->isInitialized()) {
         _activeEngine->end();
     }
-    if (!_activeEngine->begin(16000, 1)) {
+    if (!_activeEngine->begin(16000, 1) || !_activeEngine->isInitialized()) {
         _lastError = _activeEngine->getLastError();
         if (_lastError.isEmpty()) {
-            _lastError = "Echec begin() du moteur Wake Word";
+            _lastError = "Echec initialisation begin() du moteur Wake Word";
         }
         _metrics.errorCount++;
         _bridge.setEnabled(false);
         setState(WakeWordState::ERROR);
         if (_onError) _onError(_lastError);
+        recordReactivationDurationUs(micros() - t0Us);
         return false;
     }
 
-    // 4. Si une activité vocale (TTS, STT, Conversation) est en cours, démarrer en état SUSPENDED
+    // Si une activité vocale (TTS, STT, Conversation) est en cours, démarrer en état SUSPENDED
     bool voiceBusy = (_voiceBusyCheck && _voiceBusyCheck()) || _wasVoiceBusy;
     if (voiceBusy) {
         _bridge.setEnabled(false);
@@ -350,10 +445,11 @@ bool WakeWordManager::enable(bool en) {
         _voiceActivitySeenSinceSuspend = true;
         setState(WakeWordState::SUSPENDED);
         refreshMemoryMetrics();
+        recordReactivationDurationUs(micros() - t0Us);
         return true;
     }
 
-    // 5. Démarrage de la capture locale PCM 16 kHz et armement du détecteur
+    // Démarrage de la capture locale PCM 16 kHz et armement du détecteur
     _bridge.clear();
     _bridge.setEnabled(true);
     if (!startCaptureIfNeeded()) {
@@ -366,11 +462,27 @@ bool WakeWordManager::enable(bool en) {
         _metrics.errorCount++;
         setState(WakeWordState::ERROR);
         if (_onError) _onError(_lastError);
+        recordReactivationDurationUs(micros() - t0Us);
         return false;
     }
 
     setState(WakeWordState::ARMED);
+
+    // Étape 4 : Vérifier que la reconnaissance acoustique (ou écoute moteur) est réellement active
+    if (!isListening() || (!_activeEngine->isSimulatedEngine() && !isRealRecognitionActive())) {
+        _bridge.setEnabled(false);
+        stopCaptureIfNeeded();
+        _activeEngine->end();
+        _lastError = "La reconnaissance acoustique Wake Word n'est pas active apres armement";
+        _metrics.errorCount++;
+        setState(WakeWordState::ERROR);
+        if (_onError) _onError(_lastError);
+        recordReactivationDurationUs(micros() - t0Us);
+        return false;
+    }
+
     refreshMemoryMetrics();
+    recordReactivationDurationUs(micros() - t0Us);
     return true;
 }
 
@@ -414,6 +526,9 @@ bool WakeWordManager::suspend() {
         return false;
     }
     if (cur == WakeWordState::SUSPENDED) {
+        if (_deferredCaptureStopPending) {
+            return ensureCaptureStopped();
+        }
         return true;
     }
 
@@ -437,11 +552,13 @@ bool WakeWordManager::suspend() {
 }
 
 bool WakeWordManager::resume() {
+    uint32_t t0Us = micros();
     if (!_enabled.load(std::memory_order_acquire)) {
         return false;
     }
     WakeWordState cur = _state.load(std::memory_order_acquire);
     if (cur == WakeWordState::ARMED) {
+        recordReactivationDurationUs(micros() - t0Us);
         return true;
     }
     if (cur != WakeWordState::SUSPENDED && cur != WakeWordState::DETECTED) {
@@ -456,6 +573,7 @@ bool WakeWordManager::resume() {
     if (voiceBusy) {
         _resumePendingAfterBusy = true;
         _voiceActivitySeenSinceSuspend = true;
+        recordReactivationDurationUs(micros() - t0Us);
         return true;
     }
 
@@ -469,12 +587,14 @@ bool WakeWordManager::resume() {
         _metrics.errorCount++;
         setState(WakeWordState::ERROR);
         if (_onError) _onError(_lastError);
+        recordReactivationDurationUs(micros() - t0Us);
         return false;
     }
 
     _voiceActivitySeenSinceSuspend = false;
     _resumePendingAfterBusy = false;
     setState(WakeWordState::ARMED);
+    recordReactivationDurationUs(micros() - t0Us);
     return true;
 }
 
@@ -525,11 +645,19 @@ void WakeWordManager::update() {
         return;
     }
 
+    const uint32_t updateStartUs = micros();
     struct UpdateReentrancyGuard {
         bool& flag;
-        explicit UpdateReentrancyGuard(bool& f) : flag(f) { flag = true; }
-        ~UpdateReentrancyGuard() { flag = false; }
-    } updateGuard(_inUpdate);
+        WakeWordManager* self;
+        uint32_t startUs;
+        UpdateReentrancyGuard(bool& f, WakeWordManager* s, uint32_t t0) : flag(f), self(s), startUs(t0) { flag = true; }
+        ~UpdateReentrancyGuard() {
+            flag = false;
+            if (self) {
+                self->recordUpdateTotalDurationUs(micros() - startUs);
+            }
+        }
+    } updateGuard(_inUpdate, this, updateStartUs);
 
     WakeWordState curState = _state.load(std::memory_order_acquire);
 
@@ -556,9 +684,15 @@ void WakeWordManager::update() {
     bool budgetExceededThisTick = false;
 
     auto handleDetectionResult = [&](const WakeWordResult& res) {
-        // Libérer immédiatement le microphone et couper le pont audio avant d'invoquer les callbacks
+        // Couper immédiatement le pont audio avant d'invoquer les callbacks
         _bridge.setEnabled(false);
-        if (!stopCaptureIfNeeded()) {
+        if (_deferCaptureStopOnDetection && _useLocalMicCapture && _streamer) {
+            // En mode WakeWordConversation (v0.6.3.1), signaler immédiatement l'arrêt asynchrone à live_mic_task
+            // sans cumuler l'attente de terminaison matérielle I2S dans le même cycle update() que l'inférence WakeNet.
+            // L'arrêt matériel complet est garanti au début du tick suivant (WAKE_DETECTED -> ensureCaptureStopped()).
+            _streamer->requestStopLocalCaptureAsync();
+            _deferredCaptureStopPending = true;
+        } else if (!stopCaptureIfNeeded()) {
             _lastError = (_streamer && strlen(_streamer->getLastError()) > 0)
                 ? String(_streamer->getLastError())
                 : String("Echec arret capture locale microphone apres detection Wake Word");

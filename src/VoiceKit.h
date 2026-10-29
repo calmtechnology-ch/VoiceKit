@@ -356,6 +356,9 @@ public:
     WakeWordEngineType getWakeWordEngineType() const { return _voice.getWakeWordEngineType(); }
     const char* getWakeWordEngineName() const { return _voice.getWakeWordEngineName(); }
     const char* getWakeWordModelName() const { return _voice.getWakeWordModelName(); }
+    bool setWakeWordModelName(const String& modelName) { return _voice.setWakeWordModelName(modelName); }
+    String getResolvedWakeWordModelName() const { return _voice.getResolvedWakeWordModelName(); }
+    bool isWakeWordPhraseConsistentWithModel() const { return _voice.isWakeWordPhraseConsistentWithModel(); }
 
     void setWakeWordPhrase(const String& word) { _voice.setWakeWordPhrase(word); }
     String getWakeWordPhrase() const { return _voice.getWakeWordPhrase(); }
@@ -444,6 +447,7 @@ public:
     WakeWordConversationState getWakeWordConversationState() const { return _voice.getWakeWordConversationState(); }
     WakeWordSessionEndReason getWakeWordConversationEndReason() const { return _voice.getWakeWordConversationEndReason(); }
     const char* getWakeWordConversationStatusText() const { return _voice.getWakeWordConversationStatusText(); }
+    const char* getWakeWordConversationBannerText() const { return _voice.getWakeWordConversationBannerText(); }
     const WakeWordConversationMetrics& getWakeWordConversationMetrics() const { return _voice.getWakeWordConversationMetrics(); }
     void resetWakeWordConversationMetrics() { _voice.resetWakeWordConversationMetrics(); }
     void printWakeWordConversationDiagnostics() const { _voice.printWakeWordConversationDiagnostics(); }

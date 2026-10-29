@@ -19,8 +19,44 @@ public:
 
     void disconnect() override {
         _connected = false;
+        _disconnectPending = false;
+        _pollsRemaining = 0;
         _taskPriority = _handshakeTaskPrio;
         if (_onDisconnect) _onDisconnect();
+    }
+
+    void requestDisconnect() override {
+        if (_asyncDisconnectPolls > 0 && _connected) {
+            _connected = false;
+            _disconnectPending = true;
+            _pollsRemaining = _asyncDisconnectPolls;
+            return;
+        }
+        disconnect();
+    }
+
+    bool pollDisconnect() override {
+        if (!_disconnectPending) {
+            return true;
+        }
+        if (_pollsRemaining > 0) {
+            _pollsRemaining--;
+        }
+        if (_pollsRemaining == 0) {
+            _disconnectPending = false;
+            _taskPriority = _handshakeTaskPrio;
+            if (_onDisconnect) _onDisconnect();
+            return true;
+        }
+        return false;
+    }
+
+    bool isDisconnectPending() const override {
+        return _disconnectPending;
+    }
+
+    void setSimulatedAsyncDisconnectPolls(uint32_t polls) {
+        _asyncDisconnectPolls = polls;
     }
 
     bool isConnected() const override {
@@ -78,6 +114,9 @@ public:
 
 private:
     bool _connected = false;
+    bool _disconnectPending = false;
+    uint32_t _asyncDisconnectPolls = 0;
+    uint32_t _pollsRemaining = 0;
     int8_t _taskCore = 0;
     uint8_t _handshakeTaskPrio = 1;
     uint8_t _steadyTaskPrio = 2;

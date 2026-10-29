@@ -131,6 +131,10 @@ struct WakeWordMetrics {
     uint32_t maxWakeProcessDurationUs = 0;    ///< Temps maximal de traitement d'une trame par le moteur (µs)
     uint32_t lastUpdateProcessDurationUs = 0; ///< Temps cumulé de traitement Wake Word lors du dernier update() (µs)
     uint32_t maxUpdateProcessDurationUs = 0;  ///< Temps cumulé maximal de traitement lors d'un appel update() (µs)
+    uint32_t lastUpdateTotalDurationUs = 0;   ///< Durée totale du dernier appel WakeWordManager::update() (µs — v0.6.3.1)
+    uint32_t maxUpdateTotalDurationUs = 0;    ///< Durée totale maximale d'un appel WakeWordManager::update() (µs — v0.6.3.1)
+    uint32_t lastReactivationDurationUs = 0;  ///< Durée de la dernière réactivation WakeNet resume()/enable() (µs — v0.6.3.1)
+    uint32_t maxReactivationDurationUs = 0;   ///< Durée maximale de réactivation WakeNet (µs — v0.6.3.1)
     uint32_t processingBudgetUs = 5000;       ///< Budget temporel configuré par appel update() (µs, 0 = illimité)
     uint32_t processingBudgetExceeded = 0;    ///< Nombre de dépassements du budget de traitement observés
     size_t maxFramesPerUpdate = 2;            ///< Nombre maximal de trames traitées par appel update()
@@ -167,6 +171,10 @@ struct WakeWordMetrics {
         maxWakeProcessDurationUs = 0;
         lastUpdateProcessDurationUs = 0;
         maxUpdateProcessDurationUs = 0;
+        lastUpdateTotalDurationUs = 0;
+        maxUpdateTotalDurationUs = 0;
+        lastReactivationDurationUs = 0;
+        maxReactivationDurationUs = 0;
         processingBudgetExceeded = 0;
         lastFramesProcessedInUpdate = 0;
         framesReceived = 0;
@@ -213,6 +221,11 @@ public:
      * @brief Nom du modèle chargé ou ciblé (ex: "wn10_fr_bonjouresp", "test_manual").
      */
     virtual const char* getModelName() const { return ""; }
+
+    /**
+     * @brief Définit explicitement le nom du modèle de mot de réveil (v0.6.3.1).
+     */
+    virtual void setModelName(const String& modelName) { (void)modelName; }
 
     /**
      * @brief 1. Support compilé : indique si le support logiciel/bibliothèque du moteur est compilé.

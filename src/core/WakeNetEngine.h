@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstring>
 #include <functional>
+#include <vector>
 #include "IWakeWordEngine.h"
 
 #if defined(ESP32) && defined(CONFIG_IDF_TARGET_ESP32S3) && !defined(VOICEKIT_ENABLE_WAKENET)
@@ -56,6 +57,7 @@ public:
 
     WakeNetEngine() {
         _modelName = DEFAULT_MODEL_NAME;
+        _resolvedModelName = "";
         _targetWakeWord = "Bonjour ESP";
         memset(_accumulator, 0, sizeof(_accumulator));
 #if !VOICEKIT_HAS_ESP_SR_WAKENET
@@ -72,13 +74,38 @@ public:
     const char* getName() const override { return "WAKENET"; }
     WakeWordEngineType getType() const override { return WakeWordEngineType::WAKENET; }
     const char* getModelName() const override { return _modelName.c_str(); }
+    const char* getResolvedModelName() const {
+        return _resolvedModelName.isEmpty() ? _modelName.c_str() : _resolvedModelName.c_str();
+    }
 
-    void setModelName(const String& modelName) {
-        if (!modelName.isEmpty() && _modelName != modelName) {
-            _modelName = modelName;
+    void setModelName(const String& modelName) override {
+        String clean = modelName;
+        clean.trim();
+        if (clean.isEmpty()) {
+            clean = DEFAULT_MODEL_NAME;
+        }
+        if (_modelName != clean) {
+            if (_initialized) {
+                end();
+            }
+            _modelName = clean;
+            _resolvedModelName = "";
             _modelProbed = false;
             _modelPresent = false;
         }
+    }
+
+    /**
+     * @brief Vérifie si la phrase configurée correspond acoustiquement au modèle WakeNet sélectionné (Section 3 — v0.6.3.1).
+     *        Une simple modification de wakeWordPhrase n'entraîne jamais l'apprentissage d'une nouvelle phrase acoustique.
+     */
+    bool isPhraseConsistentWithModel() const {
+        if (_modelName == DEFAULT_MODEL_NAME || _modelName == "bonjouresp" || _modelName == "wn9l_fr_bonjouresp_tts3") {
+            String p = _targetWakeWord;
+            p.trim();
+            return p.equalsIgnoreCase("Bonjour ESP");
+        }
+        return true;
     }
 
     /**
@@ -119,13 +146,14 @@ public:
         }
         char* modelNamePtr = esp_srmodel_filter(probeModels, ESP_WN_PREFIX, (char*)_modelName.c_str());
         if (!modelNamePtr && _modelName == DEFAULT_MODEL_NAME) {
-            modelNamePtr = esp_srmodel_filter(probeModels, ESP_WN_PREFIX, "bonjouresp");
-            if (modelNamePtr) {
-                _modelName = modelNamePtr;
-            }
+            // Repli autorisé uniquement pour l'alias officiel par défaut wn10_fr_bonjouresp -> wn9l_fr_bonjouresp_tts3
+            modelNamePtr = esp_srmodel_filter(probeModels, ESP_WN_PREFIX, (char*)"bonjouresp");
         }
         _modelPresent = (modelNamePtr != nullptr);
-        if (!_modelPresent) {
+        if (_modelPresent) {
+            _resolvedModelName = modelNamePtr;
+        } else {
+            _resolvedModelName = "";
             snprintf(_lastError, sizeof(_lastError), "Modele WakeNet '%s' absent de srmodels.bin", _modelName.c_str());
         }
         esp_srmodel_deinit(probeModels);
@@ -135,7 +163,7 @@ public:
             strncpy(_lastError, "Partition Flash 'model' (srmodels.bin) introuvable pour ESP-SR", sizeof(_lastError) - 1);
             return false;
         }
-        if (!_simModelPresent) {
+        if (!isSimModelPresent(_modelName)) {
             snprintf(_lastError, sizeof(_lastError), "Modele WakeNet '%s' absent de srmodels.bin", _modelName.c_str());
             return false;
         }
@@ -181,17 +209,18 @@ public:
         }
         char* modelNamePtr = esp_srmodel_filter(_models, ESP_WN_PREFIX, (char*)_modelName.c_str());
         if (!modelNamePtr && _modelName == DEFAULT_MODEL_NAME) {
-            modelNamePtr = esp_srmodel_filter(_models, ESP_WN_PREFIX, "bonjouresp");
+            modelNamePtr = esp_srmodel_filter(_models, ESP_WN_PREFIX, (char*)"bonjouresp");
         }
         if (!modelNamePtr) {
             _modelPresent = false;
+            _resolvedModelName = "";
             snprintf(_lastError, sizeof(_lastError), "Modele WakeNet '%s' absent de srmodels.bin", _modelName.c_str());
             esp_srmodel_deinit(_models);
             _models = nullptr;
             _initialized = false;
             return false;
         }
-        _modelName = modelNamePtr;
+        _resolvedModelName = modelNamePtr;
         _modelPresent = true;
         _wakenet = (esp_wn_iface_t*)esp_wn_handle_from_name(modelNamePtr);
         if (!_wakenet) {
@@ -230,7 +259,7 @@ public:
                 return false;
             }
             _simResourcesAllocated = true; // Simule esp_srmodel_init("model")
-            if (!_simModelPresent) {
+            if (!isSimModelPresent(_modelName)) {
                 snprintf(_lastError, sizeof(_lastError), "Modele WakeNet '%s' absent de srmodels.bin", _modelName.c_str());
                 _simResourcesAllocated = false; // Libération garantie après échec filtre modèle
                 _initialized = false;
@@ -242,6 +271,7 @@ public:
                 _initialized = false;
                 return false;
             }
+            _resolvedModelName = (_modelName == DEFAULT_MODEL_NAME) ? String("wn9l_fr_bonjouresp_tts3") : _modelName;
             _lastError[0] = '\0';
             _initialized = true;
             return true;
@@ -422,12 +452,36 @@ public:
                     sizeof(_lastError) - 1);
         }
     }
+    void addSimAvailableModel(const String& modelName) {
+        if (!modelName.isEmpty()) {
+            _simAvailableModels.push_back(modelName);
+        }
+    }
+    void clearSimAvailableModels() {
+        _simAvailableModels.clear();
+    }
+    bool isSimModelPresent(const String& modelName) const {
+        if (!_simModelPresent) {
+            return false;
+        }
+        for (const auto& m : _simAvailableModels) {
+            if (m == modelName) {
+                return true;
+            }
+        }
+        // Par défaut dans la partition embarquée srmodels_bonjouresp.c, seul wn10_fr_bonjouresp / wn9l_fr_bonjouresp_tts3 est présent
+        if (modelName == DEFAULT_MODEL_NAME || modelName == "bonjouresp" || modelName == "wn9l_fr_bonjouresp_tts3") {
+            return true;
+        }
+        return false;
+    }
     bool hasSimResourcesAllocated() const { return _simResourcesAllocated; }
     void setSimDetectCallback(Frame480Callback cb) { _simDetectCallback = std::move(cb); }
 #endif
 
 private:
     mutable String _modelName;
+    mutable String _resolvedModelName;
     String _targetWakeWord;
     bool _initialized = false;
     mutable bool _modelProbed = false;
@@ -450,6 +504,7 @@ private:
     bool _simModelPresent = false;
     bool _simCreateFailure = false;
     bool _simResourcesAllocated = false;
+    std::vector<String> _simAvailableModels;
     Frame480Callback _simDetectCallback;
 #endif
 };

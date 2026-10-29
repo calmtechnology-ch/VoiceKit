@@ -379,11 +379,11 @@ void LiveAudioStreamer::micTaskLoop() {
         xEventGroupSetBits(_taskEventGroup, LIVE_MIC_TASK_STARTED_BIT);
     }
 
-    while (_isStreaming || _isLocalCapture) {
+    while ((_isStreaming || _isLocalCapture) && !_localCaptureStopRequested) {
         // Attente active non bloquante que le bloc actif en tête soit 100% acquis par DMA
         uint32_t waitStart = millis();
         bool timedOut = false;
-        while ((_isStreaming || _isLocalCapture) && _audioInput->isRecording() > (int)(recCount - 1)) {
+        while ((_isStreaming || _isLocalCapture) && !_localCaptureStopRequested && _audioInput->isRecording() > (int)(recCount - 1)) {
             vTaskDelay(pdMS_TO_TICKS(2));
             if (millis() - waitStart > 120) {
                 timedOut = true;
@@ -391,7 +391,7 @@ void LiveAudioStreamer::micTaskLoop() {
                 break;
             }
         }
-        if (!_isStreaming && !_isLocalCapture) break;
+        if ((!_isStreaming && !_isLocalCapture) || _localCaptureStopRequested) break;
 
         size_t currentSlot = recQueue[0];
         recQueue[0] = recQueue[1];
@@ -448,7 +448,7 @@ void LiveAudioStreamer::micTaskLoop() {
         }
 
         // Réarmement d'un slot disponible pour maintenir le double-buffering
-        if (_audioInput->isRecording() < 2 && (_isStreaming || _isLocalCapture)) {
+        if (_audioInput->isRecording() < 2 && (_isStreaming || _isLocalCapture) && !_localCaptureStopRequested) {
             int freeSlot = -1;
             for (size_t i = 0; i < LIVE_AUDIO_TX_QUEUE_MAX; ++i) {
                 if (_ringBuffers[i].state == LiveBufferState::FREE) {
@@ -490,9 +490,12 @@ void LiveAudioStreamer::micTaskLoop() {
 #endif
 
 bool LiveAudioStreamer::startLocalCapture() {
+    uint32_t t0Us = micros();
     checkQuarantinedTasks();
 
     if (_isLocalCapture) {
+        _localCaptureStopRequested = false;
+        recordMicTransitionDurationUs(micros() - t0Us);
         return true;
     }
 
@@ -500,12 +503,16 @@ bool LiveAudioStreamer::startLocalCapture() {
         _txTaskRunning || _txTaskHandle != nullptr || _taskQuarantined || _txTaskQuarantined) {
         strncpy(_lastError, "Taches precedentes non terminees ou streaming actif", sizeof(_lastError));
         _lastStatus = AudioHardwareStatus::DEVICE_BUSY;
+        HardwareManager::getInstance().recordMicReservationFailure();
+        recordMicTransitionDurationUs(micros() - t0Us);
         return false;
     }
 
     if (!areAllBuffersFree()) {
         strncpy(_lastError, "Tampons non libres (detenus par ancienne tache)", sizeof(_lastError));
         _lastStatus = AudioHardwareStatus::DEVICE_BUSY;
+        HardwareManager::getInstance().recordMicReservationFailure();
+        recordMicTransitionDurationUs(micros() - t0Us);
         return false;
     }
 
@@ -516,6 +523,7 @@ bool LiveAudioStreamer::startLocalCapture() {
     _provider = nullptr;
     _queueSaturated = false;
     _stopDrainRequested = false;
+    _localCaptureStopRequested = false;
     _lastError[0] = '\0';
     _blocksAcquired = 0;
     _blocksCompleted = 0;
@@ -534,9 +542,10 @@ bool LiveAudioStreamer::startLocalCapture() {
     }
 
     if (HardwareManager::getInstance().getAudioOutput() != nullptr) {
-        if (!HardwareManager::getInstance().prepareMicCapture()) {
+        if (!HardwareManager::getInstance().prepareMicCapture(this)) {
             strncpy(_lastError, "Arbitrage I2S refuse (HP actif)", sizeof(_lastError));
             _lastStatus = HardwareManager::getInstance().getLastAudioStatus();
+            recordMicTransitionDurationUs(micros() - t0Us);
             return false;
         }
     } else if (_audioOutput && _audioOutput->isRunning()) {
@@ -547,7 +556,9 @@ bool LiveAudioStreamer::startLocalCapture() {
         if (!_audioInput->begin()) {
             strncpy(_lastError, "Echec initialisation micro ES7210", sizeof(_lastError));
             _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+            HardwareManager::getInstance().recordMicReservationFailure();
             HardwareManager::getInstance().restoreSpeakerAfterMic();
+            recordMicTransitionDurationUs(micros() - t0Us);
             return false;
         }
     }
@@ -558,7 +569,9 @@ bool LiveAudioStreamer::startLocalCapture() {
         if (!_taskEventGroup) {
             strncpy(_lastError, "Echec creation EventGroup (memoire insuffisante)", sizeof(_lastError));
             _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+            HardwareManager::getInstance().recordMicReservationFailure();
             stopMicHardware();
+            recordMicTransitionDurationUs(micros() - t0Us);
             return false;
         }
     }
@@ -587,9 +600,11 @@ bool LiveAudioStreamer::startLocalCapture() {
         _micTaskRunning = false;
         char errBuf[64];
         strncpy(errBuf, "Echec creation live_mic_task (memoire FreeRTOS)", sizeof(errBuf));
+        HardwareManager::getInstance().recordMicReservationFailure();
         stopMicHardware();
         strncpy(_lastError, errBuf, sizeof(_lastError));
         _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+        recordMicTransitionDurationUs(micros() - t0Us);
         return false;
     }
 
@@ -605,10 +620,12 @@ bool LiveAudioStreamer::startLocalCapture() {
         _isLocalCapture = false;
         char errBuf[64];
         strncpy(errBuf, "Timeout confirmation demarrage live_mic_task locale", sizeof(errBuf));
+        HardwareManager::getInstance().recordMicReservationFailure();
         waitForTaskTermination(200);
         stopMicHardware();
         strncpy(_lastError, errBuf, sizeof(_lastError));
         _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+        recordMicTransitionDurationUs(micros() - t0Us);
         return false;
     }
 #else
@@ -620,9 +637,11 @@ bool LiveAudioStreamer::startLocalCapture() {
             _micTaskRunning = false;
             char errBuf[64];
             strncpy(errBuf, "Echec creation live_mic_task (memoire FreeRTOS insuffisante)", sizeof(errBuf));
+            HardwareManager::getInstance().recordMicReservationFailure();
             stopMicHardware();
             strncpy(_lastError, errBuf, sizeof(_lastError));
             _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+            recordMicTransitionDurationUs(micros() - t0Us);
             return false;
         }
     }
@@ -632,9 +651,11 @@ bool LiveAudioStreamer::startLocalCapture() {
         _micTaskRunning = false;
         char errBuf[64];
         strncpy(errBuf, "Echec initialisation double-tampon micro", sizeof(errBuf));
+        HardwareManager::getInstance().recordMicReservationFailure();
         stopMicHardware();
         strncpy(_lastError, errBuf, sizeof(_lastError));
         _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+        recordMicTransitionDurationUs(micros() - t0Us);
         return false;
     }
     _micTaskHandle = (void*)0x1234;
@@ -642,16 +663,26 @@ bool LiveAudioStreamer::startLocalCapture() {
 #endif
 
     _lastStatus = AudioHardwareStatus::SUCCESS;
+    recordMicTransitionDurationUs(micros() - t0Us);
     return true;
 }
 
+void LiveAudioStreamer::requestStopLocalCaptureAsync() {
+    if (_isLocalCapture) {
+        _localCaptureStopRequested = true;
+    }
+}
+
 bool LiveAudioStreamer::stopLocalCapture() {
+    uint32_t t0Us = micros();
     checkQuarantinedTasks();
 
     if (!_isLocalCapture) {
+        _localCaptureStopRequested = false;
         // Si une tentative précédente d'arrêt a échoué (tâche en quarantaine ou matériel non libéré),
         // permettre une reprise/nettoyage explicite sans laisser le microphone bloqué définitivement (v0.6.2.1).
         if (_taskQuarantined) {
+            recordMicTransitionDurationUs(micros() - t0Us);
             return false;
         }
         if (!_isStreaming && !_micTaskRunning && _micTaskHandle == nullptr &&
@@ -662,17 +693,21 @@ bool LiveAudioStreamer::stopLocalCapture() {
                     _ringBuffers[i].state = LiveBufferState::FREE;
                 }
             }
+            recordMicTransitionDurationUs(micros() - t0Us);
             return hwRecovered;
         }
+        recordMicTransitionDurationUs(micros() - t0Us);
         return false;
     }
 
     _durationMs = millis() - _startTimeMs;
     _isLocalCapture = false;
+    _localCaptureStopRequested = false;
 
     bool micTermOk = waitForTaskTermination(250);
     if (!micTermOk) {
         // Ne pas arrêter ni réinitialiser le matériel tant que live_mic_task est encore active (quarantaine)
+        recordMicTransitionDurationUs(micros() - t0Us);
         return false;
     }
 
@@ -684,6 +719,7 @@ bool LiveAudioStreamer::stopLocalCapture() {
         }
     }
 
+    recordMicTransitionDurationUs(micros() - t0Us);
     return hwOk;
 }
 
@@ -695,9 +731,12 @@ bool LiveAudioStreamer::start(GeminiLiveClient* client) {
 }
 
 bool LiveAudioStreamer::start(IVoiceProvider* provider) {
+    uint32_t t0Us = micros();
     if (!provider || !provider->isConnected() || !provider->isSetupComplete()) {
         strncpy(_lastError, "Fournisseur vocal non pret", sizeof(_lastError));
         _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+        HardwareManager::getInstance().recordMicReservationFailure();
+        recordMicTransitionDurationUs(micros() - t0Us);
         return false;
     }
 
@@ -710,7 +749,9 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
             if (_lastStatus == AudioHardwareStatus::SUCCESS) {
                 _lastStatus = AudioHardwareStatus::DEVICE_BUSY;
             }
+            HardwareManager::getInstance().recordMicReservationFailure();
             Serial.printf("[LiveStreamer] Refus demarrage : %s\n", _lastError);
+            recordMicTransitionDurationUs(micros() - t0Us);
             return false;
         }
     }
@@ -723,7 +764,9 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
         _taskQuarantined || _txTaskQuarantined) {
         strncpy(_lastError, "Taches precedentes non terminees ou en quarantaine", sizeof(_lastError));
         _lastStatus = AudioHardwareStatus::DEVICE_BUSY;
+        HardwareManager::getInstance().recordMicReservationFailure();
         Serial.printf("[LiveStreamer] Refus demarrage : %s\n", _lastError);
+        recordMicTransitionDurationUs(micros() - t0Us);
         return false;
     }
 
@@ -731,7 +774,9 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
     if (!areAllBuffersFree()) {
         strncpy(_lastError, "Tampons non libres (detenus par ancienne tache)", sizeof(_lastError));
         _lastStatus = AudioHardwareStatus::DEVICE_BUSY;
+        HardwareManager::getInstance().recordMicReservationFailure();
         Serial.printf("[LiveStreamer] Refus demarrage : %s\n", _lastError);
+        recordMicTransitionDurationUs(micros() - t0Us);
         return false;
     }
 
@@ -743,6 +788,7 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
     _provider = provider;
     _queueSaturated = false;
     _stopDrainRequested = false;
+    _localCaptureStopRequested = false;
     _lastError[0] = '\0';
     _chunksSent = 0;
     _bytesSent = 0;
@@ -779,10 +825,11 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
 
     // Arbitrage matériel via HAL : Arrêt et libération stricte du haut-parleur avant activation micro
     if (HardwareManager::getInstance().getAudioOutput() != nullptr) {
-        if (!HardwareManager::getInstance().prepareMicCapture()) {
+        if (!HardwareManager::getInstance().prepareMicCapture(this)) {
             strncpy(_lastError, "Arbitrage I2S refuse (HP actif)", sizeof(_lastError));
             _lastStatus = HardwareManager::getInstance().getLastAudioStatus();
             Serial.println("[LiveStreamer] Echec : Arbitrage I2S refuse pour capture microphone.");
+            recordMicTransitionDurationUs(micros() - t0Us);
             return false;
         }
     } else if (_audioOutput && _audioOutput->isRunning()) {
@@ -793,7 +840,9 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
         if (!_audioInput->begin()) {
             strncpy(_lastError, "Echec initialisation micro", sizeof(_lastError));
             _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+            HardwareManager::getInstance().recordMicReservationFailure();
             HardwareManager::getInstance().restoreSpeakerAfterMic();
+            recordMicTransitionDurationUs(micros() - t0Us);
             return false;
         }
     }
@@ -804,7 +853,9 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
         if (!_txQueue) {
             strncpy(_lastError, "Echec creation file txQueue (memoire insuffisante)", sizeof(_lastError));
             _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+            HardwareManager::getInstance().recordMicReservationFailure();
             stopMicHardware();
+            recordMicTransitionDurationUs(micros() - t0Us);
             return false;
         }
     } else {
@@ -816,7 +867,9 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
         if (!_taskEventGroup) {
             strncpy(_lastError, "Echec creation EventGroup (memoire insuffisante)", sizeof(_lastError));
             _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+            HardwareManager::getInstance().recordMicReservationFailure();
             stopMicHardware();
+            recordMicTransitionDurationUs(micros() - t0Us);
             return false;
         }
     }
@@ -855,9 +908,11 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
         _txTaskRunning = false;
         char errBuf[64];
         strncpy(errBuf, "Echec creation live_tx_task (memoire FreeRTOS)", sizeof(errBuf));
+        HardwareManager::getInstance().recordMicReservationFailure();
         stopMicHardware();
         strncpy(_lastError, errBuf, sizeof(_lastError));
         _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+        recordMicTransitionDurationUs(micros() - t0Us);
         return false;
     }
 
@@ -878,10 +933,12 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
         _micTaskRunning = false;
         char errBuf[64];
         strncpy(errBuf, "Echec creation live_mic_task (memoire FreeRTOS)", sizeof(errBuf));
+        HardwareManager::getInstance().recordMicReservationFailure();
         waitForTxTaskTermination(150);
         stopMicHardware();
         strncpy(_lastError, errBuf, sizeof(_lastError));
         _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+        recordMicTransitionDurationUs(micros() - t0Us);
         return false;
     }
 
@@ -900,11 +957,13 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
         char errBuf[64];
         strncpy(errBuf, "Timeout confirmation demarrage des taches micro/TX", sizeof(errBuf));
         Serial.printf("[LiveStreamer] ERREUR : %s (bits=0x%02X)\n", errBuf, (unsigned)bits);
+        HardwareManager::getInstance().recordMicReservationFailure();
         waitForTaskTermination(200);
         waitForTxTaskTermination(200);
         stopMicHardware();
         strncpy(_lastError, errBuf, sizeof(_lastError));
         _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+        recordMicTransitionDurationUs(micros() - t0Us);
         return false;
     }
 #else
@@ -918,9 +977,11 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
             _txTaskRunning = false;
             char errBuf[64];
             strncpy(errBuf, "Echec creation live_mic_task (memoire FreeRTOS insuffisante)", sizeof(errBuf));
+            HardwareManager::getInstance().recordMicReservationFailure();
             stopMicHardware();
             strncpy(_lastError, errBuf, sizeof(_lastError));
             _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+            recordMicTransitionDurationUs(micros() - t0Us);
             return false;
         }
     }
@@ -932,9 +993,11 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
         _txTaskRunning = false;
         char errBuf[64];
         strncpy(errBuf, "Echec initialisation double-tampon micro", sizeof(errBuf));
+        HardwareManager::getInstance().recordMicReservationFailure();
         stopMicHardware();
         strncpy(_lastError, errBuf, sizeof(_lastError));
         _lastStatus = AudioHardwareStatus::RECOVERABLE_ERROR;
+        recordMicTransitionDurationUs(micros() - t0Us);
         return false;
     }
     _micTaskHandle = (void*)0x1234;
@@ -944,6 +1007,7 @@ bool LiveAudioStreamer::start(IVoiceProvider* provider) {
 #endif
 
     _lastStatus = AudioHardwareStatus::SUCCESS;
+    recordMicTransitionDurationUs(micros() - t0Us);
     Serial.println("[LiveStreamer] Demarrage streaming micro PCM 16 kHz vers Gemini Live (Pipeline TX decouple)");
     return true;
 }
@@ -1026,8 +1090,12 @@ bool LiveAudioStreamer::tick() {
 }
 
 bool LiveAudioStreamer::stop() {
+    uint32_t t0Us = micros();
     bool micActive = _audioInput ? (_audioInput->isRunning() || _audioInput->isRecording() > 0) : false;
-    if (!_isStreaming && !micActive && !_micTaskRunning && _micTaskHandle == nullptr) return false;
+    if (!_isStreaming && !micActive && !_micTaskRunning && _micTaskHandle == nullptr) {
+        recordMicTransitionDurationUs(micros() - t0Us);
+        return false;
+    }
 
     _durationMs = millis() - _startTimeMs;
 
@@ -1103,13 +1171,16 @@ bool LiveAudioStreamer::stop() {
     if (!hwOk) {
         Serial.println("[LiveStreamer] AVERTISSEMENT : Echec transition materielle dans stop() !");
     }
+    recordMicTransitionDurationUs(micros() - t0Us);
     return hwOk;
 }
 
 void LiveAudioStreamer::cancel() {
+    uint32_t t0Us = micros();
     if (_isStreaming || _isLocalCapture || _micTaskRunning || _micTaskHandle != nullptr || _txTaskRunning || _txTaskHandle != nullptr || _txTaskQuarantined || _taskQuarantined) {
         _isStreaming = false;
         _isLocalCapture = false;
+        _localCaptureStopRequested = false;
         _stopDrainRequested = false;
         _lastTxStatus = LiveTxStatus::TX_STOP_REQUESTED;
         _durationMs = millis() - _startTimeMs;
@@ -1138,6 +1209,7 @@ void LiveAudioStreamer::cancel() {
         }
         printDiagnosticSummary();
     }
+    recordMicTransitionDurationUs(micros() - t0Us);
 }
 
 void LiveAudioStreamer::printDiagnosticSummary() const {
@@ -1192,6 +1264,9 @@ size_t LiveAudioStreamer::getQueueSize() const {
 bool LiveAudioStreamer::stopMicHardware() {
     _micStoppedMs = millis();
     if (_audioInput) {
+        if (_audioInput->isRunning()) {
+            _audioInput->end();
+        }
         uint32_t t0 = millis();
         while (_audioInput->isRecording() && (millis() - t0 < 100)) {
             delay(2);
@@ -1200,10 +1275,6 @@ bool LiveAudioStreamer::stopMicHardware() {
             _lastStatus = AudioHardwareStatus::DEVICE_BUSY;
             strncpy(_lastError, "Microphone toujours occupe apres timeout", sizeof(_lastError));
             return false;
-        }
-        if (_audioInput->isRunning()) {
-            _audioInput->end();
-            delay(5);
         }
         if (_audioInput->isRunning()) {
             _lastStatus = AudioHardwareStatus::PERMANENT_FAULT;

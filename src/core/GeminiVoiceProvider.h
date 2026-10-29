@@ -18,7 +18,12 @@ public:
     bool begin(const VoiceKitConfig& config) override;
     bool connect() override;
     void disconnect() override;
+    void requestDisconnect() override;
+    bool pollDisconnect() override;
+    bool isDisconnectPending() const override;
     void tick() override;
+    uint32_t getLastWsProcessDurationUs() const override;
+    uint32_t getMaxWsProcessDurationUs() const override;
     bool isConnected() const override;
     bool isSetupComplete() const override;
     const char* getLastError() const override;

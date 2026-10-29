@@ -119,6 +119,7 @@ bool WakeWordConversationController::enable(bool en) {
 
     // S'assurer que l'auto-reprise interne de WakeWordManager ne court-circuite pas RETURNING_TO_WAKE
     _wakeWord->setAutoResumeAfterVoiceActivity(false);
+    _wakeWord->setDeferCaptureStopOnDetection(true);
     _wakeWord->notifyVoiceActivity(false, false);
 
     uint32_t nowMs = millis();
@@ -157,8 +158,11 @@ void WakeWordConversationController::disable() {
     if (_config.disconnectAfterSession && _session && _session->isActive()) {
         _session->deactivate();
     }
-    if (_wakeWord && _wakeWord->isEnabled()) {
-        _wakeWord->disable();
+    if (_wakeWord) {
+        _wakeWord->setDeferCaptureStopOnDetection(false);
+        if (_wakeWord->isEnabled()) {
+            _wakeWord->disable();
+        }
     }
 
     _lastEndReason = WakeWordSessionEndReason::CONTROLLER_DISABLED;
@@ -329,6 +333,34 @@ const char* WakeWordConversationController::getDisplayStatusText() const {
                 : "PRÊT — PARLEZ";
         case WakeWordConversationState::CONVERSATION_SPEAKING:
             return "RÉPONSE VOCALE";
+        case WakeWordConversationState::ENDING_SESSION:
+            return "FIN DE CONVERSATION";
+        case WakeWordConversationState::RETURNING_TO_WAKE:
+            return "RETOUR EN ÉCOUTE";
+        case WakeWordConversationState::RECOVERABLE_ERROR:
+            return "ERREUR / RÉCUPÉRATION";
+        default:
+            return "INCONNU";
+    }
+}
+
+const char* WakeWordConversationController::getUiTransitionBannerText() const {
+    switch (_state) {
+        case WakeWordConversationState::DISABLED:
+            return "DESACTIVE";
+        case WakeWordConversationState::WAKE_ARMED:
+            return "EN ATTENTE — « Bonjour ESP »";
+        case WakeWordConversationState::WAKE_DETECTED:
+        case WakeWordConversationState::PREPARING_SESSION:
+            return "BONJOUR ESP DÉTECTÉ";
+        case WakeWordConversationState::CONNECTING:
+            return "CONNEXION";
+        case WakeWordConversationState::CONVERSATION_LISTENING:
+            return (_userSpokeInTurn || _waitingForResponse)
+                ? "ÉCOUTE"
+                : "PRÊT — PARLEZ";
+        case WakeWordConversationState::CONVERSATION_SPEAKING:
+            return "RÉPONSE";
         case WakeWordConversationState::ENDING_SESSION:
             return "FIN DE CONVERSATION";
         case WakeWordConversationState::RETURNING_TO_WAKE:
@@ -599,7 +631,9 @@ void WakeWordConversationController::update(uint32_t nowMs) {
     struct ScopedUpdateGuard {
         WakeWordConversationController* self;
         uint32_t startUs;
-        ScopedUpdateGuard(WakeWordConversationController* s, uint32_t t0) : self(s), startUs(t0) {
+        WakeWordConversationState entryState;
+        ScopedUpdateGuard(WakeWordConversationController* s, uint32_t t0)
+            : self(s), startUs(t0), entryState(s->_state) {
             self->_inUpdate = true;
         }
         ~ScopedUpdateGuard() {
@@ -608,6 +642,13 @@ void WakeWordConversationController::update(uint32_t nowMs) {
             if (durUs > self->_metrics.maxControllerUpdateDurationUs) {
                 self->_metrics.maxControllerUpdateDurationUs = durUs;
             }
+            if (self->_state != entryState) {
+                self->_metrics.lastStateTransitionDurationUs = durUs;
+                if (durUs > self->_metrics.maxStateTransitionDurationUs) {
+                    self->_metrics.maxStateTransitionDurationUs = durUs;
+                }
+            }
+            self->syncSubsystemMetrics();
             self->refreshMemoryMetrics();
             self->_inUpdate = false;
         }
@@ -658,11 +699,15 @@ void WakeWordConversationController::update(uint32_t nowMs) {
             _lastEndReason = WakeWordSessionEndReason::VOICE_COMMAND;
 
             // Si aucune restitution vocale n'est en cours, clore immédiatement la session
-            bool audioPlaying = (_player && _player->isPlaying() > 0) ||
+            bool audioPlaying = (_player && (_player->isPlaying() > 0 || _player->getBufferedSamples() > 0)) ||
                                 (_session && _session->getState() == LiveSessionState::PLAYING);
             if (!audioPlaying && _state == WakeWordConversationState::CONVERSATION_LISTENING) {
                 if (_conversation && _conversation->isTurnActive()) {
-                    _conversation->requestStop();
+                    if (_config.disconnectAfterSession) {
+                        _conversation->abortTurnForSessionClose();
+                    } else {
+                        _conversation->requestStop();
+                    }
                 }
                 _immediateStopRequested = false;
                 _endingEnterMs = nowMs;
@@ -723,6 +768,14 @@ void WakeWordConversationController::update(uint32_t nowMs) {
         }
 
         case WakeWordConversationState::WAKE_DETECTED: {
+            // Finalisation de l'arrêt de capture locale demandé de manière asynchrone lors de la détection
+            if (_wakeWord && (!_wakeWord->ensureCaptureStopped() || _wakeWord->isError())) {
+                _lastSeenWakeStopFailures = _wakeWord->getMetrics().captureStopFailures;
+                enterRecoverableError(_wakeWord->getLastError(),
+                                      WakeWordSessionEndReason::MIC_TRANSITION_ERROR,
+                                      nowMs, true, false);
+                return;
+            }
             // Transition immédiate non bloquante vers la préparation de session
             transitionTo(WakeWordConversationState::PREPARING_SESSION, nowMs, "Suspension WakeNet et verification micro");
             break;
@@ -897,7 +950,11 @@ void WakeWordConversationController::update(uint32_t nowMs) {
             if (_config.maxSessionDurationMs > 0 && _sessionStartMs > 0 &&
                 (nowMs - _sessionStartMs >= _config.maxSessionDurationMs)) {
                 if (_conversation && _conversation->isTurnActive()) {
-                    _conversation->requestStop();
+                    if (_config.disconnectAfterSession) {
+                        _conversation->abortTurnForSessionClose();
+                    } else {
+                        _conversation->requestStop();
+                    }
                 }
                 _lastEndReason = WakeWordSessionEndReason::MAX_DURATION_TIMEOUT;
                 _immediateStopRequested = false;
@@ -942,8 +999,15 @@ void WakeWordConversationController::update(uint32_t nowMs) {
 
                     bool speechEnded = _vad.processRms(rms, 32);
                     if (_vad.isSpeechConfirmed() || _vad.isSpeechActive()) {
+                        bool wasSpeaking = _userSpokeInTurn;
                         _userSpokeInTurn = true;
                         _lastActivityMs = nowMs;
+                        if (!wasSpeaking) {
+                            pushEvent(WakeWordConversationEventType::USER_LISTENING, nowMs);
+                            if (_onUserListening) {
+                                _onUserListening();
+                            }
+                        }
                     }
                     if (speechEnded || _vad.isSpeechEnded()) {
                         _lastActivityMs = nowMs;
@@ -979,7 +1043,11 @@ void WakeWordConversationController::update(uint32_t nowMs) {
                 if (!_waitingForResponse && !_vad.isSpeechActive() && !_userSpokeInTurn) {
                     if (_config.silenceTimeoutMs > 0 && (nowMs - _lastActivityMs >= _config.silenceTimeoutMs)) {
                         if (_conversation && _conversation->isTurnActive()) {
-                            _conversation->requestStop();
+                            if (_config.disconnectAfterSession) {
+                                _conversation->abortTurnForSessionClose();
+                            } else {
+                                _conversation->requestStop();
+                            }
                         }
                         _lastEndReason = WakeWordSessionEndReason::SILENCE_TIMEOUT;
                         _immediateStopRequested = false;
@@ -1088,9 +1156,13 @@ void WakeWordConversationController::update(uint32_t nowMs) {
                 }
             }
 
-            // 2. Arrêt complet de la conversation et libération des ressources audio et réseau
+            // 2. Arrêt complet non bloquant de la conversation et libération des ressources audio et réseau
             if (_conversation && _conversation->isTurnActive()) {
-                _conversation->requestStop();
+                if (_config.disconnectAfterSession) {
+                    _conversation->abortTurnForSessionClose();
+                } else {
+                    _conversation->requestStop();
+                }
             }
             if (_streamer && _streamer->isStreaming()) {
                 _streamer->cancel();
@@ -1098,14 +1170,26 @@ void WakeWordConversationController::update(uint32_t nowMs) {
             if (_streamer && _streamer->isTaskQuarantined()) {
                 _streamer->checkQuarantinedTasks();
             }
-            if (_config.disconnectAfterSession && _session && _session->isActive()) {
-                _session->deactivate();
+            if (_config.disconnectAfterSession && _session) {
+                if (_session->isActive() && !_session->isDeactivating()) {
+                    _session->requestDeactivate();
+                }
+                if (!_session->pollDeactivate()) {
+                    return;
+                }
             }
 
             if (_sessionStartMs > 0) {
                 _metrics.lastSessionDurationMs = (nowMs >= _sessionStartMs) ? (nowMs - _sessionStartMs) : 0;
                 _metrics.totalSessionDurationMs += _metrics.lastSessionDurationMs;
                 _sessionStartMs = 0;
+            }
+            if (_lastEndReason == WakeWordSessionEndReason::VOICE_COMMAND ||
+                _lastEndReason == WakeWordSessionEndReason::SILENCE_TIMEOUT ||
+                _lastEndReason == WakeWordSessionEndReason::MAX_DURATION_TIMEOUT ||
+                _lastEndReason == WakeWordSessionEndReason::MANUAL_STOP ||
+                _lastEndReason == WakeWordSessionEndReason::NONE) {
+                _metrics.successfulSessionCount++;
             }
 
             pushEvent(WakeWordConversationEventType::CONVERSATION_ENDED, nowMs,
@@ -1117,15 +1201,19 @@ void WakeWordConversationController::update(uint32_t nowMs) {
                 _onConversationEndedSimple();
             }
 
-            _returnToWakeStartMs = nowMs;
-            transitionTo(WakeWordConversationState::RETURNING_TO_WAKE, nowMs, "Preparation reactivation WakeNet");
+            uint32_t postDeactivateMs = millis();
+            if (postDeactivateMs < nowMs) {
+                postDeactivateMs = nowMs;
+            }
+            _returnToWakeStartMs = postDeactivateMs;
+            transitionTo(WakeWordConversationState::RETURNING_TO_WAKE, postDeactivateMs, "Preparation reactivation WakeNet");
             break;
         }
 
         case WakeWordConversationState::RETURNING_TO_WAKE: {
             // 1. Vérification que plus aucune capture, lecture ou session résiduelle n'est en cours
             if (_conversation && _conversation->isTurnActive()) {
-                _conversation->requestStop();
+                _conversation->abortTurnForSessionClose();
                 return;
             }
             if (_player && _player->isPlaying() > 0) {
@@ -1144,9 +1232,13 @@ void WakeWordConversationController::update(uint32_t nowMs) {
                     return;
                 }
             }
-            if (_config.disconnectAfterSession && _provider && _provider->isConnected()) {
+            if (_config.disconnectAfterSession && _provider &&
+                (_provider->isConnected() || _provider->isDisconnectPending())) {
                 if (_session) {
-                    _session->deactivate();
+                    if (!_session->isDeactivating()) {
+                        _session->requestDeactivate();
+                    }
+                    _session->pollDeactivate();
                 }
                 return;
             }
@@ -1218,14 +1310,66 @@ void WakeWordConversationController::update(uint32_t nowMs) {
 
 void WakeWordConversationController::resetMetrics() {
     _metrics = WakeWordConversationMetrics();
+    if (_session) {
+        _session->resetTimingMetrics();
+    }
+    if (_streamer) {
+        _streamer->resetMicTransitionMetrics();
+    }
+    HardwareManager::getInstance().resetMicReservationFailureCount();
+    syncSubsystemMetrics();
     refreshMemoryMetrics();
 }
 
 void WakeWordConversationController::recordVoiceUpdateDurationUs(uint32_t durationUs) {
     _metrics.lastVoiceUpdateDurationUs = durationUs;
+    _metrics.voiceUpdateCallCount++;
+    _metrics.totalVoiceUpdateDurationUs += durationUs;
+    _metrics.avgVoiceUpdateDurationUs = static_cast<uint32_t>(
+        _metrics.totalVoiceUpdateDurationUs / _metrics.voiceUpdateCallCount);
     if (durationUs > _metrics.maxVoiceUpdateDurationUs) {
         _metrics.maxVoiceUpdateDurationUs = durationUs;
     }
+    syncSubsystemMetrics();
+}
+
+void WakeWordConversationController::syncSubsystemMetrics() {
+    if (_wakeWord) {
+        const WakeWordMetrics& wm = _wakeWord->getMetrics();
+        _metrics.lastWakeWordUpdateDurationUs = wm.lastUpdateTotalDurationUs;
+        if (wm.maxUpdateTotalDurationUs > _metrics.maxWakeWordUpdateDurationUs) {
+            _metrics.maxWakeWordUpdateDurationUs = wm.maxUpdateTotalDurationUs;
+        }
+        _metrics.lastWakeReactivationDurationUs = wm.lastReactivationDurationUs;
+        if (wm.maxReactivationDurationUs > _metrics.maxWakeReactivationDurationUs) {
+            _metrics.maxWakeReactivationDurationUs = wm.maxReactivationDurationUs;
+        }
+        _metrics.wakeQueueSaturations = wm.queueSaturations;
+        _metrics.wakeFramesDropped = wm.framesDropped;
+    }
+    if (_session) {
+        _metrics.lastSessionTickDurationUs = _session->getLastTickDurationUs();
+        if (_session->getMaxTickDurationUs() > _metrics.maxSessionTickDurationUs) {
+            _metrics.maxSessionTickDurationUs = _session->getMaxTickDurationUs();
+        }
+        _metrics.lastSessionStopDurationUs = _session->getLastSessionStopDurationUs();
+        if (_session->getMaxSessionStopDurationUs() > _metrics.maxSessionStopDurationUs) {
+            _metrics.maxSessionStopDurationUs = _session->getMaxSessionStopDurationUs();
+        }
+    }
+    if (_provider) {
+        _metrics.lastWsProcessDurationUs = _provider->getLastWsProcessDurationUs();
+        if (_provider->getMaxWsProcessDurationUs() > _metrics.maxWsProcessDurationUs) {
+            _metrics.maxWsProcessDurationUs = _provider->getMaxWsProcessDurationUs();
+        }
+    }
+    if (_streamer) {
+        _metrics.lastMicTransitionDurationUs = _streamer->getLastMicTransitionDurationUs();
+        if (_streamer->getMaxMicTransitionDurationUs() > _metrics.maxMicTransitionDurationUs) {
+            _metrics.maxMicTransitionDurationUs = _streamer->getMaxMicTransitionDurationUs();
+        }
+    }
+    _metrics.micReservationFailures = HardwareManager::getInstance().getMicReservationFailureCount();
 }
 
 void WakeWordConversationController::refreshMemoryMetrics() {
@@ -1245,18 +1389,20 @@ void WakeWordConversationController::refreshMemoryMetrics() {
 void WakeWordConversationController::printDiagnostics() const {
     // Règle Section 4 & 9 : Ne jamais afficher les clés API ou mots de passe Wi-Fi dans les diagnostics.
     Serial.println("================================================================================");
-    Serial.println("  [DIAGNOSTICS] WakeWordConversationController (VoiceKit v0.6.3)                ");
+    Serial.println("  [DIAGNOSTICS] WakeWordConversationController (VoiceKit v0.6.3.1)              ");
     Serial.println("--------------------------------------------------------------------------------");
-    Serial.printf("  - Etat controleur          : %s (%s)\n",
-                  wakeWordConversationStateToString(_state), getDisplayStatusText());
-    Serial.printf("  - Etat WakeWordManager     : %s | Moteur : %s (%s)\n",
+    Serial.printf("  - Etat controleur          : %s (%s | UI: %s)\n",
+                  wakeWordConversationStateToString(_state), getDisplayStatusText(), getUiTransitionBannerText());
+    Serial.printf("  - Etat WakeWordManager     : %s | Moteur : %s (%s) | Modele : %s\n",
                   _wakeWord ? wakeWordStateToString(_wakeWord->getState()) : "N/A",
                   _wakeWord ? _wakeWord->getEngineName() : "N/A",
-                  (_wakeWord && _wakeWord->isSimulated()) ? "SIMULE" : "ACOUSTIQUE REEL");
+                  (_wakeWord && _wakeWord->isSimulated()) ? "SIMULE" : "ACOUSTIQUE REEL",
+                  _wakeWord ? _wakeWord->getResolvedModelName() : "N/A");
     Serial.printf("  - Fournisseur vocal        : %s\n",
                   (_providerType == VoiceProviderType::OPENAI) ? "OpenAI Realtime" : "Gemini Live");
-    Serial.printf("  - Sessions / Detections    : %u sessions | %u detections (%u reelles, %u simulees, %u ignorees)\n",
+    Serial.printf("  - Sessions / Detections    : %u ouvertes (%u reussies) | %u detections (%u reelles, %u simulees, %u ignorees)\n",
                   (unsigned)_metrics.sessionCount,
+                  (unsigned)_metrics.successfulSessionCount,
                   (unsigned)_metrics.detectionCount,
                   (unsigned)_metrics.realDetectionCount,
                   (unsigned)_metrics.simulatedDetectionCount,
@@ -1275,12 +1421,28 @@ void WakeWordConversationController::printDiagnostics() const {
                   (unsigned)_metrics.lastSessionDurationMs,
                   (unsigned)_metrics.totalSessionDurationMs,
                   wakeWordSessionEndReasonToString(_lastEndReason));
-    Serial.printf("  - Echecs Micro / Reseau    : Micro=%u | Reseau=%u\n",
+    Serial.printf("  - Echecs Micro / Reseau    : Transition=%u | Reservation=%u | Reseau=%u\n",
                   (unsigned)_metrics.micTransitionFailures,
+                  (unsigned)_metrics.micReservationFailures,
                   (unsigned)_metrics.networkFailures);
-    Serial.printf("  - Temps max update()       : voice.update()=%u us | controller.update()=%u us\n",
+    Serial.printf("  - Trames Wake Word         : Saturations=%u | Pertes=%u\n",
+                  (unsigned)_metrics.wakeQueueSaturations,
+                  (unsigned)_metrics.wakeFramesDropped);
+    Serial.printf("  - Temps voice.update()     : moy=%u us | max=%u us | dernier=%u us (%u appels)\n",
+                  (unsigned)_metrics.avgVoiceUpdateDurationUs,
                   (unsigned)_metrics.maxVoiceUpdateDurationUs,
-                  (unsigned)_metrics.maxControllerUpdateDurationUs);
+                  (unsigned)_metrics.lastVoiceUpdateDurationUs,
+                  (unsigned)_metrics.voiceUpdateCallCount);
+    Serial.printf("  - Temps sous-systemes max  : Ctrl=%u us | Transition=%u us | Wake=%u us | Session=%u us\n",
+                  (unsigned)_metrics.maxControllerUpdateDurationUs,
+                  (unsigned)_metrics.maxStateTransitionDurationUs,
+                  (unsigned)_metrics.maxWakeWordUpdateDurationUs,
+                  (unsigned)_metrics.maxSessionTickDurationUs);
+    Serial.printf("  - Temps I/O max            : WS=%u us | Mic=%u us | StopSess=%u us | ReactWake=%u us\n",
+                  (unsigned)_metrics.maxWsProcessDurationUs,
+                  (unsigned)_metrics.maxMicTransitionDurationUs,
+                  (unsigned)_metrics.maxSessionStopDurationUs,
+                  (unsigned)_metrics.maxWakeReactivationDurationUs);
     Serial.printf("  - Memoire Interne / PSRAM  : Int=%u oct (min %u) | PSRAM=%u oct (min %u)\n",
                   (unsigned)_metrics.freeInternalHeap,
                   (unsigned)_metrics.minFreeInternalHeap,

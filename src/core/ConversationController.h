@@ -47,6 +47,9 @@ public:
     // Interruption prioritaire (appui STOP)
     void requestStop();
 
+    // Arrêt local d'un tour lors d'une clôture de session sans trame réseau superflue (v0.6.3.1)
+    void abortTurnForSessionClose();
+
     // Traitement cyclique obligatoire dans loop()
     void tick();
 

@@ -3786,8 +3786,8 @@ void test_v0531_facade_modes_transitions_and_resilience() {
     cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
     vk.begin(cfg);
 
-    // 1. Constante de version alignée sur v0.6.3
-    TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.3") == 0, "VOICEKIT_VERSION est strictement v0.6.3");
+    // 1. Constante de version alignée sur v0.6.3.1
+    TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.3.1") == 0, "VOICEKIT_VERSION est strictement v0.6.3.1");
 
     // 2. Mode par défaut IDLE
     TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode initial = IDLE");
@@ -6414,12 +6414,541 @@ void test_v063_lvgl_non_blocking_openai_provider_and_diagnostics() {
 
 
 // =============================================================================
+// NOUVELLES SUITES DE TESTS — VoiceKit v0.6.3.1 (Corrective Stabilité & WakeNet Configurable)
+// =============================================================================
+
+// SUITE 101 : Section 1 & 5 — Instrumentation détaillée de latence et arrêt non bloquant de session
+void test_v0631_latency_instrumentation_and_nonblocking_session_teardown() {
+    std::cout << "\n[TEST SUITE 101] v0.6.3.1 : Section 1 & 5 — Instrumentation de latence et arret non bloquant de session WebSocket" << std::endl;
+
+    WiFi.setConnected(true);
+    setMockMillisOffset(1700000000UL * 1000UL);
+
+    MockLiveTransport mockTransport;
+    // Simuler une tâche WebSocket qui met 4 ticks d'update() avant de signaler STOPPED_BIT
+    mockTransport.setSimulatedAsyncDisconnectPolls(4);
+
+    VoiceKit vk;
+    VoiceKitConfig cfg;
+    cfg.provider = VoiceProviderType::GEMINI;
+    cfg.apiKey = "AIzaSyTestWakeConvV0631S101";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfg.wakeWordEngine = WakeWordEngineType::TEST;
+    cfg.enableWakeWordConversation = true;
+    cfg.wakeWordResumeDelayMs = 250;
+    cfg.vadSilenceDurationMs = 200;
+
+    TEST_ASSERT(vk.begin(cfg), "begin() reussi (Suite 101)");
+    vk.getEngine().getClient().setTransport(&mockTransport);
+
+    // 1. Démarrer une session conversationnelle complète
+    TEST_ASSERT(vk.triggerTestWakeWord("Bonjour ESP"), "Reveil « Bonjour ESP »");
+    advanceMockMillis(5);
+    vk.update(); // -> WAKE_DETECTED
+    advanceMockMillis(5);
+    vk.update(); // -> PREPARING_SESSION
+    advanceMockMillis(5);
+    vk.update(); // -> CONNECTING
+    advanceMockMillis(5);
+    vk.update(); // -> activate()
+    const char* setupJson = "{\"setupComplete\":{}}";
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    advanceMockMillis(5);
+    vk.update(); // -> CONVERSATION_LISTENING
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::CONVERSATION_LISTENING,
+                "Etat CONVERSATION_LISTENING actif");
+
+    size_t sentBeforeClose = mockTransport.getSendCount();
+    // 2. Fermeture vocale par « Au revoir » pendant CONVERSATION_LISTENING :
+    //    Vérifier que abortTurnForSessionClose() n'envoie PAS de trame sendInterruption() inutile avant fermeture
+    vk.getWakeWordConversationController().notifyUserTranscription("Au revoir", true);
+    advanceMockMillis(5);
+    vk.update(); // -> ENDING_SESSION
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::ENDING_SESSION,
+                "Transition vers ENDING_SESSION");
+    TEST_ASSERT(mockTransport.getSendCount() == sentBeforeClose,
+                "Aucune trame sendInterruption() superflue emise juste avant la fermeture de session");
+
+    // 3. Test de l'arrêt non bloquant en 2 phases (requestDeactivate / pollDeactivate) :
+    //    Pendant les 3 premiers appels à update() en ENDING_SESSION, pollDeactivate() retourne false sans bloquer loopTask
+    for (int poll = 1; poll <= 3; ++poll) {
+        advanceMockMillis(10);
+        vk.update();
+        TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::ENDING_SESSION,
+                    "Maintien non bloquant en ENDING_SESSION tant que websocket_task termine son poll_read");
+        TEST_ASSERT(vk.getEngine().getSession().isDeactivating(),
+                    "Session en cours de desactivation non bloquante (isDeactivating=true)");
+    }
+
+    // 4e appel : STOPPED_BIT atteint -> pollDeactivate() retourne true -> passage à RETURNING_TO_WAKE
+    advanceMockMillis(10);
+    vk.update();
+    TEST_ASSERT(!vk.getEngine().getSession().isDeactivating(),
+                "Desactivation non bloquante terminee (isDeactivating=false)");
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::RETURNING_TO_WAKE,
+                "Passage a RETURNING_TO_WAKE des que la tache WebSocket est arretee");
+    TEST_ASSERT(String(vk.getWakeWordConversationBannerText()) == "RETOUR EN ÉCOUTE",
+                "Bandeau UI RETOUR EN ÉCOUTE immediatement visible et preserve (non saute par le temps d'arret WS)");
+
+    // Vérifier que la garde acoustique de 250 ms commence APRES la fin réelle de désactivation
+    advanceMockMillis(100);
+    vk.update();
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::RETURNING_TO_WAKE,
+                "A +100 ms (< 250 ms apres desactivation) : toujours en RETURNING_TO_WAKE");
+
+    advanceMockMillis(160); // Total 260 ms >= 250 ms
+    vk.update();
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::WAKE_ARMED,
+                "A +260 ms (>= 250 ms apres desactivation) : retour propre a WAKE_ARMED");
+
+    // 4. Vérification des métriques d'instrumentation séparées (Section 1 & 5)
+    const WakeWordConversationMetrics& m = vk.getWakeWordConversationMetrics();
+    TEST_ASSERT(m.voiceUpdateCallCount >= 10, "Compteur voiceUpdateCallCount renseigne");
+    TEST_ASSERT(m.avgVoiceUpdateDurationUs <= m.maxVoiceUpdateDurationUs,
+                "Coherence avgVoiceUpdateDurationUs <= maxVoiceUpdateDurationUs");
+    TEST_ASSERT(m.maxControllerUpdateDurationUs < 50000,
+                "WakeWordConversationController::update() non bloquant (< 50 ms)");
+    TEST_ASSERT(m.maxStateTransitionDurationUs < 50000,
+                "Duree maximale des transitions d'etat non bloquante (< 50 ms)");
+    TEST_ASSERT(m.maxWakeWordUpdateDurationUs < 50000,
+                "WakeWordManager::update() non bloquant (< 50 ms)");
+    TEST_ASSERT(m.maxSessionTickDurationUs < 50000,
+                "LiveSessionController::tick() non bloquant (< 50 ms)");
+    TEST_ASSERT(m.maxWsProcessDurationUs < 50000,
+                "Traitements WebSocket non bloquants (< 50 ms)");
+    TEST_ASSERT(m.maxMicTransitionDurationUs < 50000,
+                "Transitions microphone non bloquantes (< 50 ms)");
+    TEST_ASSERT(m.maxSessionStopDurationUs < 50000,
+                "Arret de session non bloquant (< 50 ms)");
+    TEST_ASSERT(m.maxWakeReactivationDurationUs < 50000,
+                "Reactivation WakeNet non bloquante (< 50 ms)");
+    TEST_ASSERT(m.successfulSessionCount == 1, "successfulSessionCount = 1 apres session terminee normalement");
+
+    mockTransport.setSimulatedAsyncDisconnectPolls(0);
+    vk.disableWakeWordConversation();
+    vk.getEngine().getClient().setTransport(nullptr);
+}
+
+// SUITE 102 : Section 2 — Consolidation des transitions audio & Concurrence microphone (propriétaire unique)
+void test_v0631_audio_transitions_consolidation_and_mic_concurrency() {
+    std::cout << "\n[TEST SUITE 102] v0.6.3.1 : Section 2 — Consolidation des transitions audio et concurrence du microphone" << std::endl;
+
+    WiFi.setConnected(true);
+    setMockMillisOffset(1700000000UL * 1000UL);
+    HardwareManager::getInstance().resetMicReservationFailureCount();
+
+    MockLiveTransport mockTransport;
+    VoiceKit vk;
+    VoiceKitConfig cfg;
+    cfg.provider = VoiceProviderType::GEMINI;
+    cfg.apiKey = "AIzaSyTestWakeConvV0631S102";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfg.wakeWordEngine = WakeWordEngineType::TEST;
+    cfg.enableWakeWordConversation = true;
+    cfg.wakeWordResumeDelayMs = 40;
+    cfg.vadSilenceDurationMs = 200;
+
+    TEST_ASSERT(vk.begin(cfg), "begin() reussi (Suite 102)");
+    vk.getEngine().getClient().setTransport(&mockTransport);
+
+    // 1.En WAKE_ARMED : le propriétaire unique du microphone est le LiveAudioStreamer de VoiceKit
+    TEST_ASSERT(HardwareManager::getInstance().isMicCaptureReserved(),
+                "WAKE_ARMED : microphone reserve pour la capture locale WakeWord");
+    TEST_ASSERT(HardwareManager::getInstance().getMicOwner() == &vk.getEngine().getStreamer(),
+                "WAKE_ARMED : proprietaire unique du microphone = LiveAudioStreamer");
+
+    // 2. Test de concurrence du microphone : tentative de réservation concurrente par un second propriétaire fictif
+    int dummySecondOwner = 42;
+    TEST_ASSERT(!HardwareManager::getInstance().prepareMicCapture(&dummySecondOwner),
+                "Refus strict d'un double demarrage I2S / second proprietaire du microphone");
+    TEST_ASSERT(HardwareManager::getInstance().getMicReservationFailureCount() == 1,
+                "Compteur d'echecs de reservation microphone incremente (1)");
+    TEST_ASSERT(vk.getEngine().getStreamer().startLocalCapture() == true,
+                "startLocalCapture() idempotent pour le proprietaire actuel sans double demarrage I2S");
+
+    // 3. Vérification de l'absence de reprise WakeNet pendant toute la conversation
+    vk.triggerTestWakeWord("Bonjour ESP");
+    vk.update(); // -> WAKE_DETECTED
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::WAKE_DETECTED, "WAKE_DETECTED");
+    vk.update(); // -> PREPARING_SESSION (libère la capture locale demandée en WAKE_DETECTED)
+    TEST_ASSERT(!vk.getEngine().getStreamer().isLocalCapture(),
+                "Capture locale WakeWord arretee des WAKE_DETECTED -> PREPARING_SESSION");
+    vk.update(); // -> CONNECTING
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::SUSPENDED, "WakeWordManager SUSPENDED en CONNECTING");
+    TEST_ASSERT(!HardwareManager::getInstance().isMicCaptureReserved(),
+                "Microphone libre pendant CONNECTING (aucun proprietaire actif avant setupComplete)");
+
+    // Tenter de forcer resumeWakeWord() ou notifyVoiceActivity(false) pendant CONNECTING : refusé car session en cours
+    vk.getWakeWordManager().notifyVoiceActivity(false, false);
+    vk.getWakeWordManager().update();
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::SUSPENDED,
+                "Aucune reprise WakeNet possible pendant CONNECTING");
+
+    vk.update(); // -> activate()
+    const char* setupJson = "{\"setupComplete\":{}}";
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    vk.update(); // -> CONVERSATION_LISTENING
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::CONVERSATION_LISTENING,
+                "CONVERSATION_LISTENING actif");
+    TEST_ASSERT(HardwareManager::getInstance().isMicCaptureReserved(),
+                "Microphone reserve pour la capture conversationnelle");
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::SUSPENDED,
+                "WakeNet reste strictement SUSPENDED pendant CONVERSATION_LISTENING");
+
+    // 4. Transition CONVERSATION_LISTENING -> CONVERSATION_SPEAKING : un seul flux actif, pas de double I2S
+    pushSimulatedSpeechTurn(vk, 8, 8);
+    injectGeminiPcmAndDrain(vk.getEngine(), 6, true);
+    vk.update(); // -> CONVERSATION_SPEAKING
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::CONVERSATION_SPEAKING,
+                "CONVERSATION_SPEAKING actif");
+    TEST_ASSERT(!vk.getEngine().getStreamer().isStreaming() && !vk.getEngine().getStreamer().isLocalCapture(),
+                "Capture microphone totalement arretee pendant la restitution haut-parleur");
+    TEST_ASSERT(!HardwareManager::getInstance().isMicCaptureReserved(),
+                "Aucun proprietaire microphone pendant CONVERSATION_SPEAKING");
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::SUSPENDED,
+                "WakeNet reste strictement SUSPENDED pendant CONVERSATION_SPEAKING");
+
+    // 5. Fin de session : aucune fermeture prématurée du lecteur audio, aucun WebSocket résiduel
+    vk.requestEndWakeWordConversationAfterTurn();
+    drainVoicePlayback(vk.getEngine());
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::ENDING_SESSION,
+                "ENDING_SESSION apres vidage complet du lecteur audio");
+    vk.update(); // -> RETURNING_TO_WAKE
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::RETURNING_TO_WAKE,
+                "RETURNING_TO_WAKE");
+    TEST_ASSERT(!vk.getEngine().getProvider().isConnected() && !vk.getEngine().getProvider().isDisconnectPending(),
+                "Aucun WebSocket residuel apres la fin de session");
+
+    advanceMockMillis(50);
+    vk.update(); // -> WAKE_ARMED
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::WAKE_ARMED,
+                "Retour complet a WAKE_ARMED");
+    TEST_ASSERT(vk.getWakeWordConversationMetrics().micReservationFailures == 1,
+                "Metrique micReservationFailures synchronisee dans WakeWordConversationMetrics (1)");
+
+    vk.disableWakeWordConversation();
+    vk.getEngine().getClient().setTransport(nullptr);
+}
+
+// SUITE 103 : Section 3 — Sélection configurable du modèle WakeNet, vérification 4 niveaux et modèle absent
+void test_v0631_configurable_wakenet_model_and_missing_model_validation() {
+    std::cout << "\n[TEST SUITE 103] v0.6.3.1 : Section 3 — Selection du modele WakeNet, verification 4 niveaux et modele absent" << std::endl;
+
+    // 1. Vérification des valeurs par défaut obligatoires dans VoiceKitConfig
+    VoiceKitConfig defaultCfg;
+    TEST_ASSERT(defaultCfg.wakeWordPhrase == "Bonjour ESP",
+                "Valeur par defaut obligatoire : config.wakeWordPhrase == \"Bonjour ESP\"");
+    TEST_ASSERT(defaultCfg.wakeWordModelName == "wn10_fr_bonjouresp",
+                "Valeur par defaut obligatoire : config.wakeWordModelName == \"wn10_fr_bonjouresp\"");
+    TEST_ASSERT(defaultCfg.wakeWordEngine == WakeWordEngineType::WAKENET,
+                "Moteur par defaut : WAKENET");
+
+    // 2. Test sur WakeNetEngine / WakeWordManager avec simulation du support compilé ESP-SR
+    VoiceKit vk;
+    VoiceKitConfig cfg;
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfg.wakeWordEngine = WakeWordEngineType::WAKENET;
+    cfg.wakeWordPhrase = "Bonjour ESP";
+    cfg.wakeWordModelName = "wn10_fr_bonjouresp";
+    TEST_ASSERT(vk.begin(cfg), "begin() hors ligne avec WAKENET configure");
+
+    WakeNetEngine& wn = vk.getWakeWordManager().getWakeNetEngine();
+    wn.setSimEnvironment(true, true, true, false);
+    wn.clearSimAvailableModels(); // Seul wn10_fr_bonjouresp est présent par défaut dans la partition Flash
+
+    // Vérification des 4 niveaux avec le modèle par défaut wn10_fr_bonjouresp
+    TEST_ASSERT(vk.enableWakeWord(true), "Activation WakeNet reussie avec wn10_fr_bonjouresp");
+    TEST_ASSERT(vk.isWakeWordEngineCompiledSupportAvailable(), "1. Support WakeNet compile verifie");
+    TEST_ASSERT(vk.isWakeWordEngineModelAvailable(), "2. Presence du modele wn10_fr_bonjouresp dans la partition Flash verifiee");
+    TEST_ASSERT(vk.isWakeWordEngineInitialized(), "3. Initialisation du modele verifiee");
+    TEST_ASSERT(vk.isWakeWordRealRecognitionActive(), "4. Reconnaissance acoustique reelle active verifiee");
+    TEST_ASSERT(!vk.isWakeWordSimulated(), "Non simule (moteur acoustique reel)");
+    TEST_ASSERT(String(vk.getWakeWordModelName()) == "wn10_fr_bonjouresp", "Modele actif = wn10_fr_bonjouresp");
+    TEST_ASSERT(vk.isWakeWordPhraseConsistentWithModel(), "Coherence wakeWordPhrase (« Bonjour ESP ») et modele wn10_fr_bonjouresp");
+
+    // 3. Règle Section 3 : Ne jamais supposer qu'une simple modification de wakeWordPhrase entraîne l'apprentissage d'une nouvelle phrase
+    vk.setWakeWordPhrase("Salut Robot");
+    TEST_ASSERT(!vk.isWakeWordPhraseConsistentWithModel(),
+                "Modification de wakeWordPhrase seule detectee comme incoherente avec le modele acoustique fixe wn10_fr_bonjouresp");
+    vk.setWakeWordPhrase("Bonjour ESP");
+    TEST_ASSERT(vk.isWakeWordPhraseConsistentWithModel(), "Retour a « Bonjour ESP » : coherence retablie");
+
+    // 4. Test de changement de modèle WakeNet avec modèle ABSENT de la partition Flash :
+    //    - Ne peut pas être activé tant que le modèle est en écoute active (refus sécurisé)
+    TEST_ASSERT(!vk.setWakeWordModelName("wn9_hiesp"),
+                "Refus de changer wakeWordModelName pendant que WakeNet est ARMED");
+
+    vk.disableWakeWord();
+    TEST_ASSERT(vk.setWakeWordModelName("wn9_hiesp"),
+                "Selection explicite d'un autre modele WakeNet (wn9_hiesp) acceptee hors ecoute");
+    TEST_ASSERT(vk.getResolvedWakeWordModelName() == "wn9_hiesp",
+                "Nom du modele configure = wn9_hiesp");
+    TEST_ASSERT(!vk.isWakeWordEngineModelAvailable(),
+                "Verification partition Flash : wn9_hiesp detecte comme ABSENT");
+
+    // Tenter d'activer WakeWord avec le modèle absent : doit échouer proprement SANS basculer vers TEST !
+    TEST_ASSERT(!vk.enableWakeWord(true),
+                "enableWakeWord(true) refuse proprement un modele absent de la partition Flash");
+    TEST_ASSERT(vk.getWakeWordState() == WakeWordState::ERROR,
+                "WakeWordManager passe en etat ERROR sur modele absent");
+    TEST_ASSERT(vk.getWakeWordEngineType() == WakeWordEngineType::WAKENET,
+                "Aucun remplacement automatique par le moteur TEST (reste WAKENET)");
+    TEST_ASSERT(!vk.isWakeWordSimulated(),
+                "isWakeWordSimulated() reste false (pas de bascule implicite vers TEST)");
+    TEST_ASSERT(!vk.isWakeWordRealRecognitionActive(),
+                "isWakeWordRealRecognitionActive() est false lorsque le modele est absent");
+
+    // 5. Test avec un modèle additionnel installé dans la partition Flash (simulé)
+    wn.addSimAvailableModel("wn9_hiesp");
+    TEST_ASSERT(vk.isWakeWordEngineModelAvailable(),
+                "Une fois wn9_hiesp installe en Flash : isWakeWordEngineModelAvailable() == true");
+    TEST_ASSERT(vk.enableWakeWord(true),
+                "Activation reussie du modele explicitement selectionne wn9_hiesp");
+    TEST_ASSERT(vk.isWakeWordRealRecognitionActive(),
+                "Reconnaissance acoustique active avec wn9_hiesp");
+
+    // 6. Rétablissement du modèle par défaut obligatoire wn10_fr_bonjouresp et extensibilité microWakeWord (IWakeWordEngine)
+    vk.disableWakeWord();
+    wn.clearSimAvailableModels();
+    wn.setSimEnvironment(false, false, false, false);
+    TEST_ASSERT(vk.setWakeWordModelName("wn10_fr_bonjouresp"),
+                "Retour au modele par defaut wn10_fr_bonjouresp");
+    TEST_ASSERT(String(vk.getWakeWordModelName()) == "wn10_fr_bonjouresp",
+                "Modele par defaut wn10_fr_bonjouresp restaure");
+}
+
+// SUITE 104 : Section 4 — Stabilité conversationnelle complète & distinction fin de tour vs fin de session
+void test_v0631_conversational_stability_and_turn_vs_session_distinction() {
+    std::cout << "\n[TEST SUITE 104] v0.6.3.1 : Section 4 — Stabilite conversationnelle et distinction fin de tour / fin de session" << std::endl;
+
+    WiFi.setConnected(true);
+    setMockMillisOffset(1700000000UL * 1000UL);
+
+    MockLiveTransport mockTransport;
+    VoiceKit vk;
+    VoiceKitConfig cfg;
+    cfg.provider = VoiceProviderType::GEMINI;
+    cfg.apiKey = "AIzaSyTestWakeConvV0631S104";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfg.wakeWordEngine = WakeWordEngineType::TEST;
+    cfg.enableWakeWordConversation = true;
+    cfg.wakeWordResumeDelayMs = 30;
+    cfg.wakeConversationTurnRestartDelayMs = 30;
+    cfg.wakeConversationErrorRecoveryDelayMs = 80;
+    cfg.vadSilenceDurationMs = 200;
+
+    TEST_ASSERT(vk.begin(cfg), "begin() reussi (Suite 104)");
+    vk.getEngine().getClient().setTransport(&mockTransport);
+
+    // 1. Session 1 : 2 tours successifs (vérifie la distinction fin de tour != fin de session) + arrêt par « Au revoir »
+    vk.triggerTestWakeWord("Bonjour ESP");
+    vk.update(); vk.update(); vk.update(); vk.update();
+    const char* setupJson = "{\"setupComplete\":{}}";
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    vk.update();
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::CONVERSATION_LISTENING, "Session 1 : LISTENING");
+
+    // Tour 1 : fin de tour normale -> doit revenir en CONVERSATION_LISTENING sans fermer la session
+    pushSimulatedSpeechTurn(vk, 8, 8);
+    injectGeminiPcmAndDrain(vk.getEngine(), 5, true);
+    vk.update(); // -> CONVERSATION_SPEAKING
+    drainVoicePlayback(vk.getEngine());
+    advanceMockMillis(40);
+    vk.update(); // -> CONVERSATION_LISTENING
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::CONVERSATION_LISTENING,
+                "Fin de tour 1 != fin de session : retour en CONVERSATION_LISTENING");
+    TEST_ASSERT(vk.getEngine().getProvider().isConnected(), "WebSocket maintenu ouvert entre deux tours");
+
+    // Tour 2 : l'utilisateur dit « Au revoir » et l'assistant répond une dernière phrase de 30 échantillons
+    pushSimulatedSpeechTurn(vk, 8, 8);
+    vk.getWakeWordConversationController().notifyUserTranscription("Au revoir", true);
+    injectGeminiPcmAndDrain(vk.getEngine(), 5, true); // 5 * 6 = 30 échantillons
+    vk.update(); // -> CONVERSATION_SPEAKING
+    drainVoicePlayback(vk.getEngine()); // Restitution intégrale des derniers échantillons PCM -> ENDING_SESSION
+    TEST_ASSERT(vk.getEngine().getPlayer().getSamplesPlayedTotal() == 30,
+                "Restitution complete des 30 derniers echantillons PCM avant fermeture par « Au revoir »");
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::ENDING_SESSION,
+                "Passage en ENDING_SESSION apres restitution complete");
+    vk.update(); // -> RETURNING_TO_WAKE
+    advanceMockMillis(40);
+    vk.update(); // -> WAKE_ARMED
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::WAKE_ARMED,
+                "Session 1 terminee : retour a WAKE_ARMED");
+
+    // 2. Session 2 : Échec temporaire de démarrage microphone au début du tour d'écoute (startTurn) -> récupération vers WAKE_ARMED
+    vk.triggerTestWakeWord("Bonjour ESP");
+    vk.update(); vk.update(); vk.update(); vk.update();
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    // Simuler une réservation micro résiduelle empêchant startTurn() de démarrer le microphone
+    int tempBlocker = 99;
+    HardwareManager::getInstance().prepareMicCapture(&tempBlocker);
+    vk.update(); // CONNECTING -> tente startNextListeningTurn() -> échoue -> RECOVERABLE_ERROR
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::RECOVERABLE_ERROR,
+                "Echec temporaire de demarrage microphone -> transition immediate vers RECOVERABLE_ERROR");
+    TEST_ASSERT(vk.getWakeWordConversationEndReason() == WakeWordSessionEndReason::MIC_TRANSITION_ERROR,
+                "Raison = MIC_TRANSITION_ERROR");
+
+    // Libérer l'anomalie temporaire microphone -> retour automatique à WAKE_ARMED
+    HardwareManager::getInstance().restoreSpeakerAfterMic();
+    advanceMockMillis(100);
+    vk.update(); // -> RETURNING_TO_WAKE
+    advanceMockMillis(40);
+    vk.update(); // -> WAKE_ARMED
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::WAKE_ARMED,
+                "Retour automatique a WAKE_ARMED apres echec temporaire de demarrage microphone");
+
+    // 3. Session 3 : Nouvelle session complète après récupération d'erreur -> arrêt par timeout d'inactivité
+    vk.triggerTestWakeWord("Bonjour ESP");
+    vk.update(); vk.update(); vk.update(); vk.update();
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    vk.update();
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::CONVERSATION_LISTENING,
+                "Session 3 ouverte avec succes apres recuperation");
+    advanceMockMillis(30500);
+    vk.update(); // -> ENDING_SESSION (SILENCE_TIMEOUT)
+    TEST_ASSERT(vk.getWakeWordConversationEndReason() == WakeWordSessionEndReason::SILENCE_TIMEOUT,
+                "Session 3 fermee par timeout d'inactivite (SILENCE_TIMEOUT)");
+    vk.update(); // -> RETURNING_TO_WAKE
+    advanceMockMillis(40);
+    vk.update(); // -> WAKE_ARMED
+    TEST_ASSERT(vk.getWakeWordConversationState() == WakeWordConversationState::WAKE_ARMED,
+                "Session 3 : retour a WAKE_ARMED");
+
+    const WakeWordConversationMetrics& m = vk.getWakeWordConversationMetrics();
+    TEST_ASSERT(m.sessionCount == 3, "3 sessions ouvertes au total");
+    TEST_ASSERT(m.successfulSessionCount == 2, "2 sessions reussies (hors celle interrompue par erreur micro)");
+    TEST_ASSERT(m.recoveryCount == 1, "1 reprise apres erreur recuperable");
+
+    vk.disableWakeWordConversation();
+    vk.getEngine().getClient().setTransport(nullptr);
+}
+
+// SUITE 105 : Section 6 — Interface WakeWordConversation : visibilité immédiate des 7 transitions pilotées par événements
+void test_v0631_ui_immediate_event_transitions_and_banner_labels() {
+    std::cout << "\n[TEST SUITE 105] v0.6.3.1 : Section 6 — Visibilite immediate des 7 transitions UI pilotees par evenements" << std::endl;
+
+    WiFi.setConnected(true);
+    setMockMillisOffset(1700000000UL * 1000UL);
+
+    MockLiveTransport mockTransport;
+    VoiceKit vk;
+    VoiceKitConfig cfg;
+    cfg.provider = VoiceProviderType::GEMINI;
+    cfg.apiKey = "AIzaSyTestWakeConvV0631S105";
+    cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfg.wakeWordEngine = WakeWordEngineType::TEST;
+    cfg.enableWakeWordConversation = true;
+    cfg.wakeWordResumeDelayMs = 40;
+    cfg.vadSilenceDurationMs = 200;
+
+    std::vector<String> observedBanners;
+    auto recordBannerIfChanged = [&]() {
+        String current = String(vk.getWakeWordConversationBannerText());
+        if (observedBanners.empty() || observedBanners.back() != current) {
+            observedBanners.push_back(current);
+        }
+    };
+
+    vk.onWakeConvDetected([&](const String&, float, bool) { recordBannerIfChanged(); });
+    vk.onWakeConvConnecting([&]() { recordBannerIfChanged(); });
+    vk.onWakeConvReady([&]() { recordBannerIfChanged(); });
+    vk.onWakeConvListening([&]() { recordBannerIfChanged(); });
+    vk.onWakeConvSpeaking([&]() { recordBannerIfChanged(); });
+    vk.onWakeConvEnded([&](WakeWordSessionEndReason) { recordBannerIfChanged(); });
+    vk.onWakeConvReturnedToWake([&]() { recordBannerIfChanged(); });
+    vk.onWakeConvStateChanged([&](WakeWordConversationState) { recordBannerIfChanged(); });
+
+    TEST_ASSERT(vk.begin(cfg), "begin() reussi (Suite 105)");
+    vk.getEngine().getClient().setTransport(&mockTransport);
+    observedBanners.clear();
+
+    // 1. BONJOUR ESP DÉTECTÉ
+    vk.triggerTestWakeWord("Bonjour ESP");
+    vk.update(); // -> WAKE_DETECTED
+    TEST_ASSERT(String(vk.getWakeWordConversationBannerText()) == "BONJOUR ESP DÉTECTÉ",
+                "1. Transition UI : BONJOUR ESP DÉTECTÉ");
+
+    // 2. CONNEXION
+    vk.update(); // -> PREPARING_SESSION
+    vk.update(); // -> CONNECTING
+    TEST_ASSERT(String(vk.getWakeWordConversationBannerText()) == "CONNEXION",
+                "2. Transition UI : CONNEXION");
+
+    // 3. PRÊT — PARLEZ
+    vk.update(); // -> activate()
+    const char* setupJson = "{\"setupComplete\":{}}";
+    vk.getEngine().getClient().handleIncomingMessage(setupJson, strlen(setupJson));
+    vk.update(); // -> CONVERSATION_LISTENING (avant parole)
+    TEST_ASSERT(String(vk.getWakeWordConversationBannerText()) == "PRÊT — PARLEZ",
+                "3. Transition UI : PRÊT — PARLEZ");
+
+    // 4. ÉCOUTE (dès la détection d'activité vocale par le VAD, via événement réel USER_LISTENING)
+    int16_t loudChunk[AUDIO_CHUNK_SAMPLES];
+    for (size_t i = 0; i < AUDIO_CHUNK_SAMPLES; ++i) loudChunk[i] = 4000;
+    vk.getEngine().getStreamer().pushSimulatedChunk(loudChunk, AUDIO_CHUNK_SAMPLES);
+    advanceMockMillis(32);
+    vk.update();
+    vk.getEngine().getStreamer().pushSimulatedChunk(loudChunk, AUDIO_CHUNK_SAMPLES);
+    advanceMockMillis(32);
+    vk.update();
+    TEST_ASSERT(String(vk.getWakeWordConversationBannerText()) == "ÉCOUTE",
+                "4. Transition UI : ÉCOUTE (declenchee par evenement reel VAD)");
+
+    // Fin de parole + début de réponse
+    int16_t quietChunk[AUDIO_CHUNK_SAMPLES] = {0};
+    for (int i = 0; i < 8; ++i) {
+        vk.getEngine().getStreamer().pushSimulatedChunk(quietChunk, AUDIO_CHUNK_SAMPLES);
+        advanceMockMillis(32);
+        vk.update();
+    }
+
+    // 5. RÉPONSE
+    injectGeminiPcmAndDrain(vk.getEngine(), 4, true);
+    vk.update(); // -> CONVERSATION_SPEAKING
+    TEST_ASSERT(String(vk.getWakeWordConversationBannerText()) == "RÉPONSE",
+                "5. Transition UI : RÉPONSE");
+
+    // 6. FIN DE CONVERSATION
+    vk.requestEndWakeWordConversationAfterTurn();
+    drainVoicePlayback(vk.getEngine()); // -> ENDING_SESSION
+    TEST_ASSERT(String(vk.getWakeWordConversationBannerText()) == "FIN DE CONVERSATION",
+                "6. Transition UI : FIN DE CONVERSATION");
+
+    // 7. RETOUR EN ÉCOUTE
+    vk.update(); // -> RETURNING_TO_WAKE
+    TEST_ASSERT(String(vk.getWakeWordConversationBannerText()) == "RETOUR EN ÉCOUTE",
+                "7. Transition UI : RETOUR EN ÉCOUTE");
+
+    // Retour à WAKE_ARMED
+    advanceMockMillis(50);
+    vk.update(); // -> WAKE_ARMED
+    TEST_ASSERT(String(vk.getWakeWordConversationBannerText()) == "EN ATTENTE — « Bonjour ESP »",
+                "Retour a l'affichage WAKE_ARMED : EN ATTENTE — « Bonjour ESP »");
+
+    // Vérifier que les 7 bandeaux ont tous été captés dans l'ordre exact par les callbacks temps réel (sans délai arbitraire)
+    TEST_ASSERT(observedBanners.size() == 8, "Les 7 transitions + retour WAKE_ARMED ont toutes notifie l'UI en temps reel");
+    if (observedBanners.size() >= 7) {
+        TEST_ASSERT(observedBanners[0] == "BONJOUR ESP DÉTECTÉ", "Ordre UI [0] = BONJOUR ESP DÉTECTÉ");
+        TEST_ASSERT(observedBanners[1] == "CONNEXION", "Ordre UI [1] = CONNEXION");
+        TEST_ASSERT(observedBanners[2] == "PRÊT — PARLEZ", "Ordre UI [2] = PRÊT — PARLEZ");
+        TEST_ASSERT(observedBanners[3] == "ÉCOUTE", "Ordre UI [3] = ÉCOUTE");
+        TEST_ASSERT(observedBanners[4] == "RÉPONSE", "Ordre UI [4] = RÉPONSE");
+        TEST_ASSERT(observedBanners[5] == "FIN DE CONVERSATION", "Ordre UI [5] = FIN DE CONVERSATION");
+        TEST_ASSERT(observedBanners[6] == "RETOUR EN ÉCOUTE", "Ordre UI [6] = RETOUR EN ÉCOUTE");
+    }
+
+    vk.disableWakeWordConversation();
+    vk.getEngine().getClient().setTransport(nullptr);
+}
+
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.3    " << std::endl;
-    std::cout << "  Wake Word Driven Conversation — M5Stack CoreS3           " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.3.1  " << std::endl;
+    std::cout << "  Corrective de Stabilite et WakeNet Configurable — CoreS3 " << std::endl;
     std::cout << "  Architecture Multi-Fournisseurs (Gemini + OpenAI Realtime)" << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
     std::cout << "===========================================================" << std::endl;
@@ -6554,6 +7083,13 @@ int main() {
     test_v063_manual_stop_and_final_audio_samples_preservation();
     test_v063_wifi_loss_ws_disconnect_mic_failure_and_recovery();
     test_v063_lvgl_non_blocking_openai_provider_and_diagnostics();
+
+    // Nouvelles suites correctives VoiceKit v0.6.3.1 (Latence non bloquante, Concurrence micro, WakeNet configurable, UI)
+    test_v0631_latency_instrumentation_and_nonblocking_session_teardown();
+    test_v0631_audio_transitions_consolidation_and_mic_concurrency();
+    test_v0631_configurable_wakenet_model_and_missing_model_validation();
+    test_v0631_conversational_stability_and_turn_vs_session_distinction();
+    test_v0631_ui_immediate_event_transitions_and_banner_labels();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

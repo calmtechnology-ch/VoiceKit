@@ -49,7 +49,12 @@ public:
     // Cycle de vie réseau
     bool connect() override;
     void disconnect() override;
+    void requestDisconnect() override;
+    bool pollDisconnect() override;
+    bool isDisconnectPending() const override { return _transport ? _transport->isDisconnectPending() : false; }
     void tick() override;
+    uint32_t getLastWsProcessDurationUs() const override { return _lastWsProcessDurationUs; }
+    uint32_t getMaxWsProcessDurationUs() const override { return _maxWsProcessDurationUs; }
 
     // États
     bool isConnected() const override;
@@ -157,6 +162,12 @@ private:
     // Métriques (thread-safe entre websocket_task et loopTask)
     uint32_t _wsConnectStartTimeMs = 0;
     uint32_t _wsConnectDurationMs = 0;
+    uint32_t _lastWsProcessDurationUs = 0;
+    uint32_t _maxWsProcessDurationUs = 0;
+    void recordWsProcessDurationUs(uint32_t us) {
+        _lastWsProcessDurationUs = us;
+        if (us > _maxWsProcessDurationUs) _maxWsProcessDurationUs = us;
+    }
     uint32_t _setupStartTimeMs = 0;
     uint32_t _setupCompleteDurationMs = 0;
     uint32_t _connectAttempts = 0;

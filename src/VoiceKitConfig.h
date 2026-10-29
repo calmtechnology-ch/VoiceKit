@@ -442,7 +442,8 @@ struct VoiceKitConfig {
     // Fondation Wake Word locale (v0.6.2 / v0.6.2.1 — optionnelle, désactivée par défaut)
     bool enableWakeWord = false;                                    ///< Active le détecteur au démarrage si true
     WakeWordEngineType wakeWordEngine = WakeWordEngineType::WAKENET;///< Moteur ciblé (WAKENET par défaut, ou TEST)
-    String wakeWordPhrase = "Bonjour ESP";                          ///< Mot de réveil cible
+    String wakeWordPhrase = "Bonjour ESP";                          ///< Mot de réveil cible (libellé applicatif / moteur TEST)
+    String wakeWordModelName = "wn10_fr_bonjouresp";                ///< Modèle WakeNet installé en Flash (défaut : wn10_fr_bonjouresp)
     bool wakeWordAutoResume = true;                                 ///< Reprise automatique après fin de conversation/TTS
     uint32_t wakeWordResumeDelayMs = 250;                           ///< Délai d'extinction acoustique avant réarmement (ms)
     size_t wakeWordMaxFramesPerUpdate = 2;                          ///< Nombre max de trames PCM traitées par appel à update() (fluidité LVGL)

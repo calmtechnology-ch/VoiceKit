@@ -23,13 +23,26 @@ public:
     AudioHardwareStatus getLastAudioStatus() const { return _lastAudioStatus; }
     bool isFailed() const { return _lastAudioStatus == AudioHardwareStatus::PERMANENT_FAULT; }
     bool isMicCaptureReserved() const { return _micCaptureReserved; }
-    void releaseMicCaptureReservation() { _micCaptureReserved = false; }
+    const void* getMicOwner() const { return _micOwner; }
+    uint32_t getMicReservationFailureCount() const { return _micReservationFailures; }
+    void recordMicReservationFailure() { _micReservationFailures++; }
+    void resetMicReservationFailureCount() { _micReservationFailures = 0; }
+    void releaseMicCaptureReservation() {
+        _micCaptureReserved = false;
+        _micOwner = nullptr;
+    }
 
     /**
      * @brief Arbitrage matériel : Sécurise le bus I2S avant enregistrement micro.
      * Arrête et libère le haut-parleur pour éviter tout conflit matériel sur CoreS3.
+     * Garantit un propriétaire unique du microphone (v0.6.3.1).
      */
-    bool prepareMicCapture() {
+    bool prepareMicCapture(const void* owner = nullptr) {
+        if (owner != nullptr && _micCaptureReserved && _micOwner != nullptr && _micOwner != owner) {
+            _lastAudioStatus = AudioHardwareStatus::DEVICE_BUSY;
+            _micReservationFailures++;
+            return false;
+        }
         if (_audioOutput) {
             if (_audioOutput->isPlaying(0) > 0) {
                 _audioOutput->stop(0, AudioStopReason::NEW_TURN);
@@ -42,6 +55,7 @@ public:
             }
             if (_audioOutput->isPlaying(0) > 0) {
                 _lastAudioStatus = AudioHardwareStatus::DEVICE_BUSY;
+                _micReservationFailures++;
                 return false;
             }
             if (_audioOutput->isRunning()) {
@@ -49,6 +63,9 @@ public:
             }
         }
         _micCaptureReserved = true;
+        if (owner != nullptr) {
+            _micOwner = owner;
+        }
         _lastAudioStatus = AudioHardwareStatus::SUCCESS;
         return true;
     }
@@ -58,6 +75,9 @@ public:
      */
     bool restoreSpeakerAfterMic() {
         if (_audioInput) {
+            if (_audioInput->isRunning()) {
+                _audioInput->end();
+            }
             if (_audioInput->isRecording() != 0) {
 #if defined(ESP32) || defined(ARDUINO)
                 uint32_t t0 = millis();
@@ -70,11 +90,9 @@ public:
                 _lastAudioStatus = AudioHardwareStatus::DEVICE_BUSY;
                 return false;
             }
-            if (_audioInput->isRunning()) {
-                _audioInput->end();
-            }
         }
         _micCaptureReserved = false;
+        _micOwner = nullptr;
 
         if (_audioOutput && !_audioOutput->isRunning()) {
             if (!_audioOutput->begin()) {
@@ -89,6 +107,8 @@ public:
 
     void reset() {
         _micCaptureReserved = false;
+        _micOwner = nullptr;
+        _micReservationFailures = 0;
         _lastAudioStatus = AudioHardwareStatus::SUCCESS;
     }
 
@@ -98,4 +118,6 @@ private:
     IAudioInput* _audioInput = nullptr;
     AudioHardwareStatus _lastAudioStatus = AudioHardwareStatus::SUCCESS;
     bool _micCaptureReserved = false;
+    const void* _micOwner = nullptr;
+    uint32_t _micReservationFailures = 0;
 };

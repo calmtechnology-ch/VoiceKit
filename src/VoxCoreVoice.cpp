@@ -137,7 +137,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
 #endif
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.6.2.1 — Multi-Fournisseurs & Wake ");
+    Serial.println("  VoxCore VoiceKit v0.6.3.1 — Multi-Fournisseurs & Wake ");
     Serial.printf("  Fournisseur : %s | Mode Audio : %s | FastConnect : %s\n",
                   (_config.provider == VoiceProviderType::OPENAI) ? "OPENAI REALTIME" : "GEMINI LIVE",
                   (LiveAudioPlayer::getCompiledAudioMode() == 1) ? "MODE 1 (REACTIVE_CALLBACK)" : "MODE 2 (DEDICATED_AUDIO_TASK)",
@@ -196,11 +196,16 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         return false;
     }
 
-    // 4b. Liaison du gestionnaire Wake Word sur le streamer audio partagé (v0.6.2 / v0.6.2.1)
+    // 4b. Liaison du gestionnaire Wake Word sur le streamer audio partagé (v0.6.2 / v0.6.3.1)
     _wakeWordManager.begin(&_streamer);
     _wakeWordManager.setVoiceBusyCheckCallback([this]() {
         return this->isBusy() || this->isSpeaking() || _wakeWordConversationController.isSessionInProgress();
     });
+    if (!_config.wakeWordModelName.isEmpty()) {
+        _wakeWordManager.setWakeWordModelName(_config.wakeWordModelName);
+    } else {
+        _wakeWordManager.setWakeWordModelName("wn10_fr_bonjouresp");
+    }
     if (!_config.wakeWordPhrase.isEmpty()) {
         _wakeWordManager.setTargetWakeWord(_config.wakeWordPhrase);
     }

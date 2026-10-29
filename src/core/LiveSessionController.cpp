@@ -401,6 +401,7 @@ void LiveSessionController::transitionTo(LiveSessionState newState, const char* 
 
 bool LiveSessionController::activate() {
     if (!_provider) return false;
+    _deactivating = false;
 
     if (_provider->isConnected() && _provider->isSetupComplete()) {
         transitionTo(LiveSessionState::CONNECTED, "Session deja active");
@@ -424,24 +425,72 @@ bool LiveSessionController::activate() {
 }
 
 void LiveSessionController::deactivate() {
+    uint32_t t0Us = micros();
+    _deactivating = false;
     if (_provider) {
         _provider->disconnect();
     }
-    if (_player) {
+    if (_player && (_player->isPlaying() > 0 || _player->getBufferedSamples() > 0)) {
         _player->stop(AudioStopReason::USER_STOP);
     }
     _turnActive.store(false, std::memory_order_release);
     _turnCancelled.store(false, std::memory_order_release);
     transitionTo(LiveSessionState::DISCONNECTED, "Desactivation LIVE");
+    recordSessionStopDurationUs(micros() - t0Us);
+}
+
+void LiveSessionController::requestDeactivate() {
+    uint32_t t0Us = micros();
+    _deactivating = true;
+    if (_provider) {
+        _provider->requestDisconnect();
+    }
+    if (_player && (_player->isPlaying() > 0 || _player->getBufferedSamples() > 0)) {
+        _player->stop(AudioStopReason::USER_STOP);
+    }
+    _turnActive.store(false, std::memory_order_release);
+    _turnCancelled.store(false, std::memory_order_release);
+    recordSessionStopDurationUs(micros() - t0Us);
+}
+
+bool LiveSessionController::pollDeactivate() {
+    uint32_t t0Us = micros();
+    if (_provider && !_provider->pollDisconnect()) {
+        recordSessionStopDurationUs(micros() - t0Us);
+        return false;
+    }
+    _deactivating = false;
+    transitionTo(LiveSessionState::DISCONNECTED, "Desactivation LIVE");
+    recordSessionStopDurationUs(micros() - t0Us);
+    return true;
+}
+
+void LiveSessionController::abortTurnLocally() {
+    _turnCancelled.store(true, std::memory_order_release);
+    _turnActive.store(false, std::memory_order_release);
+    _turnCompletedLogged = true;
+    if (_player && (_player->isPlaying() > 0 || _player->getBufferedSamples() > 0)) {
+        _player->stop(AudioStopReason::USER_STOP);
+    }
+    if (_state != LiveSessionState::DISCONNECTED && _state != LiveSessionState::ERROR) {
+        transitionTo(LiveSessionState::CONNECTED, "Cloture locale avant fin session");
+    }
 }
 
 void LiveSessionController::tick() {
+    uint32_t t0Us = micros();
     const uint32_t now = millis();
+
+    if (_deactivating) {
+        recordTickDurationUs(micros() - t0Us);
+        return;
+    }
 
     if (_state == LiveSessionState::RECONNECTING) {
         // Optimisation v0.5.2 : Ne lancer une reconnexion que si le réseau est opérationnel
         if (!isNetworkReady()) {
             _lastReconnectAttemptMs = now;
+            recordTickDurationUs(micros() - t0Us);
             return;
         }
 
@@ -461,6 +510,7 @@ void LiveSessionController::tick() {
             }
         }
     }
+    recordTickDurationUs(micros() - t0Us);
 }
 
 bool LiveSessionController::sendTextMessage(const String& text) {

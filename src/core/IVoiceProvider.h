@@ -55,9 +55,22 @@ public:
     virtual void disconnect() = 0;
 
     /**
+     * @brief Déconnexion non bloquante en deux phases (v0.6.3.1).
+     */
+    virtual void requestDisconnect() { disconnect(); }
+    virtual bool pollDisconnect() { return true; }
+    virtual bool isDisconnectPending() const { return false; }
+
+    /**
      * @brief Traitement périodique à appeler dans loop() / update().
      */
     virtual void tick() = 0;
+
+    /**
+     * @brief Instrumentation des traitements WebSocket (v0.6.3.1).
+     */
+    virtual uint32_t getLastWsProcessDurationUs() const { return 0; }
+    virtual uint32_t getMaxWsProcessDurationUs() const { return 0; }
 
     /**
      * @brief Indique si la connexion réseau est actuellement établie.

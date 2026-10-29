@@ -7,6 +7,46 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.3.1] - 2026-10-29 (Corrective de stabilité et WakeNet configurable — M5Stack CoreS3)
+
+### 1. Correction Prioritaire — Latence de `voice.update()` & Transitions Non Bloquantes
+- **Identification de la Cause Racine du Pic `voice.update() = 582 701 µs` (`controller.update() = 582 454 µs`)** :
+  - L'analyse du désassemblage de `libesp_websocket_client.a` (ESP-IDF v4.4) démontre que `esp_websocket_client_stop()` place `client->run = 0` puis bloque de manière synchrone sur `xEventGroupWaitBits(client->status_bits, STOPPED_BIT, pdFALSE, pdTRUE, portMAX_DELAY)` tant que la tâche interne `websocket_task` est bloquée dans `esp_transport_poll_read(1000)` (`select()` avec timeout de 1 000 ms).
+  - En outre, dans `ENDING_SESSION`, `_returnToWakeStartMs` était initialisé avec le timestamp capturé *avant* l'appel à `_session->deactivate()`, ce qui faisait que `582 ms >= 250 ms` court-circuitait la garde acoustique de `250 ms` et l'affichage de `RETOUR EN ÉCOUTE` dès le tick suivant.
+- **Arrêt WebSocket Non Bloquant en Deux Phases (`EspWebSocketTransport`, `IVoiceProvider`, `LiveSessionController`)** :
+  - Ajout de `requestDisconnect()`, `pollDisconnect()` et `isDisconnectPending()` sur `ILiveTransport` / `EspWebSocketTransport`, propagés à `IVoiceProvider`, `GeminiVoiceProvider`, `GeminiLiveClient`, `OpenAIRealtimeClient` et `LiveSessionController` (`requestDeactivate()`, `pollDeactivate()`, `isDeactivating()`).
+  - Phase 1 (`requestDisconnect()`) : signale l'arrêt à `websocket_task` en $< 2\text{ µs}$ sans attente bloquante.
+  - Phase 2 (`pollDisconnect()`) : interroge `STOPPED_BIT` avec un délai de `0` tick à chaque appel `voice.update()` et détruit le client en $< 100\text{ µs}$ dès que `websocket_task` est sortie de `poll_read`, **sans créer aucune tâche FreeRTOS supplémentaire**.
+  - Ancrage de `_returnToWakeStartMs` sur l'horloge système *après* achèvement effectif de la désactivation, préservant systématiquement la garde acoustique de `250 ms` et la visibilité de `RETOUR EN ÉCOUTE`.
+- **Optimisation des Transitions Microphone et de Fermeture de Session** :
+  - Séparation de la détection acoustique `WakeNet::detect()` (tick $N$, avec signalement asynchrone immédiat `requestStopLocalCaptureAsync()`) et de la finalisation `ensureCaptureStopped()` (tick $N+1$ dans `WAKE_DETECTED`).
+  - Dans `LiveAudioStreamer::stopMicHardware()` et `HardwareManager::restoreSpeakerAfterMic()`, appel de `_audioInput->end()` avant la boucle de vérification `isRecording() != 0` et suppression du `delay(5)` redondant.
+  - Ajout de `ConversationController::abortTurnForSessionClose()` / `LiveSessionController::abortTurnLocally()` pour éviter l'émission d'une trame WebSocket `sendInterruption()` inutile juste avant la fermeture de la session.
+  - Dans `LiveSessionController::deactivate()` et `requestDeactivate()`, `_player->stop()` n'est invoqué que si le lecteur audio est réellement actif ou contient des échantillons en tampon.
+
+### 2. Consolidation des Transitions Audio & Propriétaire Unique du Microphone
+- **Suivi Explicite du Propriétaire Unique (`HardwareManager`)** :
+  - Ajout du suivi du propriétaire courant (`_micOwner`, `getMicOwner()`) dans `HardwareManager::prepareMicCapture(owner)` et du compteur d'échecs de réservation (`getMicReservationFailureCount()`, `recordMicReservationFailure()`).
+  - Garantie sur tout le cycle `WAKE_ARMED -> WAKE_DETECTED -> PREPARING_SESSION -> CONNECTING -> CONVERSATION_LISTENING -> CONVERSATION_SPEAKING -> ENDING_SESSION -> RETURNING_TO_WAKE -> WAKE_ARMED` : un seul propriétaire du microphone, aucun double démarrage I2S, aucune reprise WakeNet pendant la conversation, aucune fermeture prématurée du lecteur audio, aucun WebSocket résiduel après une session terminée, et préservation intégrale des protections de `WakeWordAudioBridge` v0.6.2.1.
+
+### 3. Sélection Configurable du Modèle WakeNet & Vérification à 4 Niveaux
+- **Configuration Explicite du Modèle (`VoiceKitConfig`, `WakeNetEngine`, `WakeWordManager`)** :
+  - Conservation obligatoire de `config.wakeWordPhrase = "Bonjour ESP"` et de `config.wakeWordModelName = "wn10_fr_bonjouresp"` comme valeurs par défaut.
+  - Ajout de `setWakeWordModelName(const String&)`, `getWakeWordModelName()`, `getResolvedWakeWordModelName()` et `isWakeWordPhraseConsistentWithModel()` sur `WakeWordManager`, `VoxCoreVoice` et `VoiceKit`.
+  - Vérification stricte en 4 étapes avant toute activation dans `WakeWordManager::enable(true)` : (1) support WakeNet compilé, (2) présence effective du modèle sélectionné dans la partition Flash `srmodels`, (3) initialisation du modèle, (4) reconnaissance acoustique réellement active.
+  - Aucun modèle fictif ajouté, aucune supposition qu'une modification de `wakeWordPhrase` entraîne l'apprentissage d'une nouvelle phrase acoustique, aucun remplacement implicite d'un modèle absent par le moteur `TEST`, et extensibilité conservée pour un futur moteur `microWakeWord` (`IWakeWordEngine`).
+
+### 4. Diagnostics Enrichis Non Bloquants & Interface `WakeWordConversation`
+- **Instrumentation Séparée par Sous-Système (`WakeWordConversationMetrics`)** :
+  - Durée moyenne, maximale et nombre d'appels de `voice.update()` (`avgVoiceUpdateDurationUs`, `maxVoiceUpdateDurationUs`, `voiceUpdateCallCount`).
+  - Durées maximales séparées de `WakeWordConversationController::update()`, des transitions d'état (`maxStateTransitionDurationUs`), de `WakeWordManager::update()`, de `LiveSessionController::tick()`, des traitements WebSocket (`maxWsProcessDurationUs`), des transitions microphone (`maxMicTransitionDurationUs`), de l'arrêt de session (`maxSessionStopDurationUs`) et de la réactivation WakeNet (`maxWakeReactivationDurationUs`).
+  - Compteurs de sessions réussies (`successfulSessionCount`), de reprises après erreur (`recoveryCount`), d'échecs de réservation microphone (`micReservationFailures`), de saturations (`wakeQueueSaturations`) et de pertes de trames Wake Word (`wakeFramesDropped`).
+- **Interface `WakeWordConversation` Pilotée par Événements Réels** :
+  - Ajout de `getUiTransitionBannerText()` / `getWakeWordConversationBannerText()` et émission immédiate de `USER_LISTENING` dès la première trame de parole confirmée par le VAD local, rendant immédiatement visibles les 7 transitions requises (`BONJOUR ESP DÉTECTÉ`, `CONNEXION`, `PRÊT — PARLEZ`, `ÉCOUTE`, `RÉPONSE`, `FIN DE CONVERSATION`, `RETOUR EN ÉCOUTE`) sans aucun délai arbitraire.
+- **5 Nouvelles Suites de Tests Unitaires Correctifs (Suites 101 à 105)** : **2 100 validations réussies avec 0 échec** sur 105 suites.
+
+---
+
 ## [0.6.3] - 2026-10-29 (Wake Word Driven Conversation — Conversation vocale mains libres déclenchée par « Bonjour ESP »)
 
 ### Nouveau Composant Réutilisable `WakeWordConversationController` (`src/core/WakeWordConversationController.h/.cpp`)

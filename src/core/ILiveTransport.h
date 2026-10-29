@@ -20,6 +20,12 @@ public:
 
     virtual bool connect(const char* uri, const char* certPem = nullptr, const char* extraHeaders = nullptr) = 0;
     virtual void disconnect() = 0;
+    // Déconnexion non bloquante en deux phases (v0.6.3.1 — élimine le blocage select() 1000 ms sur loopTask)
+    virtual void requestDisconnect() { disconnect(); }
+    virtual bool pollDisconnect() { return true; }
+    virtual bool isDisconnectPending() const { return false; }
+    virtual uint32_t getLastDisconnectDurationUs() const { return 0; }
+    virtual uint32_t getMaxDisconnectDurationUs() const { return 0; }
     virtual bool isConnected() const = 0;
     virtual bool send(const char* data, size_t len) = 0;
     virtual void setHandlers(ConnectHandler onConnect, DisconnectHandler onDisconnect, 

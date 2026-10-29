@@ -10,6 +10,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
+#include <freertos/event_groups.h>
 
 // =============================================================================
 // EspWebSocketTransport : Implémentation du transport WebSocket natif ESP32
@@ -96,21 +97,114 @@ public:
     }
 
     void disconnect() override {
+        uint32_t t0Us = micros();
         if (_client) {
-            esp_websocket_client_stop(_client);
+            uint8_t* raw = reinterpret_cast<uint8_t*>(_client);
+            EventGroupHandle_t statusBits = *reinterpret_cast<EventGroupHandle_t*>(raw + 68);
+            bool alreadyStopped = false;
+            if (_disconnectPending && statusBits != nullptr) {
+                EventBits_t bits = xEventGroupWaitBits(statusBits, 1, pdFALSE, pdTRUE, 0);
+                if ((bits & 1) != 0) {
+                    alreadyStopped = true;
+                    *reinterpret_cast<int32_t*>(raw + 20) = 0; // WEBSOCKET_STATE_UNKNOW
+                }
+            }
+            if (!alreadyStopped) {
+                esp_websocket_client_stop(_client);
+            }
             esp_websocket_client_destroy(_client);
             _client = nullptr;
         }
+        _disconnectPending = false;
         _connected = false;
         _rxAccum.clear();
+        recordDisconnectStepUs(micros() - t0Us);
     }
 
+    // Déconnexion non bloquante v0.6.3.1 :
+    // Dans ESP-IDF v4.4, esp_websocket_client_stop() met client->run = false (offset 64)
+    // puis bloque sur xEventGroupWaitBits(client->status_bits [offset 68], STOPPED_BIT [1], portMAX_DELAY)
+    // pendant que websocket_task est bloquée dans esp_transport_poll_read(1000 ms), ce qui gelait
+    // loopTask jusqu'à ~582 ms lors de ENDING_SESSION.
+    // requestDisconnect() abaisse client->run = false immédiatement (< 2 µs) et pollDisconnect()
+    // vérifie STOPPED_BIT sans attente (0 tick) à chaque cycle update(), puis détruit le client
+    // dès que websocket_task a quitté sa boucle (~40 µs), sans aucune nouvelle tâche FreeRTOS.
+    void requestDisconnect() override {
+        uint32_t t0Us = micros();
+        _connected = false;
+        _rxAccum.clear();
+        if (!_client) {
+            _disconnectPending = false;
+            recordDisconnectStepUs(micros() - t0Us);
+            return;
+        }
+        if (!_disconnectPending) {
+            _disconnectPending = true;
+            _disconnectReqStartMs = millis();
+            uint8_t* raw = reinterpret_cast<uint8_t*>(_client);
+            // Offset 64 dans struct esp_websocket_client (ESP-IDF v4.4 esp32s3) : bool run
+            if (raw[64] != 0) {
+                raw[64] = 0;
+            }
+        }
+        recordDisconnectStepUs(micros() - t0Us);
+    }
+
+    bool pollDisconnect() override {
+        if (!_client) {
+            _disconnectPending = false;
+            return true;
+        }
+        uint32_t t0Us = micros();
+        if (!_disconnectPending) {
+            requestDisconnect();
+        }
+        uint8_t* raw = reinterpret_cast<uint8_t*>(_client);
+        // Offset 68 dans struct esp_websocket_client (ESP-IDF v4.4 esp32s3) : EventGroupHandle_t status_bits
+        EventGroupHandle_t statusBits = *reinterpret_cast<EventGroupHandle_t*>(raw + 68);
+        if (statusBits != nullptr) {
+            EventBits_t bits = xEventGroupWaitBits(statusBits, 1, pdFALSE, pdTRUE, 0);
+            if ((bits & 1) == 0) {
+                if (millis() - _disconnectReqStartMs < 1500) {
+                    recordDisconnectStepUs(micros() - t0Us);
+                    return false;
+                }
+                // Sécurité : si le délai maximal de poll (1000 ms + marge) est dépassé, arrêt complet
+                esp_websocket_client_stop(_client);
+                esp_websocket_client_destroy(_client);
+                _client = nullptr;
+                _disconnectPending = false;
+                recordDisconnectStepUs(micros() - t0Us);
+                return true;
+            }
+            // websocket_task est formellement arrêtée (STOPPED_BIT = 1 et client->run = 0).
+            // Offset 20 : state = WEBSOCKET_STATE_UNKNOW (0).
+            *reinterpret_cast<int32_t*>(raw + 20) = 0;
+        } else {
+            esp_websocket_client_stop(_client);
+        }
+        // Comme client->run == 0, esp_websocket_client_destroy() ne rappelle pas esp_websocket_client_stop()
+        // et libère immédiatement le transport TLS, les tampons et la mémoire sans aucun blocage.
+        esp_websocket_client_destroy(_client);
+        _client = nullptr;
+        _disconnectPending = false;
+        recordDisconnectStepUs(micros() - t0Us);
+        return true;
+    }
+
+    bool isDisconnectPending() const override { return _disconnectPending; }
+    uint32_t getLastDisconnectDurationUs() const override { return _lastDisconnectStepUs; }
+    uint32_t getMaxDisconnectDurationUs() const override { return _maxDisconnectStepUs; }
+
     void tick() override {
-        // Le client esp_websocket gère ses événements dans sa tâche FreeRTOS dédiée
+        // Si une déconnexion asynchrone est en cours, la faire progresser sans bloquer
+        if (_disconnectPending) {
+            pollDisconnect();
+        }
     }
 
     bool isConnected() const override {
-        return _client && esp_websocket_client_is_connected(_client);
+        return !_disconnectPending && _client && esp_websocket_client_is_connected(_client);
     }
 
     bool send(const char* data, size_t len) override {
@@ -219,8 +313,19 @@ private:
 
     esp_websocket_client_handle_t _client = nullptr;
     bool _connected = false;
+    bool _disconnectPending = false;
+    uint32_t _disconnectReqStartMs = 0;
+    uint32_t _lastDisconnectStepUs = 0;
+    uint32_t _maxDisconnectStepUs = 0;
     SemaphoreHandle_t _sendMutex = nullptr;
     std::string _rxAccum;
+
+    void recordDisconnectStepUs(uint32_t us) {
+        _lastDisconnectStepUs = us;
+        if (us > _maxDisconnectStepUs) {
+            _maxDisconnectStepUs = us;
+        }
+    }
 
     uint8_t _handshakeTaskPrio = DEFAULT_HANDSHAKE_TASK_PRIO;
     uint8_t _steadyTaskPrio = DEFAULT_STEADY_TASK_PRIO;

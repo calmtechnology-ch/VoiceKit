@@ -8,18 +8,18 @@
 #endif
 
 // =============================================================================
-// VoiceKit v0.6.3 — Exemple WakeWordConversation (M5Stack CoreS3, M5GFX pur)
+// VoiceKit v0.6.3.1 — Exemple WakeWordConversation (M5Stack CoreS3, M5GFX pur)
 //
 // Cycle complet mains libres :
 //   1. WakeNet écoute localement « Bonjour ESP » (WAKE_ARMED)
-//   2. Détection acoustique confirmée (WAKE_DETECTED)
+//   2. Détection acoustique confirmée (WAKE_DETECTED : BONJOUR ESP DÉTECTÉ)
 //   3. Suspension de WakeNet et libération contrôlée du microphone (PREPARING_SESSION)
-//   4. Connexion au fournisseur vocal configuré : Gemini Live ou OpenAI (CONNECTING)
+//   4. Connexion au fournisseur vocal configuré : Gemini Live ou OpenAI (CONNECTING : CONNEXION)
 //   5. Activation automatique de la conversation (CONVERSATION_LISTENING : PRÊT — PARLEZ)
-//   6. Échanges vocaux bidirectionnels multi-tours (ÉCOUTE <-> RÉPONSE VOCALE)
+//   6. Échanges vocaux bidirectionnels multi-tours (ÉCOUTE <-> RÉPONSE)
 //   7. Détection de fin de session (silence 30 s, commande vocale finale, ou STOP manuel)
-//   8. Arrêt complet et libération des ressources réseau/audio (ENDING_SESSION)
-//   9. Réactivation de WakeNet (RETURNING_TO_WAKE)
+//   8. Arrêt complet non bloquant et libération des ressources réseau/audio (ENDING_SESSION : FIN DE CONVERSATION)
+//   9. Réactivation de WakeNet (RETURNING_TO_WAKE : RETOUR EN ÉCOUTE)
 //  10. Retour à l'état WAKE_ARMED, répétable sans redémarrage.
 // =============================================================================
 
@@ -80,7 +80,7 @@ static void drawInterface() {
     const WakeWordConversationMetrics& m = voice.getWakeWordConversationMetrics();
     const WakeWordConversationController& ctrl = voice.getWakeWordConversationController();
     const bool simulatedEngine = voice.isWakeWordSimulated();
-    const char* statusLabel = voice.getWakeWordConversationStatusText();
+    const char* statusLabel = voice.getWakeWordConversationBannerText();
     const uint16_t bannerCol = getBannerColor(state, ctrl.hasUserSpokenInTurn());
 
     // 1. En-tête : Titre + badge d'authenticité acoustique (ne jamais confondre TEST et WAKENET)
@@ -88,7 +88,7 @@ static void drawInterface() {
     canvas.setTextColor(TFT_WHITE, 0x0000);
     canvas.setTextDatum(middle_left);
     canvas.setFont(&fonts::Font2);
-    canvas.drawString("VoiceKit v0.6.3 - WakeConv", 6, 12);
+    canvas.drawString("VoiceKit v0.6.3.1 - WakeConv", 6, 12);
 
     canvas.setTextDatum(middle_right);
     if (simulatedEngine) {
@@ -194,66 +194,75 @@ void setup() {
     vcfg.volume = 75;
     vcfg.language = "fr-FR";
 
-    // Activation du mode Wake Word Conversation (v0.6.3) avec WakeNet « Bonjour ESP »
+    // Activation du mode Wake Word Conversation (v0.6.3.1) avec WakeNet « Bonjour ESP »
     vcfg.wakeWordEngine = WakeWordEngineType::WAKENET;
     vcfg.wakeWordPhrase = "Bonjour ESP";
+    vcfg.wakeWordModelName = "wn10_fr_bonjouresp";
     vcfg.enableWakeWordConversation = true;
     vcfg.wakeConversationSilenceTimeoutMs = 30000;      // 30 s d'inactivité par défaut
     vcfg.wakeConversationMaxSessionDurationMs = 180000; // 3 min max par session
     vcfg.wakeConversationVoiceStopEnabled = true;       // Fermeture vocale (« Au revoir »)
     vcfg.wakeConversationDisconnectAfterSession = true; // Libération réseau entre sessions
 
-    // Callbacks applicatifs (Section 7 — tous exécutés dans la tâche principale)
-    voice.onWakeConvDetected([](const String& word, float, bool isSim) {
+    auto redrawImmediately = []() {
+        drawInterface();
+        gUiDirty = false;
+        gLastUiRedrawMs = millis();
+    };
+
+    // Callbacks applicatifs (Section 6 & 7 — tous exécutés depuis les événements réels du contrôleur)
+    voice.onWakeConvDetected([redrawImmediately](const String& word, float, bool isSim) {
         gLastUserText = "";
         gLastAssistantText = "";
         gBannerSubText = isSim
             ? ("Declenchement SIMULE : " + word)
             : ("Detection ACOUSTIQUE : « " + word + " »");
-        gUiDirty = true;
+        redrawImmediately();
     });
 
-    voice.onWakeConvConnecting([]() {
+    voice.onWakeConvConnecting([redrawImmediately]() {
         gBannerSubText = (voice.getConfig().provider == VoiceProviderType::OPENAI)
             ? "Etablissement WebSocket OpenAI Realtime..."
             : "Etablissement WebSocket Gemini Live...";
-        gUiDirty = true;
+        redrawImmediately();
     });
 
-    voice.onWakeConvReady([]() {
+    voice.onWakeConvReady([redrawImmediately]() {
         gBannerSubText = "Session prete — Parlez librement";
-        gUiDirty = true;
+        redrawImmediately();
     });
 
-    voice.onWakeConvListening([]() {
-        gBannerSubText = "Ecoute active (dites « Au revoir » pour terminer)";
-        gUiDirty = true;
+    voice.onWakeConvListening([redrawImmediately]() {
+        gBannerSubText = voice.getWakeWordConversationController().hasUserSpokenInTurn()
+            ? "Parole en cours d'acquisition..."
+            : "Ecoute active (dites « Au revoir » pour terminer)";
+        redrawImmediately();
     });
 
-    voice.onWakeConvSpeaking([]() {
+    voice.onWakeConvSpeaking([redrawImmediately]() {
         gBannerSubText = "Restitution de la reponse vocale...";
-        gUiDirty = true;
+        redrawImmediately();
     });
 
-    voice.onWakeConvEnded([](WakeWordSessionEndReason reason) {
+    voice.onWakeConvEnded([redrawImmediately](WakeWordSessionEndReason reason) {
         gBannerSubText = String("Session terminee (") + wakeWordSessionEndReasonToString(reason) + ")";
-        gUiDirty = true;
+        redrawImmediately();
     });
 
-    voice.onWakeConvReturnedToWake([]() {
+    voice.onWakeConvReturnedToWake([redrawImmediately]() {
         gBannerSubText = voice.isWakeWordSimulated()
             ? "Mode TEST actif (non acoustique)"
             : "Dites « Bonjour ESP » pour parler";
-        gUiDirty = true;
+        redrawImmediately();
     });
 
-    voice.onWakeConvRecoverableError([](const String& err) {
+    voice.onWakeConvRecoverableError([redrawImmediately](const String& err) {
         gBannerSubText = err;
-        gUiDirty = true;
+        redrawImmediately();
     });
 
-    voice.onWakeConvStateChanged([](WakeWordConversationState) {
-        gUiDirty = true;
+    voice.onWakeConvStateChanged([redrawImmediately](WakeWordConversationState) {
+        redrawImmediately();
     });
 
     voice.onUserText([](const String& text, bool isFinal) {

@@ -170,6 +170,24 @@ void ConversationController::requestStop() {
     setState(VoiceState::READY);
 }
 
+void ConversationController::abortTurnForSessionClose() {
+    if (_streamer && _streamer->isStreaming()) {
+        _streamer->cancel();
+    }
+    if (_session) {
+        _session->abortTurnLocally();
+    }
+    if (_player) {
+        if (_player->isPlaying() > 0 || _player->getBufferedSamples() > 0) {
+            _player->stop(AudioStopReason::USER_STOP);
+        }
+        _player->setPlaybackAllowed(true);
+    }
+    _isTurnActive = false;
+    setState(VoiceState::STOPPED);
+    setState(VoiceState::READY);
+}
+
 void ConversationController::tick() {
     if (!_isTurnActive) return;
 

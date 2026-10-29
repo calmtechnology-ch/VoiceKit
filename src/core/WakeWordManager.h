@@ -108,9 +108,27 @@ public:
     IWakeWordEngine* getActiveEngine() const { return _activeEngine; }
     const char* getEngineName() const;
     const char* getModelName() const;
+    const char* getWakeWordModelName() const { return getModelName(); }
+    const char* getResolvedModelName() const;
+
+    /**
+     * @brief Sélectionne explicitement le modèle WakeNet installé (ex: "wn10_fr_bonjouresp" par défaut — v0.6.3.1).
+     *        Ne remplace jamais automatiquement un modèle indisponible par le moteur TEST.
+     */
+    bool setWakeWordModelName(const String& modelName);
 
     void setTargetWakeWord(const String& word);
     String getTargetWakeWord() const { return _targetWakeWord; }
+    bool isWakeWordPhraseConsistentWithModel() const;
+
+    void setDeferCaptureStopOnDetection(bool defer) { _deferCaptureStopOnDetection = defer; }
+    bool isDeferCaptureStopOnDetection() const { return _deferCaptureStopOnDetection; }
+    bool ensureCaptureStopped();
+
+    uint32_t getLastUpdateTotalDurationUs() const { return _metrics.lastUpdateTotalDurationUs; }
+    uint32_t getMaxUpdateTotalDurationUs() const { return _metrics.maxUpdateTotalDurationUs; }
+    uint32_t getLastReactivationDurationUs() const { return _metrics.lastReactivationDurationUs; }
+    uint32_t getMaxReactivationDurationUs() const { return _metrics.maxReactivationDurationUs; }
 
     void setAutoResumeAfterVoiceActivity(bool autoResume) { _autoResumeAfterVoice = autoResume; }
     bool isAutoResumeAfterVoiceActivity() const { return _autoResumeAfterVoice; }
@@ -255,6 +273,14 @@ private:
     bool startCaptureIfNeeded();
     bool stopCaptureIfNeeded();
     void refreshMemoryMetrics() const;
+    void recordUpdateTotalDurationUs(uint32_t us) {
+        _metrics.lastUpdateTotalDurationUs = us;
+        if (us > _metrics.maxUpdateTotalDurationUs) _metrics.maxUpdateTotalDurationUs = us;
+    }
+    void recordReactivationDurationUs(uint32_t us) {
+        _metrics.lastReactivationDurationUs = us;
+        if (us > _metrics.maxReactivationDurationUs) _metrics.maxReactivationDurationUs = us;
+    }
 
     LiveAudioStreamer* _streamer = nullptr;
     WakeWordAudioBridge _bridge;
@@ -269,11 +295,14 @@ private:
     std::atomic<bool> _enabled{false};
 
     String _targetWakeWord = "Bonjour ESP";
+    String _configuredModelName = "wn10_fr_bonjouresp";
     String _lastDetectedWord = "";
     String _lastError = "";
 
     bool _useLocalMicCapture = true;
     bool _localCaptureStartedByWake = false;
+    bool _deferCaptureStopOnDetection = false;
+    bool _deferredCaptureStopPending = false;
     bool _autoResumeAfterVoice = true;
     bool _voiceActivitySeenSinceSuspend = false;
     bool _wasVoiceBusy = false;

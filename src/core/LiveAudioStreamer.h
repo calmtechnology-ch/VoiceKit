@@ -108,6 +108,10 @@ public:
     // Capture locale hors ligne pour détection de mot de réveil (v0.6.2 — sans fournisseur réseau ni tâche TX)
     bool startLocalCapture();
     bool stopLocalCapture();
+    void requestStopLocalCaptureAsync();
+    uint32_t getLastMicTransitionDurationUs() const { return _lastMicTransitionDurationUs; }
+    uint32_t getMaxMicTransitionDurationUs() const { return _maxMicTransitionDurationUs; }
+    void resetMicTransitionMetrics() { _lastMicTransitionDurationUs = 0; _maxMicTransitionDurationUs = 0; }
     bool isLocalCapture() const { return _isLocalCapture; }
 
     // États & Métriques
@@ -243,6 +247,10 @@ public:
 
 
 private:
+    void recordMicTransitionDurationUs(uint32_t us) {
+        _lastMicTransitionDurationUs = us;
+        if (us > _maxMicTransitionDurationUs) _maxMicTransitionDurationUs = us;
+    }
     bool stopMicHardware();
     bool waitForTaskTermination(uint32_t timeoutMs);
     bool waitForTxTaskTermination(uint32_t timeoutMs);
@@ -256,6 +264,9 @@ private:
     std::unique_ptr<IVoiceProvider> _legacyAdapter;
     volatile bool _isStreaming = false;
     volatile bool _isLocalCapture = false;
+    volatile bool _localCaptureStopRequested = false;
+    volatile uint32_t _lastMicTransitionDurationUs = 0;
+    volatile uint32_t _maxMicTransitionDurationUs = 0;
     volatile bool _stopDrainRequested = false;
     bool _queueSaturated = false;
     uint32_t _startTimeMs = 0;

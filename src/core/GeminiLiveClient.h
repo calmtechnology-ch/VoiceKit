@@ -73,9 +73,14 @@ public:
 
     // Déconnexion propre
     void disconnect();
+    void requestDisconnect();
+    bool pollDisconnect();
+    bool isDisconnectPending() const { return _transport ? _transport->isDisconnectPending() : false; }
 
     // Traitement périodique (dépilage événements, maintien)
     void tick();
+    uint32_t getLastWsProcessDurationUs() const { return _lastWsProcessDurationUs; }
+    uint32_t getMaxWsProcessDurationUs() const { return _maxWsProcessDurationUs; }
 
     // Signalisation du début d'activité vocale utilisateur (appui PARLER)
     bool sendActivityStart();
@@ -229,6 +234,12 @@ private:
     // Métriques temporelles et saturations d'émission (v0.2.1.1 - Correction A)
     uint32_t _lastSendDurationUs = 0;
     uint32_t _maxSendDurationUs = 0;
+    uint32_t _lastWsProcessDurationUs = 0;
+    uint32_t _maxWsProcessDurationUs = 0;
+    void recordWsProcessDurationUs(uint32_t us) {
+        _lastWsProcessDurationUs = us;
+        if (us > _maxWsProcessDurationUs) _maxWsProcessDurationUs = us;
+    }
     uint32_t _sendsOver32msCount = 0;
     uint32_t _sendsOver100msCount = 0;
     uint32_t _sendRefusedCount = 0;

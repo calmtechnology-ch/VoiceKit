@@ -157,17 +157,45 @@ bool GeminiLiveClient::connect() {
 }
 
 void GeminiLiveClient::disconnect() {
+    uint32_t t0Us = micros();
     if (_transport) {
         _transport->disconnect();
     }
     _connected.store(false, std::memory_order_release);
     _setupComplete.store(false, std::memory_order_release);
+    recordWsProcessDurationUs(micros() - t0Us);
+}
+
+void GeminiLiveClient::requestDisconnect() {
+    uint32_t t0Us = micros();
+    if (_transport) {
+        _transport->requestDisconnect();
+    }
+    _connected.store(false, std::memory_order_release);
+    _setupComplete.store(false, std::memory_order_release);
+    recordWsProcessDurationUs(micros() - t0Us);
+}
+
+bool GeminiLiveClient::pollDisconnect() {
+    uint32_t t0Us = micros();
+    bool done = true;
+    if (_transport) {
+        done = _transport->pollDisconnect();
+    }
+    if (done) {
+        _connected.store(false, std::memory_order_release);
+        _setupComplete.store(false, std::memory_order_release);
+    }
+    recordWsProcessDurationUs(micros() - t0Us);
+    return done;
 }
 
 void GeminiLiveClient::tick() {
+    uint32_t t0Us = micros();
     if (_transport) {
         _transport->tick();
     }
+    recordWsProcessDurationUs(micros() - t0Us);
 }
 
 bool GeminiLiveClient::isConnected() const {

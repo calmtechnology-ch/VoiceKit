@@ -32,8 +32,28 @@ void GeminiVoiceProvider::disconnect() {
     if (_client) _client->disconnect();
 }
 
+void GeminiVoiceProvider::requestDisconnect() {
+    if (_client) _client->requestDisconnect();
+}
+
+bool GeminiVoiceProvider::pollDisconnect() {
+    return _client ? _client->pollDisconnect() : true;
+}
+
+bool GeminiVoiceProvider::isDisconnectPending() const {
+    return _client ? _client->isDisconnectPending() : false;
+}
+
 void GeminiVoiceProvider::tick() {
     if (_client) _client->tick();
+}
+
+uint32_t GeminiVoiceProvider::getLastWsProcessDurationUs() const {
+    return _client ? _client->getLastWsProcessDurationUs() : 0;
+}
+
+uint32_t GeminiVoiceProvider::getMaxWsProcessDurationUs() const {
+    return _client ? _client->getMaxWsProcessDurationUs() : 0;
 }
 
 bool GeminiVoiceProvider::isConnected() const {

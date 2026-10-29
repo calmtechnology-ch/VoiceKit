@@ -118,6 +118,7 @@ struct WakeWordConversationMetrics {
 
     // Compteurs de session et d'événements (Section 8 & 9)
     uint32_t sessionCount = 0;              // Nombre de sessions conversationnelles ouvertes
+    uint32_t successfulSessionCount = 0;    // Nombre de sessions terminées normalement avec succès (v0.6.3.1)
     uint32_t detectionCount = 0;            // Nombre de détections Wake Word confirmées
     uint32_t realDetectionCount = 0;        // Nombre de détections acoustiques réelles (WakeNet)
     uint32_t simulatedDetectionCount = 0;   // Nombre de détections simulées (moteur TEST)
@@ -127,9 +128,12 @@ struct WakeWordConversationMetrics {
     uint32_t errorCount = 0;                // Nombre total d'erreurs récupérables
     uint32_t recoveryCount = 0;             // Nombre de réarmements réussis après erreur
 
-    // Compteurs de défaillances spécifiques (Section 9)
+    // Compteurs de défaillances et saturations spécifiques (Section 5 — v0.6.3.1)
     uint32_t micTransitionFailures = 0;     // Échecs de transition microphone (arrêt/démarrage)
+    uint32_t micReservationFailures = 0;    // Échecs de réservation propriétaire unique du microphone
     uint32_t networkFailures = 0;           // Échecs réseau (Wi-Fi / WebSocket / timeout)
+    uint32_t wakeQueueSaturations = 0;      // Saturations de la file Wake Word Audio Bridge
+    uint32_t wakeFramesDropped = 0;         // Pertes de trames Wake Word
 
     // Mémoire RAM interne et PSRAM (octets)
     uint32_t freeInternalHeap = 0;
@@ -137,11 +141,30 @@ struct WakeWordConversationMetrics {
     uint32_t freePsram = 0;
     uint32_t minFreePsram = 0;
 
-    // Temps d'exécution non bloquant (µs)
+    // Temps d'exécution non bloquant (µs) — Instrumentation détaillée par sous-système (Section 1 & 5 — v0.6.3.1)
     uint32_t lastVoiceUpdateDurationUs = 0;
+    uint32_t avgVoiceUpdateDurationUs = 0;
     uint32_t maxVoiceUpdateDurationUs = 0;
+    uint32_t voiceUpdateCallCount = 0;
+    uint64_t totalVoiceUpdateDurationUs = 0;
+
     uint32_t lastControllerUpdateDurationUs = 0;
     uint32_t maxControllerUpdateDurationUs = 0;
+    uint32_t lastStateTransitionDurationUs = 0;
+    uint32_t maxStateTransitionDurationUs = 0;
+
+    uint32_t lastWakeWordUpdateDurationUs = 0;
+    uint32_t maxWakeWordUpdateDurationUs = 0;
+    uint32_t lastSessionTickDurationUs = 0;
+    uint32_t maxSessionTickDurationUs = 0;
+    uint32_t lastWsProcessDurationUs = 0;
+    uint32_t maxWsProcessDurationUs = 0;
+    uint32_t lastMicTransitionDurationUs = 0;
+    uint32_t maxMicTransitionDurationUs = 0;
+    uint32_t lastSessionStopDurationUs = 0;
+    uint32_t maxSessionStopDurationUs = 0;
+    uint32_t lastWakeReactivationDurationUs = 0;
+    uint32_t maxWakeReactivationDurationUs = 0;
 };
 
 /**
@@ -287,12 +310,14 @@ public:
     bool isWaitingTurnResponse() const { return _waitingForResponse; }
     uint32_t getCurrentSessionTurns() const { return _currentSessionTurns; }
     const char* getDisplayStatusText() const;
+    const char* getUiTransitionBannerText() const;
 
     // --- Métriques & Diagnostics (Section 9) ---
     const WakeWordConversationMetrics& getMetrics() const { return _metrics; }
     void resetMetrics();
     void recordVoiceUpdateDurationUs(uint32_t durationUs);
     void refreshMemoryMetrics();
+    void syncSubsystemMetrics();
     void printDiagnostics() const;
 
     // --- File d'événements non bloquante (LVGL 9) ---

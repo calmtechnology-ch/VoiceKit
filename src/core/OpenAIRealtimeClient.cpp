@@ -236,18 +236,48 @@ bool OpenAIRealtimeClient::connect() {
 }
 
 void OpenAIRealtimeClient::disconnect() {
+    uint32_t t0Us = micros();
     if (_transport) {
         _transport->disconnect();
     }
     _connected.store(false, std::memory_order_release);
     _setupComplete.store(false, std::memory_order_release);
     _waitingForResponse.store(false, std::memory_order_release);
+    recordWsProcessDurationUs(micros() - t0Us);
+}
+
+void OpenAIRealtimeClient::requestDisconnect() {
+    uint32_t t0Us = micros();
+    if (_transport) {
+        _transport->requestDisconnect();
+    }
+    _connected.store(false, std::memory_order_release);
+    _setupComplete.store(false, std::memory_order_release);
+    _waitingForResponse.store(false, std::memory_order_release);
+    recordWsProcessDurationUs(micros() - t0Us);
+}
+
+bool OpenAIRealtimeClient::pollDisconnect() {
+    uint32_t t0Us = micros();
+    bool done = true;
+    if (_transport) {
+        done = _transport->pollDisconnect();
+    }
+    if (done) {
+        _connected.store(false, std::memory_order_release);
+        _setupComplete.store(false, std::memory_order_release);
+        _waitingForResponse.store(false, std::memory_order_release);
+    }
+    recordWsProcessDurationUs(micros() - t0Us);
+    return done;
 }
 
 void OpenAIRealtimeClient::tick() {
+    uint32_t t0Us = micros();
     if (_transport) {
         _transport->tick();
     }
+    recordWsProcessDurationUs(micros() - t0Us);
 }
 
 bool OpenAIRealtimeClient::isConnected() const {

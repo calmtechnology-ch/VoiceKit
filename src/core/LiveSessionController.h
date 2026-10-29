@@ -56,9 +56,26 @@ public:
     // Activation et desactivation du mode LIVE
     bool activate();
     void deactivate();
+    // Désactivation non bloquante en deux phases (v0.6.3.1)
+    void requestDeactivate();
+    bool pollDeactivate();
+    bool isDeactivating() const { return _deactivating; }
+    void abortTurnLocally();
 
     // Boucle de traitement principale
     void tick();
+
+    // Métriques de latence LiveSessionController & arrêt de session (v0.6.3.1)
+    uint32_t getLastTickDurationUs() const { return _lastTickDurationUs; }
+    uint32_t getMaxTickDurationUs() const { return _maxTickDurationUs; }
+    uint32_t getLastSessionStopDurationUs() const { return _lastSessionStopDurationUs; }
+    uint32_t getMaxSessionStopDurationUs() const { return _maxSessionStopDurationUs; }
+    void resetTimingMetrics() {
+        _lastTickDurationUs = 0;
+        _maxTickDurationUs = 0;
+        _lastSessionStopDurationUs = 0;
+        _maxSessionStopDurationUs = 0;
+    }
 
     // Envoi d'un message texte (mode TTS)
     bool sendTextMessage(const String& text);
@@ -178,4 +195,17 @@ private:
     NetworkCheckCallback _networkCheck;
 
     uint32_t _reconnectCount = 0;
+    bool _deactivating = false;
+    uint32_t _lastTickDurationUs = 0;
+    uint32_t _maxTickDurationUs = 0;
+    uint32_t _lastSessionStopDurationUs = 0;
+    uint32_t _maxSessionStopDurationUs = 0;
+    void recordTickDurationUs(uint32_t us) {
+        _lastTickDurationUs = us;
+        if (us > _maxTickDurationUs) _maxTickDurationUs = us;
+    }
+    void recordSessionStopDurationUs(uint32_t us) {
+        _lastSessionStopDurationUs = us;
+        if (us > _maxSessionStopDurationUs) _maxSessionStopDurationUs = us;
+    }
 };
