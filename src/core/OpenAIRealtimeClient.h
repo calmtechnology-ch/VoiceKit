@@ -111,6 +111,11 @@ public:
     bool isTurnCompleteBeforeLastPcm() const { return _turnCompleteBeforeLastPcm.load(std::memory_order_acquire); }
 
     // Diagnostics FreeRTOS & mémoire TLS (v0.6.1 — Correction B)
+    // Diagnostics JSON & parsing (v0.6.3.2.1 - Correction A)
+    uint32_t getJsonErrorCount() const { return _jsonErrorCount.load(std::memory_order_relaxed); }
+    const String& getLastParseErrorCategory() const { return _lastParseErrorCategory; }
+    void resetJsonErrorCount() { _jsonErrorCount.store(0, std::memory_order_relaxed); _lastParseErrorCategory = ""; }
+
     int8_t getWsTaskCore() const override { return _transport ? _transport->getTaskCore() : -1; }
     uint8_t getWsTaskPriority() const override { return _transport ? _transport->getTaskPriority() : 0; }
     uint8_t getWsHandshakeTaskPriority() const override { return _transport ? _transport->getHandshakeTaskPriority() : 1; }
@@ -139,6 +144,8 @@ private:
     String _systemInstruction;
     String _voiceDirectives;
     String _lastError;
+    std::atomic<uint32_t> _jsonErrorCount{0};
+    String _lastParseErrorCategory;
 
     bool _conversationMode = false;
     std::atomic<bool> _connected{false};

@@ -93,12 +93,16 @@ static void printPeriodicDiagnostics() {
     uint32_t avgUiUs = (s_uiRenderCount > 0) ? (uint32_t)(s_sumUiRenderDurUs / s_uiRenderCount) : 0;
 
     Serial.println("--------------------------------------------------------");
-    Serial.println("  [DIAGNOSTICS] OpenAIConversation v0.6.3.2");
-    Serial.printf("[DIAG][LOOP] voice.update() : Moyenne = %u us, Max = %u us (sur %llu cycles)\n",
+    Serial.println("  [DIAGNOSTICS] OpenAIConversation v0.6.3.2.1 (Corrective)");
+    Serial.printf("[DIAG][LOOP]   voice.update() : Moyenne = %u us, Max = %u us (sur %llu cycles)\n",
                   (unsigned)avgUpUs, (unsigned)s_maxUpdateDurUs, (unsigned long long)s_updateCount);
-    Serial.printf("[DIAG][UI]   Rendu graphique : Moyenne = %u us, Max = %u us (sur %llu cycles)\n",
+    Serial.printf("[DIAG][UI]     Rendu graphique : Moyenne = %u us, Max = %u us (sur %llu cycles)\n",
                   (unsigned)avgUiUs, (unsigned)s_maxUiRenderDurUs, (unsigned long long)s_uiRenderCount);
-    Serial.printf("[DIAG][MEM]  Heap libre : %u octets (min: %u) | PSRAM libre : %u octets (min: %u)\n",
+    Serial.printf("[DIAG][UI_SUB] Max elements : Orbe=%u us | Header=%u us | Etat=%u us | Vous=%u us | Asst=%u us | Btn=%u us\n",
+                  (unsigned)s_ui.getOrbMaxUs(), (unsigned)s_ui.getHeaderMaxUs(),
+                  (unsigned)s_ui.getStateTextMaxUs(), (unsigned)s_ui.getUserCardMaxUs(),
+                  (unsigned)s_ui.getAsstCardMaxUs(), (unsigned)s_ui.getMainBtnMaxUs());
+    Serial.printf("[DIAG][MEM]    Heap libre : %u octets (min: %u) | PSRAM libre : %u octets (min: %u)\n",
                   (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
                   (unsigned)ESP.getFreePsram(), (unsigned)ESP.getMinFreePsram());
     Serial.printf("[DIAG][STAT] Tours termines : %u | Stops : %u | Etat moteur : %s | Wi-Fi : %s (%d dBm)\n",
@@ -129,7 +133,7 @@ void setup() {
     delay(300);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.6.3.2 — Modern Voice UI Edition           ");
+    Serial.println("  VoiceKit v0.6.3.2.1 — Modern Voice UI Edition         ");
     Serial.println("  OpenAI Realtime Conversation (gpt-realtime-2.1-mini)  ");
     Serial.println("  M5Stack CoreS3 (320x240 M5GFX, ES7210 + AW88298)     ");
     Serial.println("========================================================");
@@ -269,6 +273,15 @@ void setup() {
     }
 
     Serial.println("[OpenAIConv] Demarrage initialise. Connexion Wi-Fi et session OpenAI en cours...");
+
+    // Reinitialisation des compteurs pour isoler les mesures du regime permanent
+    s_ui.resetPerformanceMetrics();
+    s_uiRenderCount = 0;
+    s_sumUiRenderDurUs = 0;
+    s_maxUiRenderDurUs = 0;
+    s_updateCount = 0;
+    s_sumUpdateDurUs = 0;
+    s_maxUpdateDurUs = 0;
 }
 
 // =============================================================================

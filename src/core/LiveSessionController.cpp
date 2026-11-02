@@ -81,15 +81,6 @@ void LiveSessionController::appendTranscriptionFragment(String& target, const St
         String toAppend = fragment.substring(bestOverlap);
         target += toAppend;
     } else {
-        char lastChar = target[targetLen - 1];
-        char firstChar = fragment[0];
-        bool needSpace = (lastChar != ' ' && firstChar != ' ' && 
-                          firstChar != '.' && firstChar != ',' && 
-                          firstChar != '!' && firstChar != '?' && 
-                          firstChar != ':' && firstChar != ';');
-        if (needSpace) {
-            target += ' ';
-        }
         target += fragment;
     }
 
@@ -103,7 +94,8 @@ void LiveSessionController::finishTurn() {
         _turnCompletedLogged = true;
 
         if (!_lastAssistantText.isEmpty()) {
-            Serial.printf("[GEMINI] %s\n", _lastAssistantText.c_str());
+            const char* providerTag = (_provider && _provider->getProviderType() == VoiceProviderType::OPENAI) ? "[OPENAI]" : "[GEMINI]";
+            Serial.printf("%s %s\n", providerTag, _lastAssistantText.c_str());
         }
 
         uint32_t pcmDecoded = getTurnDecodedSamples();
@@ -294,7 +286,7 @@ bool LiveSessionController::begin(IVoiceProvider* provider, void*, LiveAudioPlay
         _hasOutputTranscription = true;
         appendTranscriptionFragment(_lastAssistantText, text);
         if (_onOutputTranscription) {
-            _onOutputTranscription(text);
+            _onOutputTranscription(_lastAssistantText);
         }
     });
 
@@ -305,7 +297,7 @@ bool LiveSessionController::begin(IVoiceProvider* provider, void*, LiveAudioPlay
         if (!_hasOutputTranscription) {
             appendTranscriptionFragment(_lastAssistantText, text);
             if (_onOutputTranscription) {
-                _onOutputTranscription(text);
+                _onOutputTranscription(_lastAssistantText);
             }
         }
     });

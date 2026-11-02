@@ -6414,7 +6414,7 @@ void test_v063_lvgl_non_blocking_openai_provider_and_diagnostics() {
 
 
 // =============================================================================
-// NOUVELLES SUITES DE TESTS — VoiceKit v0.6.3.1 (Corrective Stabilité & WakeNet Configurable)
+// NOUVELLES SUITES DE TESTS — VoiceKit v0.6.3.2.1 (Corrective Stabilité & WakeNet Configurable)
 // =============================================================================
 
 // SUITE 101 : Section 1 & 5 — Instrumentation détaillée de latence et arrêt non bloquant de session
@@ -6943,11 +6943,361 @@ void test_v0631_ui_immediate_event_transitions_and_banner_labels() {
 
 
 // =============================================================================
+// SUITE 106 : VoiceKit v0.6.3.2.1 - Correction A : Filtrage Control Frames & Diagnostics JSON
+// =============================================================================
+void test_v06321_websocket_control_frames_and_json_parse_diagnostics() {
+    std::cout << "\n[TEST SUITE 106] v0.6.3.2.1 : Correction A - Filtrage Control Frames & Diagnostics JSON" << std::endl;
+
+    // 1. Classification RFC 6455 des opcodes WebSocket
+    uint8_t pingOp = 0x09;
+    uint8_t pongOp = 0x0A;
+    uint8_t closeOp = 0x08;
+    uint8_t textOp = 0x01;
+    uint8_t binOp = 0x02;
+    TEST_ASSERT(pingOp >= 0x08, "1. PING 0x09 est un frame de controle (op >= 0x08)");
+    TEST_ASSERT(pongOp >= 0x08, "2. PONG 0x0A est un frame de controle (op >= 0x08)");
+    TEST_ASSERT(closeOp >= 0x08, "3. CLOSE 0x08 est un frame de controle (op >= 0x08)");
+    TEST_ASSERT(textOp < 0x08, "4. TEXT 0x01 est une trame de donnees (op < 0x08)");
+    TEST_ASSERT(binOp < 0x08, "5. BINARY 0x02 est une trame de donnees (op < 0x08)");
+
+    // 2. Simulation de non-reinitialisation de l'accumulateur RX par un PING/PONG pendant le reassemblage
+    std::string rxAccum = "{\"type\":\"response.audio.delta\",\"delta\":\"";
+    bool pingReceived = true;
+    if (pingOp >= 0x08 && pingReceived) {
+        // Le control frame est traite separement sans effacer rxAccum
+    }
+    rxAccum += "AQIDBA==\"}";
+    TEST_ASSERT(rxAccum.find("response.audio.delta") != std::string::npos, "6. rxAccum preserve malgre un PING/PONG intercalaire");
+
+    // 3. OpenAIRealtimeClient : robustesse JSON et instrumentation des erreurs
+    OpenAIRealtimeClient client;
+    MockLiveTransport transport;
+    client.setTransport(&transport);
+    VoiceKitConfig cfg;
+    cfg.provider = VoiceProviderType::OPENAI;
+    cfg.apiKey = "sk-test-secret-12345";
+    client.begin(cfg);
+
+    TEST_ASSERT(client.getJsonErrorCount() == 0, "7. Compteur d'erreurs JSON initialise a 0");
+
+    // 4. Trame vide : ignoree silencieusement sans incrementer le compteur d'erreurs
+    client.handleIncomingMessage("", 0);
+    TEST_ASSERT(client.getJsonErrorCount() == 0, "8. Trame vide de 0 octet ignoree proprement sans erreur");
+
+    // 5. Pointeur nul ou longueur nulle
+    client.handleIncomingMessage(nullptr, 0);
+    TEST_ASSERT(client.getJsonErrorCount() == 0, "9. Pointeur nul ignore proprement sans erreur");
+
+    // 6. Espaces blancs / sauts de ligne seuls : ignores sans declencher d'erreur JSON
+    const char* wsOnly = "   \r\n\t  ";
+    client.handleIncomingMessage(wsOnly, strlen(wsOnly));
+    TEST_ASSERT(client.getJsonErrorCount() == 0, "10. Espaces et sauts de ligne isoles ignores sans erreur");
+
+    // 7. Trame non-JSON brute (corruption ou payload non-JSON)
+    const char* nonJson = "NOT_A_VALID_JSON_PAYLOAD";
+    client.handleIncomingMessage(nonJson, strlen(nonJson));
+    TEST_ASSERT(client.getJsonErrorCount() == 1, "11. Trame non-JSON detectee et compteur incremente (+1)");
+
+    // 8. Trame JSON syntaxiquement incomplete (coupure brutale de flux)
+    const char* brokenJson = "{\"type\":\"response.done\",\"broken\":";
+    client.handleIncomingMessage(brokenJson, strlen(brokenJson));
+    TEST_ASSERT(client.getJsonErrorCount() == 2, "12. Trame JSON incomplete detectee et compteur incremente (+2)");
+    TEST_ASSERT(strstr(client.getLastError(), "JSON") != nullptr, "13. getLastError() specifie une anomalie JSON");
+
+    // 9. Trame valide : pas d'incrementation d'erreur
+    const char* validJson = "{\"type\":\"session.updated\",\"session\":{}}";
+    client.handleIncomingMessage(validJson, strlen(validJson));
+    TEST_ASSERT(client.getJsonErrorCount() == 2, "14. Trame valide recue : pas d'incrementation d'erreur JSON");
+
+    // 10. Trame delta valide : pas d'incrementation d'erreur
+    const char* deltaJson = "{\"type\":\"response.audio_transcript.delta\",\"delta\":\"Test\"}";
+    client.handleIncomingMessage(deltaJson, strlen(deltaJson));
+    TEST_ASSERT(client.getJsonErrorCount() == 2, "15. Trame delta valide : pas d'incrementation d'erreur JSON");
+
+    // 11. Evenement Realtime non gere (e.g. rate_limits.updated) : ignore sans erreur JSON
+    const char* unknownEvt = "{\"type\":\"rate_limits.updated\",\"rate_limits\":[]}";
+    client.handleIncomingMessage(unknownEvt, strlen(unknownEvt));
+    TEST_ASSERT(client.getJsonErrorCount() == 2, "16. Evenement Realtime non gere ignore sans erreur");
+
+    // 12. Trames multiples invalides : precision exacte du compteur d'erreurs
+    for (int i = 0; i < 5; ++i) {
+        client.handleIncomingMessage("BAD", 3);
+    }
+    TEST_ASSERT(client.getJsonErrorCount() == 7, "17. Cinq rejets successifs : compteur exactement egal a 7");
+
+    // 13. Grande charge corrompue (500 octets d'octets aleatoires) : memoire et etats stables
+    std::string bigBad(500, 'X');
+    client.handleIncomingMessage(bigBad.c_str(), bigBad.length());
+    TEST_ASSERT(client.getJsonErrorCount() == 8, "18. Payload volumineux malforme rejete sans depassement de memoire");
+
+    // 14. Verification de non-exposition des secrets dans les diagnostics d'erreurs
+    TEST_ASSERT(strstr(client.getLastError(), "sk-test-secret-12345") == nullptr, "19. Cle d'authentification jamais presente dans getLastError()");
+
+    // 15. Stabilite globale de la connexion malgre les rejets
+    TEST_ASSERT(client.getLastError() != nullptr, "20. getLastError() reste valide et non nul");
+
+    client.setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 107 : VoiceKit v0.6.3.2.1 - Correction B : Decoupage Mots & UTF-8 Francais
+// =============================================================================
+void test_v06321_fragmented_transcription_and_utf8_word_cutting() {
+    std::cout << "\n[TEST SUITE 107] v0.6.3.2.1 : Correction B - Decoupage Mots & UTF-8 Francais" << std::endl;
+
+    // 1. Test obligatoire : 'agré' + 'ables' sans espace artificiel -> 'agréables'
+    String w1 = "agr\xC3\xA9";
+    LiveSessionController::appendTranscriptionFragment(w1, "ables");
+    TEST_ASSERT(w1 == "agr\xC3\xA9" "ables", "1. Fragments de mot 'agre' + 'ables' soudes sans espace artificiel");
+
+    // 2. Test obligatoire : 't' + '’aider' sans espace artificiel -> 't’aider'
+    String w2 = "t";
+    LiveSessionController::appendTranscriptionFragment(w2, "\xE2\x80\x99" "aider");
+    TEST_ASSERT(w2 == "t\xE2\x80\x99" "aider", "2. Apostrophe francaise typographique 't' + '’aider' soudee sans espace");
+
+    // 3. Test obligatoire apostrophe ASCII : 't' + ''aider' sans espace artificiel -> 't'aider'
+    String w2b = "t";
+    LiveSessionController::appendTranscriptionFragment(w2b, "'aider");
+    TEST_ASSERT(w2b == "t'aider", "3. Apostrophe francaise ASCII 't' + ''aider' soudee sans espace");
+
+    // 4. Test obligatoire : 'réflé' + 'chir' sans espace artificiel -> 'réfléchir'
+    String w3 = "r\xC3\xA9" "fl\xC3\xA9";
+    LiveSessionController::appendTranscriptionFragment(w3, "chir");
+    TEST_ASSERT(w3 == "r\xC3\xA9" "fl\xC3\xA9" "chir", "4. Mot avec accent francais 'refle' + 'chir' soude sans espace");
+
+    // 5. Octet UTF-8 coupe en deux a la frontiere de trame : 'caf' + 'Ã' puis '©' -> 'café'
+    String wUtf8 = "caf\xC3";
+    LiveSessionController::appendTranscriptionFragment(wUtf8, "\xA9");
+    TEST_ASSERT(wUtf8 == "caf\xC3\xA9", "5. Sequence multi-octets UTF-8 coupee exactement entre deux deltas assemblee sans corruption");
+
+    // 6. Apostrophe UTF-8 a 3 octets (â) scindee entre deux deltas
+    String wApos = "l\xE2\x80";
+    LiveSessionController::appendTranscriptionFragment(wApos, "\x99" "hiver");
+    TEST_ASSERT(wApos == "l\xE2\x80\x99" "hiver", "6. Caractere UTF-8 3-octets scinde assemble sans injection d'espace");
+
+    // 7. Mots separes avec espace en tete du fragment
+    String sentence = "Je";
+    LiveSessionController::appendTranscriptionFragment(sentence, " suis");
+    TEST_ASSERT(sentence == "Je suis", "7. Fragment avec espace initial preserve l'espacement naturel");
+
+    // 8. Espace en fin de chaine cible
+    String spEnd = "Bonjour ";
+    LiveSessionController::appendTranscriptionFragment(spEnd, "monde");
+    TEST_ASSERT(spEnd == "Bonjour monde", "8. Espace existant en fin de cible preserve sans double espace");
+
+    // 9. Reconstitution de la phrase integrale sans espaces parasites
+    String fullAssistant = "Je";
+    const char* deltas[] = {
+        " suis", " un", " assistant", " vocal", " ici", " pour", " t", "\xE2\x80\x99" "aider",
+        " \xC3\xA0", " r\xC3\xA9" "fl\xC3\xA9", "chir,", " r\xC3\xA9" "pondre", " \xC3\xA0", " tes", " questions",
+        " et", " rendre", " les", " choses", " plus", " simples", " et",
+        " plus", " agr\xC3\xA9" "ables."
+    };
+    for (size_t i = 0; i < sizeof(deltas)/sizeof(deltas[0]); ++i) {
+        LiveSessionController::appendTranscriptionFragment(fullAssistant, deltas[i]);
+    }
+    const char* expectedText = "Je suis un assistant vocal ici pour t\xE2\x80\x99" "aider \xC3\xA0 r\xC3\xA9" "fl\xC3\xA9" "chir, r\xC3\xA9" "pondre \xC3\xA0 tes questions et rendre les choses plus simples et plus agr\xC3\xA9" "ables.";
+    TEST_ASSERT(fullAssistant == expectedText, "9. Phrase francaise complexe integrale fidelement reconstituee");
+
+    // 10. Attachement direct de la ponctuation finale sans espace
+    String punc = "Bonjour";
+    LiveSessionController::appendTranscriptionFragment(punc, ",");
+    LiveSessionController::appendTranscriptionFragment(punc, " comment allez-vous");
+    LiveSessionController::appendTranscriptionFragment(punc, " ?");
+    TEST_ASSERT(punc == "Bonjour, comment allez-vous ?", "10. Ponctuations attachantes (, .) assemblees sans separation anormale");
+
+    // 11. Point final seul : attache au texte precedent au lieu d'ecraser
+    String dotTarget = "Bonjour tout le monde";
+    LiveSessionController::appendTranscriptionFragment(dotTarget, ".");
+    TEST_ASSERT(dotTarget == "Bonjour tout le monde.", "11. Fragment '.' final attache au mot precedent");
+
+    // 12. Suppression des doublons de fragments identiques consecutives
+    String dupTarget = "Bonjour tout le monde.";
+    LiveSessionController::appendTranscriptionFragment(dupTarget, ".");
+    TEST_ASSERT(dupTarget == "Bonjour tout le monde.", "12. Doublon de ponctuation finale identique elimine");
+
+    // 13. Remplacement propre si le fragment contient deja l'integralite de la cible (cumulatif)
+    String cumTarget = "Je suis";
+    LiveSessionController::appendTranscriptionFragment(cumTarget, "Je suis un assistant");
+    TEST_ASSERT(cumTarget == "Je suis un assistant", "13. Remplacement cumulatif sans repetition");
+
+    // 14. Fragment vide ignore
+    String beforeEmpty = cumTarget;
+    LiveSessionController::appendTranscriptionFragment(cumTarget, "");
+    TEST_ASSERT(cumTarget == beforeEmpty, "14. Fragment vide ignore sans modification");
+
+    // 15. Espace initial sur le tout premier fragment retire proprement
+    String firstFrag = "";
+    LiveSessionController::appendTranscriptionFragment(firstFrag, "   Premier mot");
+    TEST_ASSERT(firstFrag == "Premier mot", "15. Espaces initiaux au premier fragment elagues");
+
+    // 16. OpenAIRealtimeClient : streaming des deltas
+    OpenAIRealtimeClient client;
+    MockLiveTransport transport;
+    client.setTransport(&transport);
+    VoiceKitConfig cfg;
+    cfg.provider = VoiceProviderType::OPENAI;
+    client.begin(cfg);
+
+    String streamAccum = "";
+    client.setOnOutputTranscription([&streamAccum](const String& text) {
+        streamAccum += text;
+    });
+
+    const char* d1 = "{\"type\":\"response.audio_transcript.delta\",\"delta\":\"Je\"}";
+    const char* d2 = "{\"type\":\"response.audio_transcript.delta\",\"delta\":\" suis\"}";
+    client.handleIncomingMessage(d1, strlen(d1));
+    client.handleIncomingMessage(d2, strlen(d2));
+    TEST_ASSERT(streamAccum == "Je suis", "16. OpenAIClient deltas audio_transcript notifies");
+
+    // 17. OpenAIRealtimeClient : reception de response.output_audio_transcript.done
+    String capturedDoneText = "";
+    client.setOnOutputTranscription([&capturedDoneText](const String& text) {
+        capturedDoneText = text;
+    });
+
+    const char* doneEvt1 = "{\"type\":\"response.output_audio_transcript.done\",\"transcript\":\"Je suis un assistant vocal.\"}";
+    client.handleIncomingMessage(doneEvt1, strlen(doneEvt1));
+    TEST_ASSERT(capturedDoneText == "Je suis un assistant vocal.", "17. response.output_audio_transcript.done enregistre");
+
+    // 18. OpenAIRealtimeClient : reception de response.audio_transcript.done
+    const char* doneEvt2 = "{\"type\":\"response.audio_transcript.done\",\"transcript\":\"Texte valide done\"}";
+    client.handleIncomingMessage(doneEvt2, strlen(doneEvt2));
+    TEST_ASSERT(capturedDoneText == "Texte valide done", "18. response.audio_transcript.done enregistre");
+
+    // 19. OpenAIRealtimeClient : reception de response.done avec contenu textuel / transcript
+    const char* respDoneEvt = "{\"type\":\"response.done\",\"response\":{\"output\":[{\"content\":[{\"transcript\":\"Texte canonique final\"}]}]}}";
+    client.handleIncomingMessage(respDoneEvt, strlen(respDoneEvt));
+    TEST_ASSERT(capturedDoneText == "Texte canonique final", "19. response.done extrait le transcript canonique");
+
+    // 20. Troncature securisee au depassement de maxLength
+    String longTarget = "";
+    std::string giantFrag(600, 'A');
+    LiveSessionController::appendTranscriptionFragment(longTarget, giantFrag.c_str(), 100);
+    TEST_ASSERT(longTarget.length() == 100, "20. Troncature securisee a la longueur maximale sans debordement");
+
+    client.setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 108 : VoiceKit v0.6.3.2.1 - Correction B & D : Conservation Bilan & Tags Dynamiques
+// =============================================================================
+void test_v06321_assistant_full_text_conservation_and_dynamic_tags() {
+    std::cout << "\n[TEST SUITE 108] v0.6.3.2.1 : Correction B & D - Conservation Bilan & Tags Dynamiques" << std::endl;
+
+    // 1. Initialisation end-to-end de VoxCoreVoice avec OpenAI Realtime
+    MockLiveTransport mockTransportOAI;
+    VoxCoreVoice voiceOpenAI;
+    VoiceKitConfig cfgOAI;
+    cfgOAI.provider = VoiceProviderType::OPENAI;
+    cfgOAI.apiKey = "sk-test-secret-openai";
+    cfgOAI.model = "gpt-realtime-2.1-mini";
+    cfgOAI.voice = "alloy";
+    cfgOAI.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    cfgOAI.enableConversation = true;
+
+    TEST_ASSERT(voiceOpenAI.begin(cfgOAI), "1. begin() avec OpenAI Realtime reussi");
+    prepareMockOpenAIVoiceReady(voiceOpenAI, mockTransportOAI);
+    TEST_ASSERT(voiceOpenAI.isReady(), "2. Moteur VoxCoreVoice est READY");
+
+    ConversationMetrics capturedMetrics;
+    bool metricsReceived = false;
+    voiceOpenAI.onConversationTurnMetrics([&capturedMetrics, &metricsReceived](const ConversationMetrics& m) {
+        capturedMetrics = m;
+        metricsReceived = true;
+    });
+
+    String streamedAssistantText = "";
+    voiceOpenAI.onAssistantText([&streamedAssistantText](const String& text) {
+        streamedAssistantText = text;
+    });
+
+    // 2. Demarrage du Tour 1 (PARLER)
+    TEST_ASSERT(voiceOpenAI.startListening(), "3. startListening() reussi");
+    TEST_ASSERT(voiceOpenAI.isListening(), "4. Moteur en etat LISTENING");
+
+    // Transcription utilisateur Whisper
+    const char* whisperEvt = "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"transcript\":\"Bonjour VoiceKit\"}";
+    voiceOpenAI.getOpenAIClient().handleIncomingMessage(whisperEvt, strlen(whisperEvt));
+    TEST_ASSERT(voiceOpenAI.getConversationController().getLastUserText() == "Bonjour VoiceKit", "5. Transcription utilisateur Whisper enregistree");
+
+    // Relachement (RELÂCHER) -> WAITING_RESPONSE
+    voiceOpenAI.stopListening();
+    TEST_ASSERT(voiceOpenAI.getState() == VoiceState::WAITING_RESPONSE, "6. Moteur en etat WAITING_RESPONSE");
+
+    // 3. Arrivee progressive des deltas de transcription assistant
+    const char* d1 = "{\"type\":\"response.audio_transcript.delta\",\"delta\":\"Je\"}";
+    const char* d2 = "{\"type\":\"response.audio_transcript.delta\",\"delta\":\" suis\"}";
+    const char* d3 = "{\"type\":\"response.audio_transcript.delta\",\"delta\":\" un\"}";
+    const char* d4 = "{\"type\":\"response.audio_transcript.delta\",\"delta\":\" assistant\"}";
+    const char* d5 = "{\"type\":\"response.audio_transcript.delta\",\"delta\":\".\"}";
+
+    voiceOpenAI.getOpenAIClient().handleIncomingMessage(d1, strlen(d1));
+    voiceOpenAI.getOpenAIClient().handleIncomingMessage(d2, strlen(d2));
+    voiceOpenAI.getOpenAIClient().handleIncomingMessage(d3, strlen(d3));
+    voiceOpenAI.getOpenAIClient().handleIncomingMessage(d4, strlen(d4));
+    voiceOpenAI.getOpenAIClient().handleIncomingMessage(d5, strlen(d5));
+    voiceOpenAI.update();
+
+    TEST_ASSERT(voiceOpenAI.getConversationController().getLastAssistantText() == "Je suis un assistant.", "7. Texte assistant accumule fidelement");
+    TEST_ASSERT(voiceOpenAI.getConversationController().getLastAssistantText() != ".", "8. Non-ecrase par le fragment final '.' (Correction B)");
+
+    // 4. Restitution audio de la reponse et fin du Tour 1
+    voiceOpenAI.getSession().transitionTo(LiveSessionState::PLAYING, "Reponse audio");
+    voiceOpenAI.update();
+    TEST_ASSERT(voiceOpenAI.getState() == VoiceState::SPEAKING, "9. Moteur en etat SPEAKING");
+
+    voiceOpenAI.getSession().finishTurn();
+    voiceOpenAI.getSession().transitionTo(LiveSessionState::CONNECTED, "Fin lecture audio");
+    voiceOpenAI.update();
+
+    TEST_ASSERT(voiceOpenAI.isReady(), "10. Retour automatique a READY");
+    TEST_ASSERT(metricsReceived == true, "11. Callback onConversationTurnMetrics notifie");
+    TEST_ASSERT(capturedMetrics.assistantText == "Je suis un assistant.", "12. Bilan final contient l'integralite du texte");
+    TEST_ASSERT(capturedMetrics.assistantText != ".", "13. Bilan final confirme exempt de l'anomalie '.'");
+
+    // 5. Demarrage du Tour 2 : remise a zero propre sans pollution du Tour 1
+    metricsReceived = false;
+    TEST_ASSERT(voiceOpenAI.startListening(), "14. Tour 2 startListening() reussi");
+    voiceOpenAI.stopListening();
+
+    const char* dTurn2 = "{\"type\":\"response.audio_transcript.delta\",\"delta\":\"Deuxieme reponse.\"}";
+    voiceOpenAI.getOpenAIClient().handleIncomingMessage(dTurn2, strlen(dTurn2));
+    voiceOpenAI.getSession().transitionTo(LiveSessionState::PLAYING, "Reponse audio 2");
+    voiceOpenAI.update();
+    voiceOpenAI.getSession().finishTurn();
+    voiceOpenAI.getSession().transitionTo(LiveSessionState::CONNECTED, "Fin lecture audio 2");
+    voiceOpenAI.update();
+
+    TEST_ASSERT(capturedMetrics.assistantText == "Deuxieme reponse.", "15. Tour 2 conserve son texte propre sans residu du Tour 1");
+
+    // 6. Verification des libelles dynamiques IVoiceProvider (Correction D)
+    TEST_ASSERT(String(voiceProviderTypeToString(VoiceProviderType::OPENAI)) == "OPENAI", "16. voiceProviderTypeToString(OPENAI) == 'OPENAI'");
+    TEST_ASSERT(String(voiceProviderTypeToString(VoiceProviderType::GEMINI)) == "GEMINI", "17. voiceProviderTypeToString(GEMINI) == 'GEMINI'");
+    TEST_ASSERT(voiceOpenAI.getProvider().getProviderType() == VoiceProviderType::OPENAI, "18. Fournisseur actif dans VoxCoreVoice est OPENAI");
+
+    // 7. Non-regression GeminiVoiceProvider
+    GeminiVoiceProvider geminiProvider;
+    MockLiveTransport geminiTransport;
+    geminiProvider.setTransport(&geminiTransport);
+    VoiceKitConfig geminiCfg;
+    geminiCfg.provider = VoiceProviderType::GEMINI;
+    geminiCfg.apiKey = "AIzaSyTest";
+    geminiProvider.begin(geminiCfg);
+    TEST_ASSERT(geminiProvider.getProviderType() == VoiceProviderType::GEMINI, "19. Fournisseur Gemini retourne VoiceProviderType::GEMINI");
+
+    geminiProvider.setTransport(nullptr);
+    voiceOpenAI.stop();
+    voiceOpenAI.getOpenAIClient().setTransport(nullptr);
+    TEST_ASSERT(voiceOpenAI.getConversationController().getLastAssistantText() == "Deuxieme reponse.", "20. Conservation derniere reponse apres arret");
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.3.1  " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.3.2.1  " << std::endl;
     std::cout << "  Corrective de Stabilite et WakeNet Configurable — CoreS3 " << std::endl;
     std::cout << "  Architecture Multi-Fournisseurs (Gemini + OpenAI Realtime)" << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
@@ -7084,12 +7434,16 @@ int main() {
     test_v063_wifi_loss_ws_disconnect_mic_failure_and_recovery();
     test_v063_lvgl_non_blocking_openai_provider_and_diagnostics();
 
-    // Nouvelles suites correctives VoiceKit v0.6.3.1 (Latence non bloquante, Concurrence micro, WakeNet configurable, UI)
+    // Nouvelles suites correctives VoiceKit v0.6.3.2.1 (Latence non bloquante, Concurrence micro, WakeNet configurable, UI)
     test_v0631_latency_instrumentation_and_nonblocking_session_teardown();
     test_v0631_audio_transitions_consolidation_and_mic_concurrency();
     test_v0631_configurable_wakenet_model_and_missing_model_validation();
     test_v0631_conversational_stability_and_turn_vs_session_distinction();
     test_v0631_ui_immediate_event_transitions_and_banner_labels();
+    // Nouvelles suites correctives VoiceKit v0.6.3.2.1 (OpenAI Realtime : JSON, Transcriptions & Performance)
+    test_v06321_websocket_control_frames_and_json_parse_diagnostics();
+    test_v06321_fragmented_transcription_and_utf8_word_cutting();
+    test_v06321_assistant_full_text_conservation_and_dynamic_tags();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

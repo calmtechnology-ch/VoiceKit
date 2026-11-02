@@ -238,6 +238,13 @@ public:
     uint32_t getMinFreeInternalHeapAtConnect() const override { return _minFreeInternalHeapAtConnect.load(std::memory_order_relaxed); }
     uint32_t getLargestInternalBlockAtConnect() const override { return _largestInternalBlockAtConnect.load(std::memory_order_relaxed); }
 
+    // Instrumentation WebSocket & contrôle de trames (v0.6.3.2.1 — Correction A)
+    uint32_t getControlFrameCount() const { return _controlFrameCount.load(std::memory_order_relaxed); }
+    uint8_t getLastDataOpcode() const { return _lastDataOpcode.load(std::memory_order_relaxed); }
+    uint32_t getLastDataLen() const { return _lastDataLen.load(std::memory_order_relaxed); }
+    uint32_t getLastPayloadLen() const { return _lastPayloadLen.load(std::memory_order_relaxed); }
+    uint32_t getReassemblyCompleteCount() const { return _reassemblyCompleteCount.load(std::memory_order_relaxed); }
+
 private:
     static void eventHandler(void* handler_args, esp_event_base_t base, int32_t event_id, void* event_data) {
         auto* self = static_cast<EspWebSocketTransport*>(handler_args);
@@ -278,17 +285,32 @@ private:
                 if (self->_onDisconnect) self->_onDisconnect();
                 break;
 
-            case WEBSOCKET_EVENT_DATA:
+            case WEBSOCKET_EVENT_DATA: {
                 if (self->_wsTaskCore.load(std::memory_order_relaxed) < 0) {
                     self->_wsTaskCore.store((int8_t)xPortGetCoreID(), std::memory_order_relaxed);
                 }
+                // Filtrage strict des trames de controle WebSocket (RFC 6455)
+                // 0x08 = CLOSE, 0x09 = PING, 0x0A = PONG
+                // Ces trames sont gerees par esp_websocket_client et ne contiennent pas de JSON valide.
+                // Les filtrer empeche egalement qu'un Ping/Pong n'efface prematurement le tampon _rxAccum en cours de reassemblage.
+                uint8_t op = data->op_code & 0x0F;
+                if (op >= 0x08) {
+                    self->_controlFrameCount.fetch_add(1, std::memory_order_relaxed);
+                    break;
+                }
+
+                self->_lastDataOpcode.store(op, std::memory_order_relaxed);
+                self->_lastDataLen.store((uint32_t)data->data_len, std::memory_order_relaxed);
+                self->_lastPayloadLen.store((uint32_t)data->payload_len, std::memory_order_relaxed);
+                self->_lastPayloadOffset.store((uint32_t)data->payload_offset, std::memory_order_relaxed);
+
                 if (data->data_ptr && data->data_len > 0) {
-                    if (data->payload_offset == 0 && data->data_len == data->payload_len) {
-                        // Trame complete en un seul paquet
+                    if (data->payload_offset == 0 && data->data_len == data->payload_len && op != 0x00) {
+                        // Trame complete en un seul paquet (non fragmentee)
                         if (self->_onData) self->_onData(data->data_ptr, data->data_len);
                     } else {
                         // Reassemblage de trame multi-paquets
-                        if (data->payload_offset == 0) {
+                        if (data->payload_offset == 0 && op != 0x00) {
                             self->_rxAccum.clear();
                             self->_rxAccum.reserve(data->payload_len);
                         }
@@ -296,10 +318,12 @@ private:
                         if (self->_rxAccum.length() >= (size_t)data->payload_len) {
                             if (self->_onData) self->_onData(self->_rxAccum.c_str(), self->_rxAccum.length());
                             self->_rxAccum.clear();
+                            self->_reassemblyCompleteCount.fetch_add(1, std::memory_order_relaxed);
                         }
                     }
                 }
                 break;
+            }
 
             case WEBSOCKET_EVENT_ERROR:
                 Serial.println("[WS] Erreur WebSocket signalee");
@@ -334,6 +358,14 @@ private:
     std::atomic<uint32_t> _freeInternalHeapAtConnect{0};
     std::atomic<uint32_t> _minFreeInternalHeapAtConnect{0};
     std::atomic<uint32_t> _largestInternalBlockAtConnect{0};
+
+    // Instrumentation WebSocket v0.6.3.2.1
+    std::atomic<uint32_t> _controlFrameCount{0};
+    std::atomic<uint8_t> _lastDataOpcode{0};
+    std::atomic<uint32_t> _lastDataLen{0};
+    std::atomic<uint32_t> _lastPayloadLen{0};
+    std::atomic<uint32_t> _lastPayloadOffset{0};
+    std::atomic<uint32_t> _reassemblyCompleteCount{0};
 
     ConnectHandler _onConnect;
     DisconnectHandler _onDisconnect;

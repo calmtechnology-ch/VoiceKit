@@ -478,19 +478,43 @@ bool OpenAIRealtimeClient::sendInterruption() {
 }
 
 void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
-    if (!data || len == 0) return;
+    if (!data || len == 0) {
+        _lastParseErrorCategory = "EMPTY_DATA";
+        return;
+    }
+
+    // Ignorer silencieusement les trames vides ou constituees exclusivement d'espaces / CRLF
+    size_t firstNonWs = 0;
+    while (firstNonWs < len && (data[firstNonWs] == ' ' || data[firstNonWs] == '\t' || data[firstNonWs] == '\r' || data[firstNonWs] == '\n')) {
+        firstNonWs++;
+    }
+    if (firstNonWs == len) {
+        return;
+    }
 
     cJSON* root = cJSON_ParseWithLength(data, len);
     if (!root) {
-        root = cJSON_Parse(data);
+        std::string safeCopy(data, len);
+        root = cJSON_Parse(safeCopy.c_str());
     }
     if (!root) {
-        Serial.println("[OpenAIClient] Erreur parsing JSON recu");
+        uint32_t errIdx = _jsonErrorCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        _lastParseErrorCategory = "JSON_SYNTAX_ERROR";
+        _lastError = "Erreur parsing JSON recu";
+        Serial.printf("[OpenAIClient][PARSE ERR #%u] Categorie: %s | Taille: %u octets | Connecte: %s | Setup: %s\n",
+                      (unsigned)errIdx, _lastParseErrorCategory.c_str(), (unsigned)len,
+                      isConnected() ? "OUI" : "NON",
+                      isSetupComplete() ? "OUI" : "NON");
         return;
     }
 
     cJSON* typeItem = cJSON_GetObjectItemCaseSensitive(root, "type");
     if (!typeItem || !cJSON_IsString(typeItem) || !typeItem->valuestring) {
+        uint32_t errIdx = _jsonErrorCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        _lastParseErrorCategory = "MISSING_TYPE_FIELD";
+        _lastError = "Erreur parsing JSON recu";
+        Serial.printf("[OpenAIClient][PARSE ERR #%u] Categorie: %s | Taille: %u octets\n",
+                      (unsigned)errIdx, _lastParseErrorCategory.c_str(), (unsigned)len);
         cJSON_Delete(root);
         return;
     }
@@ -558,6 +582,15 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
             if (_onText) _onText(textFragment);
         }
     }
+    // 5b. Transcription finale complète de l'assistant (GA: response.output_audio_transcript.done, Beta: response.audio_transcript.done)
+    else if (strcmp(evType, "response.output_audio_transcript.done") == 0 || strcmp(evType, "response.audio_transcript.done") == 0) {
+        cJSON* transItem = cJSON_GetObjectItemCaseSensitive(root, "transcript");
+        if (transItem && cJSON_IsString(transItem) && transItem->valuestring) {
+            String fullText(transItem->valuestring);
+            if (_onOutputTranscription) _onOutputTranscription(fullText);
+            if (_onText) _onText(fullText);
+        }
+    }
     // 6. Transcription de l'entrée microphone utilisateur (whisper-1)
     else if (strcmp(evType, "conversation.item.input_audio_transcription.completed") == 0) {
         cJSON* transItem = cJSON_GetObjectItemCaseSensitive(root, "transcript");
@@ -578,6 +611,25 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
             cJSON* stItem = cJSON_GetObjectItemCaseSensitive(respObj, "status");
             if (stItem && cJSON_IsString(stItem) && stItem->valuestring) {
                 statusStr = stItem->valuestring;
+            }
+            // Extraction de la transcription finale dans response.output si présente
+            cJSON* outputArr = cJSON_GetObjectItemCaseSensitive(respObj, "output");
+            if (outputArr && cJSON_IsArray(outputArr)) {
+                cJSON* outItem = nullptr;
+                cJSON_ArrayForEach(outItem, outputArr) {
+                    cJSON* contentArr = cJSON_GetObjectItemCaseSensitive(outItem, "content");
+                    if (contentArr && cJSON_IsArray(contentArr)) {
+                        cJSON* contentItem = nullptr;
+                        cJSON_ArrayForEach(contentItem, contentArr) {
+                            cJSON* trItem = cJSON_GetObjectItemCaseSensitive(contentItem, "transcript");
+                            if (trItem && cJSON_IsString(trItem) && trItem->valuestring && strlen(trItem->valuestring) > 0) {
+                                String fullText(trItem->valuestring);
+                                if (_onOutputTranscription) _onOutputTranscription(fullText);
+                                if (_onText) _onText(fullText);
+                            }
+                        }
+                    }
+                }
             }
         }
         if (statusStr && strcmp(statusStr, "cancelled") == 0) {

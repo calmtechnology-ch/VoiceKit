@@ -6,7 +6,7 @@
 
 /**
  * @file VoiceUI.h
- * @brief Gestionnaire de composition de l'interface moderne OpenAIConversation v0.6.3.2.
+ * @brief Gestionnaire de composition de l'interface moderne OpenAIConversation v0.6.3.2.1.
  *
  * Responsabilités :
  * - Composition globale Dark mode premium (320x240 M5GFX sans LVGL).
@@ -17,6 +17,7 @@
  *   en pixels réels et rendu UTF-8 français irréprochable (Y = 136..196).
  * - Grand bouton tactile principal très visible avec icônes et rétroaction (Y = 200..235).
  * - Rafraîchissement ciblé par drapeaux sales (dirty flags) sans scintillement.
+ * - Régulation de cadence d'affichage textuel (5-10 Hz) et instrumentation séparée (v0.6.3.2.1).
  */
 
 enum class ConvUIState : uint8_t {
@@ -52,6 +53,22 @@ public:
     bool isPointInButton(int32_t x, int32_t y) const;
     bool isPointNearbyButton(int32_t x, int32_t y, int margin = 15) const;
 
+    // Métriques d'instrumentation graphique séparées (v0.6.3.2.1 — Correction C)
+    uint32_t getOrbMaxUs() const { return _maxOrbUs; }
+    uint32_t getHeaderMaxUs() const { return _maxHeaderUs; }
+    uint32_t getStateTextMaxUs() const { return _maxStateTextUs; }
+    uint32_t getUserCardMaxUs() const { return _maxUserCardUs; }
+    uint32_t getAsstCardMaxUs() const { return _maxAsstCardUs; }
+    uint32_t getMainBtnMaxUs() const { return _maxMainBtnUs; }
+    void resetPerformanceMetrics() {
+        _maxOrbUs = 0;
+        _maxHeaderUs = 0;
+        _maxStateTextUs = 0;
+        _maxUserCardUs = 0;
+        _maxAsstCardUs = 0;
+        _maxMainBtnUs = 0;
+    }
+
     // Dimensions et géométrie écran CoreS3 (320x240)
     static constexpr int SCREEN_W = 320;
     static constexpr int SCREEN_H = 240;
@@ -75,6 +92,9 @@ public:
     static constexpr int BTN_W = 300;
     static constexpr int BTN_H = 35;
 
+    // Cadence maximale de rafraîchissement textuel pendant streaming (~10 Hz)
+    static constexpr uint32_t TEXT_UPDATE_INTERVAL_MS = 100;
+
     // Palette Dark Mode Premium
     static constexpr uint16_t COLOR_BG          = 0x0842; // Deep midnight navy (#080E14)
     static constexpr uint16_t COLOR_CARD_BG     = 0x0926; // Carte sombre contrastée (#0D1522)
@@ -93,6 +113,14 @@ private:
     String _errorMessage;
     bool _wifiConnected = false;
 
+    // Régulation des mises à jour textuelles en flux
+    String _pendingUserText;
+    String _pendingAssistantText;
+    bool _pendingUserUpdate = false;
+    bool _pendingAsstUpdate = false;
+    uint32_t _lastUserDrawMs = 0;
+    uint32_t _lastAsstDrawMs = 0;
+
     // Drapeaux de rafraîchissement partiel
     bool _dirtyFull = true;
     bool _dirtyHeader = true;
@@ -101,6 +129,14 @@ private:
     bool _dirtyAsstCard = true;
     bool _dirtyBtn = true;
 
+    // Métriques séparées (µs)
+    uint32_t _maxOrbUs = 0;
+    uint32_t _maxHeaderUs = 0;
+    uint32_t _maxStateTextUs = 0;
+    uint32_t _maxUserCardUs = 0;
+    uint32_t _maxAsstCardUs = 0;
+    uint32_t _maxMainBtnUs = 0;
+
     void drawStaticBackground();
     void drawHeader();
     void drawStateText();
@@ -108,4 +144,3 @@ private:
     void drawAssistantCard();
     void drawMainButton();
 };
-

@@ -21,8 +21,13 @@ bool VoiceUI::begin(M5GFX* display) {
     _display = display;
     if (!_display) return false;
 
+    // Rendu statique initial exécuté à froid pendant le setup()
+    drawStaticBackground();
+    _dirtyFull = false;
+
     _orb.begin(_display);
     forceFullRedraw();
+    _dirtyFull = false; // Le fond statique vient d'être tracé
     return true;
 }
 
@@ -32,6 +37,20 @@ void VoiceUI::setState(ConvUIState state) {
         _dirtyHeader = true;
         _dirtyStateText = true;
         _dirtyBtn = true;
+
+        // Lors d'une transition d'état, afficher immédiatement les textes en attente sans attendre le délai de cadence
+        if (_pendingAsstUpdate) {
+            _assistantText = _pendingAssistantText;
+            _dirtyAsstCard = true;
+            _pendingAsstUpdate = false;
+            _lastAsstDrawMs = millis();
+        }
+        if (_pendingUserUpdate) {
+            _userText = _pendingUserText;
+            _dirtyUserCard = true;
+            _pendingUserUpdate = false;
+            _lastUserDrawMs = millis();
+        }
 
         // Mise à jour synchrone de l'orbe
         switch (_state) {
@@ -60,16 +79,16 @@ void VoiceUI::setState(ConvUIState state) {
 }
 
 void VoiceUI::setUserText(const String& text) {
-    if (_userText != text) {
-        _userText = text;
-        _dirtyUserCard = true;
+    if (_pendingUserText != text) {
+        _pendingUserText = text;
+        _pendingUserUpdate = true;
     }
 }
 
 void VoiceUI::setAssistantText(const String& text) {
-    if (_assistantText != text) {
-        _assistantText = text;
-        _dirtyAsstCard = true;
+    if (_pendingAssistantText != text) {
+        _pendingAssistantText = text;
+        _pendingAsstUpdate = true;
     }
 }
 
@@ -110,6 +129,21 @@ bool VoiceUI::isPointNearbyButton(int32_t x, int32_t y, int margin) const {
 void VoiceUI::update(uint32_t nowMs, uint32_t audioLevel, bool throttle) {
     if (!_display) return;
 
+    // Régulation de cadence des cartes textuelles pendant le streaming (~10 Hz max)
+    // Garantit l'affichage immédiat dès que l'assistant a terminé (hors état SPEAKING)
+    if (_pendingAsstUpdate && (nowMs - _lastAsstDrawMs >= TEXT_UPDATE_INTERVAL_MS || _state != ConvUIState::SPEAKING)) {
+        _assistantText = _pendingAssistantText;
+        _dirtyAsstCard = true;
+        _pendingAsstUpdate = false;
+        _lastAsstDrawMs = nowMs;
+    }
+    if (_pendingUserUpdate && (nowMs - _lastUserDrawMs >= TEXT_UPDATE_INTERVAL_MS || _state != ConvUIState::LISTENING)) {
+        _userText = _pendingUserText;
+        _dirtyUserCard = true;
+        _pendingUserUpdate = false;
+        _lastUserDrawMs = nowMs;
+    }
+
     if (_dirtyFull) {
         _dirtyFull = false;
         drawStaticBackground();
@@ -117,31 +151,49 @@ void VoiceUI::update(uint32_t nowMs, uint32_t audioLevel, bool throttle) {
 
     if (_dirtyHeader) {
         _dirtyHeader = false;
+        uint32_t t0 = micros();
         drawHeader();
+        uint32_t dur = micros() - t0;
+        if (dur > _maxHeaderUs) _maxHeaderUs = dur;
     }
 
     if (_dirtyStateText) {
         _dirtyStateText = false;
+        uint32_t t0 = micros();
         drawStateText();
+        uint32_t dur = micros() - t0;
+        if (dur > _maxStateTextUs) _maxStateTextUs = dur;
     }
 
     if (_dirtyUserCard) {
         _dirtyUserCard = false;
+        uint32_t t0 = micros();
         drawUserCard();
+        uint32_t dur = micros() - t0;
+        if (dur > _maxUserCardUs) _maxUserCardUs = dur;
     }
 
     if (_dirtyAsstCard) {
         _dirtyAsstCard = false;
+        uint32_t t0 = micros();
         drawAssistantCard();
+        uint32_t dur = micros() - t0;
+        if (dur > _maxAsstCardUs) _maxAsstCardUs = dur;
     }
 
     if (_dirtyBtn) {
         _dirtyBtn = false;
+        uint32_t t0 = micros();
         drawMainButton();
+        uint32_t dur = micros() - t0;
+        if (dur > _maxMainBtnUs) _maxMainBtnUs = dur;
     }
 
     // Animation non-bloquante de l'orbe vocal (Y = 35..108)
+    uint32_t tOrb = micros();
     _orb.update(nowMs, audioLevel, throttle);
+    uint32_t durOrb = micros() - tOrb;
+    if (durOrb > _maxOrbUs) _maxOrbUs = durOrb;
 }
 
 void VoiceUI::drawStaticBackground() {

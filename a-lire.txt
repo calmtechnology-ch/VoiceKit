@@ -54,3 +54,5 @@ Toucher DIAGNOSTICS (ou envoyer 'd' sur le port série) pour afficher le rapport
 pio device monitor -b 115200
 
 pio run -d examples/WakeWordConversation -t upload
+
+pio run  -t upload

@@ -133,9 +133,9 @@ public:
     void transitionTo(LiveSessionState newState, const char* reason = nullptr);
     void finishTurn();
     void printAudioEndCheck(const char* label);
+    static void appendTranscriptionFragment(String& target, const String& fragment, size_t maxLength = 512);
 
 private:
-    void appendTranscriptionFragment(String& target, const String& fragment, size_t maxLength = 512);
     void resetTurnSessionMetrics();
 
     IVoiceProvider* _provider = nullptr;

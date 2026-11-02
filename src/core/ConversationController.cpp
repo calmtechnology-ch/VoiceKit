@@ -225,10 +225,17 @@ void ConversationController::handleUserTranscription(const String& text, bool is
 }
 
 void ConversationController::handleAssistantTranscription(const String& text) {
-    _lastAssistantText = text;
-    _metrics.assistantText = text;
+    if (text.isEmpty()) return;
+    if (_metrics.assistantText.isEmpty() || text.startsWith(_metrics.assistantText)) {
+        _metrics.assistantText = text;
+    } else if (_metrics.assistantText.endsWith(text) || _metrics.assistantText == text) {
+        // Déjà présent dans le texte accumulé
+    } else {
+        _metrics.assistantText += text;
+    }
+    _lastAssistantText = _metrics.assistantText;
     if (_onAssistantText) {
-        _onAssistantText(text);
+        _onAssistantText(_metrics.assistantText);
     }
 }
 
@@ -239,6 +246,12 @@ void ConversationController::handleTurnFinished(uint64_t turnId) {
     if (_session) {
         _metrics.pcmBlocksReceived = _session->getChunksReceived();
         _metrics.droppedSamples = _session->getDroppedSamplesCount();
+        if (!_session->getLastAssistantText().isEmpty()) {
+            if (_metrics.assistantText.isEmpty() || _session->getLastAssistantText().length() > _metrics.assistantText.length()) {
+                _metrics.assistantText = _session->getLastAssistantText();
+                _lastAssistantText = _metrics.assistantText;
+            }
+        }
     }
     _metrics.totalTurnDurationMs = millis() - _turnStartTimeMs;
 
