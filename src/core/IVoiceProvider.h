@@ -176,6 +176,7 @@ public:
     virtual uint32_t getPostTurnCompleteBlocks() const { return 0; }
     virtual uint32_t getPostTurnCompleteSamples() const { return 0; }
     virtual bool isTurnCompleteReceived() const { return false; }
+    virtual bool isWaitingForResponse() const { return false; }
 
     // Diagnostics optionnels FreeRTOS & mémoire TLS (v0.6.1 — Correction B)
     virtual int8_t getWsTaskCore() const { return -1; }

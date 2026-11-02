@@ -83,6 +83,7 @@ private:
     uint32_t _listeningStartTimeMs = 0;
     uint32_t _processingStartTimeMs = 0;
     uint32_t _stoppedStartTimeMs = 0;
+    uint32_t _stopStartTimeMs = 0;
     uint32_t _errorStartTimeMs = 0;
 
     // Drapeaux logiques

@@ -12,7 +12,7 @@ namespace AppConfig {
 
 // Metadonnees de l'application
 constexpr const char* APP_NAME = "OpenAIConversationLVGL";
-constexpr const char* APP_VERSION = "v0.1.0";
+constexpr const char* APP_VERSION = "v0.1.0.1";
 constexpr const char* OPENAI_MODEL = "gpt-realtime-2.1-mini";
 constexpr const char* OPENAI_VOICE = "alloy";
 constexpr const char* OPENAI_LANGUAGE = "fr-FR";

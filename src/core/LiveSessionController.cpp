@@ -349,6 +349,9 @@ bool LiveSessionController::begin(IVoiceProvider* provider, void*, LiveAudioPlay
         strncpy(_lastError, err.c_str(), sizeof(_lastError) - 1);
         _lastError[sizeof(_lastError) - 1] = '\0';
         Serial.printf("[LiveSession] Erreur client : %s\n", _lastError);
+        if (_turnActive.load(std::memory_order_acquire)) {
+            abortTurnLocally();
+        }
         if (_state == LiveSessionState::RECONNECTING || _state == LiveSessionState::CONNECTING) {
             if (_reconnectAttempts > 0 && _reconnectAttempts < LIVE_MAX_RECONNECT_ATTEMPTS) {
                 _lastReconnectAttemptMs = millis();
@@ -367,7 +370,7 @@ bool LiveSessionController::begin(IVoiceProvider* provider, void*, LiveAudioPlay
         _lastActivityMs = millis();
         AudioTraceLog::record(AudioTraceEventType::PLAYBACK_FINISHED);
         finishTurn();
-        if (_state == LiveSessionState::PLAYING) {
+        if (_state == LiveSessionState::PLAYING || _state == LiveSessionState::WAITING_RESPONSE) {
             AudioTraceLog::record(AudioTraceEventType::SESSION_CONNECTED);
             transitionTo(LiveSessionState::CONNECTED, "Fin lecture audio");
         }
@@ -506,6 +509,14 @@ void LiveSessionController::tick() {
                 Serial.println("[LiveSession] Echec de toutes les tentatives de reconnexion.");
                 transitionTo(LiveSessionState::ERROR, "Reconnexion impossible");
             }
+        }
+    }
+
+    // Detection non bloquante de fin de tour sans audio
+    if (_turnCompleteReceived && _state == LiveSessionState::WAITING_RESPONSE && !_hasAudioResponse) {
+        if (!_player || !_player->isPlaying()) {
+            finishTurn();
+            transitionTo(LiveSessionState::CONNECTED, "Reponse terminee sans audio");
         }
     }
 

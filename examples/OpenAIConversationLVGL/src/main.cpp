@@ -1,6 +1,6 @@
 /**
  * @file main.cpp
- * @brief Exemple OpenAIConversationLVGL v0.1.0 — Modern Voice UI avec LVGL 9
+ * @brief Exemple OpenAIConversationLVGL v0.1.0.1 — Modern Voice UI avec LVGL 9
  *        Dialogue vocal bidirectionnel temps reel avec OpenAI Realtime API
  *        (gpt-realtime-2.1-mini) sur M5Stack CoreS3 (320x240 LVGL 9).
  */
@@ -47,14 +47,33 @@ static VoiceState s_lastVoiceState = VoiceState::UNINITIALIZED;
 static uint32_t   s_lastVoiceStateChangeMs = 0;
 static bool       s_throttleUi = false;
 
-// Buffers de decouplage thread-safe pour les textes asynchrones VoiceKit -> LVGL
+// Buffers de decouplage thread-safe a taille bornee SANS allocation dynamique dans les sections critiques FreeRTOS
 static portMUX_TYPE s_uiMux = portMUX_INITIALIZER_UNLOCKED;
-static String s_pendingUserText = "";
+static constexpr size_t TEXT_BUFFER_SIZE = 512;
+static char s_pendingUserBuf[TEXT_BUFFER_SIZE];
 static bool s_hasPendingUserText = false;
-static String s_pendingAssistantText = "";
+static char s_pendingAssistantBuf[TEXT_BUFFER_SIZE];
 static bool s_hasPendingAssistantText = false;
-static String s_pendingErrorText = "";
+static char s_pendingErrorBuf[TEXT_BUFFER_SIZE];
 static bool s_hasPendingErrorText = false;
+
+// Transfert securise par copie brute sans allocation dynamique et avec respect des frontieres UTF-8
+static void copyTextToPendingBuf(char* dst, size_t dstSize, const String& src, bool& flag) {
+    if (!dst || dstSize == 0) return;
+    size_t len = src.length();
+    if (len >= dstSize) {
+        len = dstSize - 1;
+        // Eviter de tronquer une sequence multi-octets UTF-8 au milieu
+        while (len > 0 && ((uint8_t)src[len] & 0xC0) == 0x80) {
+            len--;
+        }
+    }
+    portENTER_CRITICAL(&s_uiMux);
+    memcpy(dst, src.c_str(), len);
+    dst[len] = '\0';
+    flag = true;
+    portEXIT_CRITICAL(&s_uiMux);
+}
 
 // =============================================================================
 // Initialisation (setup)
@@ -68,7 +87,7 @@ void setup() {
     delay(300);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.1.0 — OpenAIConversationLVGL Edition       ");
+    Serial.println("  VoiceKit v0.1.0.1 — OpenAIConversationLVGL Edition       ");
     Serial.println("  OpenAI Realtime (gpt-realtime-2.1-mini) + LVGL 9      ");
     Serial.println("  M5Stack CoreS3 (320x240 LCD + Capacitive Touch)       ");
     Serial.println("========================================================");
@@ -100,8 +119,7 @@ void setup() {
     s_voice.onReady([]() {
         Serial.println("[VOICE] Session OpenAI Realtime prete et confirmee !");
         s_ptt.notifyReady();
-        s_ui.setErrorMessage("");
-        s_ui.syncWithPTT(PTTState::READY);
+        copyTextToPendingBuf(s_pendingErrorBuf, sizeof(s_pendingErrorBuf), "", s_hasPendingErrorText);
     });
 
     s_voice.onStateChanged([](VoiceState state) {
@@ -118,10 +136,7 @@ void setup() {
     s_voice.onError([](const String& err) {
         Serial.printf("[VOICE][ERR] Erreur : %s\n", err.c_str());
         s_ptt.notifyError(err);
-        portENTER_CRITICAL(&s_uiMux);
-        s_pendingErrorText = err;
-        s_hasPendingErrorText = true;
-        portEXIT_CRITICAL(&s_uiMux);
+        copyTextToPendingBuf(s_pendingErrorBuf, sizeof(s_pendingErrorBuf), err, s_hasPendingErrorText);
     });
 
     s_voice.onListeningStarted([]() {
@@ -149,19 +164,13 @@ void setup() {
         if (isFinal) {
             Serial.printf("[OpenAIConvLVGL][USER WHISPER] %s\n", text.c_str());
         }
-        portENTER_CRITICAL(&s_uiMux);
-        s_pendingUserText = text;
-        s_hasPendingUserText = true;
-        portEXIT_CRITICAL(&s_uiMux);
+        copyTextToPendingBuf(s_pendingUserBuf, sizeof(s_pendingUserBuf), text, s_hasPendingUserText);
     });
 
     // 6. Transcription Assistant (OpenAI Realtime)
     s_voice.onAssistantText([](const String& text) {
         Serial.printf("[OpenAIConvLVGL][OPENAI TEXT] %s\n", text.c_str());
-        portENTER_CRITICAL(&s_uiMux);
-        s_pendingAssistantText = text;
-        s_hasPendingAssistantText = true;
-        portEXIT_CRITICAL(&s_uiMux);
+        copyTextToPendingBuf(s_pendingAssistantBuf, sizeof(s_pendingAssistantBuf), text, s_hasPendingAssistantText);
     });
 
     // 7. Metriques du tour de conversation
@@ -230,10 +239,7 @@ void loop() {
         } else if (c == 'E' || c == 'e') {
             Serial.println("[SERIE] Injection d'erreur de test");
             s_ptt.notifyError("Erreur test simulee");
-            portENTER_CRITICAL(&s_uiMux);
-            s_pendingErrorText = "Erreur test simulee";
-            s_hasPendingErrorText = true;
-            portEXIT_CRITICAL(&s_uiMux);
+            copyTextToPendingBuf(s_pendingErrorBuf, sizeof(s_pendingErrorBuf), "Erreur test simulee", s_hasPendingErrorText);
         }
     }
 
@@ -241,27 +247,35 @@ void loop() {
     s_ptt.update(now, s_ui.isPhysicalTouchActive());
 
     // 5. Transfert thread-safe des textes asynchrones VoiceKit vers l'interface LVGL
-    String userTextCopy, asstTextCopy, errCopy;
+    // Copie memoire pure par blocs fixes sans aucune allocation dynamique sous section critique FreeRTOS
+    char userTextCopy[TEXT_BUFFER_SIZE];
+    char asstTextCopy[TEXT_BUFFER_SIZE];
+    char errCopy[TEXT_BUFFER_SIZE];
     bool doUser = false, doAsst = false, doErr = false;
 
     portENTER_CRITICAL(&s_uiMux);
     if (s_hasPendingUserText) {
-        userTextCopy = s_pendingUserText;
+        memcpy(userTextCopy, s_pendingUserBuf, sizeof(userTextCopy));
+        userTextCopy[sizeof(userTextCopy) - 1] = '\0';
         s_hasPendingUserText = false;
         doUser = true;
     }
     if (s_hasPendingAssistantText) {
-        asstTextCopy = s_pendingAssistantText;
+        memcpy(asstTextCopy, s_pendingAssistantBuf, sizeof(asstTextCopy));
+        asstTextCopy[sizeof(asstTextCopy) - 1] = '\0';
         s_hasPendingAssistantText = false;
         doAsst = true;
     }
     if (s_hasPendingErrorText) {
-        errCopy = s_pendingErrorText;
+        memcpy(errCopy, s_pendingErrorBuf, sizeof(errCopy));
+        errCopy[sizeof(errCopy) - 1] = '\0';
         s_hasPendingErrorText = false;
         doErr = true;
     }
     portEXIT_CRITICAL(&s_uiMux);
 
+    // Mises a jour de l'interface LVGL 9 executees HORS section critique,
+    // exclusivement depuis le contexte d'execution de l'interface (boucle principale)
     if (doUser) s_ui.setUserText(userTextCopy);
     if (doAsst) s_ui.setAssistantText(asstTextCopy);
     if (doErr) s_ui.setErrorMessage(errCopy);

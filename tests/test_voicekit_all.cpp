@@ -7437,6 +7437,109 @@ void test_v06322_empty_audio_response_and_nonblocking_recovery() {
     v.getOpenAIClient().setTransport(nullptr);
 }
 
+
+// =============================================================================
+// SUITE 112 : OpenAI Realtime v0.1.0.1 - Evenements, Reponse Echouee, Sans Audio & Transitions PTT
+// =============================================================================
+void test_v0101_openai_realtime_events_failed_and_ptt_transitions() {
+    std::cout << "\n[TEST SUITE 112] v0.1.0.1 : OpenAI Realtime Events, Reponse Echouee, Sans Audio & PTT" << std::endl;
+
+    // 1. Audit des evenements OpenAI : response.created et response.output_item.added
+    OpenAIRealtimeClient client;
+    MockLiveTransport transport;
+    client.setTransport(&transport);
+    VoiceKitConfig cfg;
+    cfg.provider = VoiceProviderType::OPENAI;
+    cfg.apiKey = "sk-test-v0101-audit";
+    client.begin(cfg);
+
+    TEST_ASSERT(client.getJsonErrorCount() == 0, "1. Compteur erreurs initialise a 0");
+
+    const char* evCreated = "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_test_01\",\"status\":\"in_progress\"}}";
+    client.handleIncomingMessage(evCreated, strlen(evCreated));
+    TEST_ASSERT(client.getJsonErrorCount() == 0, "2. response.created traite sans erreur JSON");
+
+    const char* evItemAdded = "{\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"role\":\"assistant\"}}";
+    client.handleIncomingMessage(evItemAdded, strlen(evItemAdded));
+    TEST_ASSERT(client.getJsonErrorCount() == 0, "3. response.output_item.added traite sans erreur JSON");
+
+    // 2. Simulation de response.done avec status: 'failed' et status_details.error
+    String lastReportedError = "";
+    client.setOnError([&lastReportedError](const String& err) {
+        lastReportedError = err;
+    });
+
+    const char* evFailed = "{\"type\":\"response.done\",\"response\":{\"id\":\"resp_err_02\",\"status\":\"failed\",\"status_details\":{\"type\":\"incomplete\",\"reason\":\"error\",\"error\":{\"message\":\"OpenAI rate limit reached\",\"code\":\"rate_limit_exceeded\"}}}}";
+    client.handleIncomingMessage(evFailed, strlen(evFailed));
+    TEST_ASSERT(lastReportedError.indexOf("OpenAI rate limit reached") >= 0, "4. Erreur status: failed propagee au callback onError");
+    TEST_ASSERT(strstr(client.getLastError(), "OpenAI rate limit reached") != nullptr, "5. Derniere erreur enregistree dans le client");
+    TEST_ASSERT(!client.isWaitingForResponse(), "6. waitingForResponse desactive apres response.done failed");
+
+    // 3. Integration VoxCoreVoice : Simulation response.done sans audio (recuperation immediate vers READY)
+    VoxCoreVoice v;
+    MockLiveTransport mockTransport;
+    VoiceKitConfig vcfg;
+    vcfg.provider = VoiceProviderType::OPENAI;
+    vcfg.apiKey = "sk-test-v0101-no-audio";
+    vcfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    vcfg.enableConversation = true;
+    v.begin(vcfg);
+    prepareMockOpenAIVoiceReady(v, mockTransport);
+
+    TEST_ASSERT(v.isReady(), "7. VoxCoreVoice est READY");
+    TEST_ASSERT(v.startListening(), "8. Prise de parole demarree");
+    TEST_ASSERT(v.isListening(), "9. Moteur en ecoute");
+
+    v.stopListening();
+    TEST_ASSERT(v.getState() == VoiceState::WAITING_RESPONSE, "10. Moteur en attente de reponse serveur (WAITING_RESPONSE)");
+
+    // Reception de response.done termine SANS audio
+    const char* evDoneEmpty = "{\"type\":\"response.done\",\"response\":{\"id\":\"resp_empty_03\",\"status\":\"completed\",\"output\":[]}}";
+    v.getOpenAIClient().handleIncomingMessage(evDoneEmpty, strlen(evDoneEmpty));
+    v.update();
+
+    // Verifier retour immediat a READY sans blocage en PROCESSING
+    TEST_ASSERT(v.isReady(), "11. VoxCoreVoice revenu a READY apres reponse sans audio");
+    TEST_ASSERT(!v.isBusy(), "12. Moteur disponible (busy == false)");
+    TEST_ASSERT(!v.getConversationController().isTurnActive(), "13. Tour termine proprement");
+
+    // 4. Test d'appuis PTT rapides (PRESS / RELEASE rapides)
+    TEST_ASSERT(v.startListening(), "14. Nouvel appui rapide autorise");
+    // Release quasi immediat (< 50 ms)
+    v.stopListening();
+    TEST_ASSERT(v.getState() == VoiceState::WAITING_RESPONSE, "15. Transition valide apres appui ultra-court");
+
+    // Tentative d'appui concurrent pendant WAITING_RESPONSE : doit etre STRICTEMENT refuse
+    TEST_ASSERT(!v.startListening(), "16. Rejet strict d'un startListening concurrent pendant WAITING_RESPONSE");
+
+    // Cloture du tour court avec audio
+    const char* evAudioDelta = "{\"type\":\"response.audio.delta\",\"delta\":\"AQIDBAU=\"}";
+    v.getOpenAIClient().handleIncomingMessage(evAudioDelta, strlen(evAudioDelta));
+    v.getOpenAIClient().handleIncomingMessage(evDoneEmpty, strlen(evDoneEmpty));
+    drainVoicePlayback(v);
+    TEST_ASSERT(v.isReady(), "17. Moteur READY apres cycle PTT rapide");
+
+    // 5. Enchainement multi-tours consecutifs : alternatif Avec Audio / Sans Audio
+    for (int cycle = 0; cycle < 3; cycle++) {
+        TEST_ASSERT(v.startListening(), "18. Demarrage tour consecutif");
+        v.stopListening();
+        if (cycle % 2 == 0) {
+            // Tour sans audio : auto-resolution non-bloquante via update()
+            v.getOpenAIClient().handleIncomingMessage(evDoneEmpty, strlen(evDoneEmpty));
+            v.update();
+        } else {
+            // Tour avec audio : lecture complete et vidage DMA
+            v.getOpenAIClient().handleIncomingMessage(evAudioDelta, strlen(evAudioDelta));
+            v.getOpenAIClient().handleIncomingMessage(evDoneEmpty, strlen(evDoneEmpty));
+            drainVoicePlayback(v);
+        }
+        TEST_ASSERT(v.isReady(), "19. Cycle consecutif complete et retour propre a READY");
+    }
+
+    v.stop();
+    v.getOpenAIClient().setTransport(nullptr);
+}
+
 // =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
@@ -7594,6 +7697,7 @@ int main() {
     test_v06322_ptt_diagnostics_and_concise_instructions();
     test_v06322_stale_cancellation_protection_and_error_recovery();
     test_v06322_empty_audio_response_and_nonblocking_recovery();
+    test_v0101_openai_realtime_events_failed_and_ptt_transitions();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

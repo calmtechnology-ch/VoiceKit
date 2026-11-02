@@ -108,6 +108,7 @@ public:
     uint32_t getPostTurnCompleteBlocks() const override { return _postTurnCompletePcmBlocks.load(std::memory_order_relaxed); }
     uint32_t getPostTurnCompleteSamples() const override { return _postTurnCompletePcmSamples.load(std::memory_order_relaxed); }
     bool isTurnCompleteReceived() const override { return _turnCompleteReceived.load(std::memory_order_acquire); }
+    bool isWaitingForResponse() const override { return _waitingForResponse.load(std::memory_order_acquire); }
     bool isTurnCompleteBeforeLastPcm() const { return _turnCompleteBeforeLastPcm.load(std::memory_order_acquire); }
 
     // Diagnostics FreeRTOS & mémoire TLS (v0.6.1 — Correction B)

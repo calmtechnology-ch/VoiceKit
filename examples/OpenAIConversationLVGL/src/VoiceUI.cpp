@@ -25,6 +25,10 @@ void VoiceUI::flushCallback(lv_display_t* disp, const lv_area_t* area, uint8_t* 
     uint32_t w = (area->x2 - area->x1 + 1);
     uint32_t h = (area->y2 - area->y1 + 1);
 
+    // Note d'architecture (Audit v0.1.0.1) :
+    // M5.Display.pushImage() realise un transfert synchrone sur le bus SPI vers le controleur ILI9342C.
+    // L'appel a lv_display_flush_ready(disp) est realise immediatement a la sortie de endWrite()
+    // pour clore le cycle de rafraichissement sans bloquer la boucle cooperative.
     uint32_t t0 = micros();
     M5.Display.startWrite();
     M5.Display.pushImage(area->x1, area->y1, w, h, (const uint16_t*)px_map);

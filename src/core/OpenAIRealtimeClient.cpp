@@ -541,6 +541,31 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
             if (nowMs == 0) nowMs = 1;
             _firstResponseReceivedMs.store(nowMs, std::memory_order_relaxed);
         }
+        cJSON* respObj = cJSON_GetObjectItemCaseSensitive(root, "response");
+        const char* respId = nullptr;
+        const char* respStatus = nullptr;
+        if (respObj) {
+            cJSON* idItem = cJSON_GetObjectItemCaseSensitive(respObj, "id");
+            if (idItem && cJSON_IsString(idItem) && idItem->valuestring) respId = idItem->valuestring;
+            cJSON* stItem = cJSON_GetObjectItemCaseSensitive(respObj, "status");
+            if (stItem && cJSON_IsString(stItem) && stItem->valuestring) respStatus = stItem->valuestring;
+        }
+        Serial.printf("[OpenAIClient] response.created : id=%s, status=%s\n",
+                      respId ? respId : "none", respStatus ? respStatus : "in_progress");
+    }
+    // 3b. Ajout d'élément de sortie (message audio ou texte)
+    else if (strcmp(evType, "response.output_item.added") == 0) {
+        cJSON* itemObj = cJSON_GetObjectItemCaseSensitive(root, "item");
+        const char* itemType = nullptr;
+        const char* itemRole = nullptr;
+        if (itemObj) {
+            cJSON* t = cJSON_GetObjectItemCaseSensitive(itemObj, "type");
+            if (t && cJSON_IsString(t) && t->valuestring) itemType = t->valuestring;
+            cJSON* r = cJSON_GetObjectItemCaseSensitive(itemObj, "role");
+            if (r && cJSON_IsString(r) && r->valuestring) itemRole = r->valuestring;
+        }
+        Serial.printf("[OpenAIClient] response.output_item.added : type=%s, role=%s\n",
+                      itemType ? itemType : "unknown", itemRole ? itemRole : "unknown");
     }
     // 4. Paquet audio streaming PCM16 24 kHz (GA: response.output_audio.delta, Beta: response.audio.delta)
     else if (strcmp(evType, "response.output_audio.delta") == 0 || strcmp(evType, "response.audio.delta") == 0) {
@@ -558,7 +583,11 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
                 if (pcmBytes.size() >= sizeof(int16_t)) {
                     const int16_t* pcmSamples = reinterpret_cast<const int16_t*>(pcmBytes.data());
                     size_t sampleCount = pcmBytes.size() / sizeof(int16_t);
-                    _pcmSamplesDispatchedTotal.fetch_add((uint32_t)sampleCount, std::memory_order_relaxed);
+                    uint32_t prevDispatched = _pcmSamplesDispatchedTotal.fetch_add((uint32_t)sampleCount, std::memory_order_relaxed);
+                    if (prevDispatched == 0) {
+                        Serial.printf("[OpenAIClient] response.audio.delta : premier bloc audio recu (%u ech)\n",
+                                      (unsigned)sampleCount);
+                    }
                     if (_turnCompleteReceived.load(std::memory_order_acquire)) {
                         _turnCompleteBeforeLastPcm.store(true, std::memory_order_release);
                         _postTurnCompletePcmSamples.fetch_add((uint32_t)sampleCount, std::memory_order_relaxed);
@@ -607,10 +636,29 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
         _waitingForResponse.store(false, std::memory_order_release);
         cJSON* respObj = cJSON_GetObjectItemCaseSensitive(root, "response");
         const char* statusStr = nullptr;
+        const char* statusDetailsType = nullptr;
+        const char* statusDetailsReason = nullptr;
+        const char* statusDetailsErrMsg = nullptr;
+        const char* statusDetailsErrCode = nullptr;
+
         if (respObj) {
             cJSON* stItem = cJSON_GetObjectItemCaseSensitive(respObj, "status");
             if (stItem && cJSON_IsString(stItem) && stItem->valuestring) {
                 statusStr = stItem->valuestring;
+            }
+            cJSON* detObj = cJSON_GetObjectItemCaseSensitive(respObj, "status_details");
+            if (detObj && cJSON_IsObject(detObj)) {
+                cJSON* dt = cJSON_GetObjectItemCaseSensitive(detObj, "type");
+                if (dt && cJSON_IsString(dt) && dt->valuestring) statusDetailsType = dt->valuestring;
+                cJSON* dr = cJSON_GetObjectItemCaseSensitive(detObj, "reason");
+                if (dr && cJSON_IsString(dr) && dr->valuestring) statusDetailsReason = dr->valuestring;
+                cJSON* de = cJSON_GetObjectItemCaseSensitive(detObj, "error");
+                if (de && cJSON_IsObject(de)) {
+                    cJSON* dem = cJSON_GetObjectItemCaseSensitive(de, "message");
+                    if (dem && cJSON_IsString(dem) && dem->valuestring) statusDetailsErrMsg = dem->valuestring;
+                    cJSON* dec = cJSON_GetObjectItemCaseSensitive(de, "code");
+                    if (dec && cJSON_IsString(dec) && dec->valuestring) statusDetailsErrCode = dec->valuestring;
+                }
             }
             // Extraction de la transcription finale dans response.output si présente
             cJSON* outputArr = cJSON_GetObjectItemCaseSensitive(respObj, "output");
@@ -632,14 +680,42 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
                 }
             }
         }
+
+        uint32_t decodedSamples = _pcmSamplesDispatchedTotal.load(std::memory_order_relaxed);
+        bool hasAudio = (decodedSamples > 0);
+
+        Serial.printf("[OpenAIClient] response.done recu : status=%s", statusStr ? statusStr : "unknown");
+        if (statusDetailsType) {
+            Serial.printf(" | details_type=%s", statusDetailsType);
+        }
+        if (statusDetailsReason) {
+            Serial.printf(" | reason=%s", statusDetailsReason);
+        }
+        if (statusDetailsErrMsg) {
+            Serial.printf(" | err_code=%s, err_msg=%s",
+                          statusDetailsErrCode ? statusDetailsErrCode : "",
+                          statusDetailsErrMsg);
+        }
+        Serial.printf(" | audio_ech=%u (%s)\n", (unsigned)decodedSamples, hasAudio ? "AVEC_AUDIO" : "SANS_AUDIO");
+
         if (statusStr && strcmp(statusStr, "cancelled") == 0) {
             Serial.println("[OpenAIClient] Reponse annulee par le serveur (status: cancelled)");
             if (_onInterrupted) {
                 _onInterrupted();
             }
+        } else if (statusStr && strcmp(statusStr, "failed") == 0) {
+            _lastError = statusDetailsErrMsg ? statusDetailsErrMsg : "Reponse OpenAI echouee (status: failed)";
+            Serial.printf("[OpenAIClient] ERREUR SERVEUR : Reponse echouee (status: failed) : %s\n", _lastError.c_str());
+            if (_onError) {
+                _onError(_lastError);
+            }
         } else {
             _turnCompleteReceived.store(true, std::memory_order_release);
-            Serial.println("[OpenAIClient] Reponse modele terminee (response.done)");
+            if (hasAudio) {
+                Serial.printf("[OpenAIClient] Reponse modele terminee avec audio (%u ech) (response.done)\n", (unsigned)decodedSamples);
+            } else {
+                Serial.println("[OpenAIClient] Reponse modele terminee SANS audio (text-only/silence) (response.done)");
+            }
             if (_onTurnComplete) {
                 _onTurnComplete();
             }

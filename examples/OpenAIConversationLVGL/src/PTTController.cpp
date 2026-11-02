@@ -84,12 +84,22 @@ void PTTController::onButtonPress(uint32_t contactId, int32_t x, int32_t y) {
 
     if (_state == PTTState::PROCESSING || _state == PTTState::SPEAKING) {
         _reqStop = true;
+    } else if (_state == PTTState::INTERRUPTING) {
+        // Interruption prioritaire deja en cours : ne pas reenclencher stop() a repetition
+        Serial.printf("[PTT] Interruption deja en cours (contact #%u), appui ignore\n", (unsigned)contactId);
     } else if (_state == PTTState::ERROR_STATE) {
         _reqRecover = true;
     } else if (_state == PTTState::READY) {
-        _reqPress = true;
+        if (_voice.isReady() && !_voice.isBusy()) {
+            _reqPress = true;
+        } else {
+            const char* cause = getRejectCause();
+            _diag.logPttReject("BUTTON_PRESS", cause, voiceStateToString(_voice.getState()), 0,
+                               liveSessionStateToString(_voice.getSession().getState()),
+                               _voice.isBusy(), _voice.getConversationController().isTurnActive(),
+                               _voice.isSpeaking(), _voice.isListening(), _voice.isReady(), _touchListening);
+        }
     } else {
-        // Tentative de recuperation si bloque
         const char* cause = getRejectCause();
         _diag.logPttReject("BUTTON_PRESS", cause, voiceStateToString(_voice.getState()), 0,
                            liveSessionStateToString(_voice.getSession().getState()),
@@ -170,13 +180,14 @@ void PTTController::notifyVoiceStateChanged(VoiceState newState) {
             _listeningStartTimeMs = 0;
             _processingStartTimeMs = 0;
             _stoppedStartTimeMs = 0;
+            _stopStartTimeMs = 0;
             _errorStartTimeMs = 0;
             _touchListening = false;
             _serialListening = false;
             setState(PTTState::READY);
             break;
         case VoiceState::IDLE:
-            if (_voice.isReady()) {
+            if (_voice.isReady() && !_voice.isBusy()) {
                 setState(PTTState::READY);
             } else {
                 setState(PTTState::DISABLED);
@@ -196,7 +207,10 @@ void PTTController::notifyVoiceStateChanged(VoiceState newState) {
             break;
         case VoiceState::STOPPED:
             _stoppedStartTimeMs = millis();
-            setState(PTTState::READY); // ou transition controlee
+            // L'etat READY doit etre autorise UNIQUEMENT lorsque VoiceKit confirme reellement sa disponibilite
+            if (_voice.isReady() && !_voice.isBusy()) {
+                setState(PTTState::READY);
+            }
             break;
         case VoiceState::ERROR_STATE:
             _errorStartTimeMs = millis();
@@ -232,7 +246,7 @@ void PTTController::notifySpeechStarted() {
 }
 
 void PTTController::notifySpeechFinished() {
-    if (_state == PTTState::SPEAKING) {
+    if (_state == PTTState::SPEAKING || _state == PTTState::PROCESSING) {
         setState(PTTState::READY);
     }
 }
@@ -251,6 +265,7 @@ void PTTController::notifyReady() {
     _listeningStartTimeMs = 0;
     _processingStartTimeMs = 0;
     _stoppedStartTimeMs = 0;
+    _stopStartTimeMs = 0;
     _errorStartTimeMs = 0;
     setState(PTTState::READY);
 }
@@ -263,9 +278,11 @@ void PTTController::processIntents(uint32_t nowMs) {
         Serial.printf("[PTT][STOP] Interruption prioritaire STOP executee (contact #%u)\n", (unsigned)_curContactId);
         _touchListening = false;
         _serialListening = false;
+        _stopStartTimeMs = nowMs;
         setState(PTTState::INTERRUPTING);
         _voice.stop();
-        if (_voice.isReady()) {
+        // L'etat READY est autorise uniquement si VoiceKit est immediatement disponible et non occupe
+        if (_voice.isReady() && !_voice.isBusy()) {
             setState(PTTState::READY);
         }
         return;
@@ -340,6 +357,31 @@ void PTTController::processIntents(uint32_t nowMs) {
 }
 
 void PTTController::checkWatchdogs(uint32_t nowMs, bool isPhysicalTouchActive) {
+    // Verification de synchronisation INTERRUPTING : retour a READY des que VoiceKit est disponible
+    if (_state == PTTState::INTERRUPTING) {
+        if (_voice.isReady() && !_voice.isBusy()) {
+            _stopStartTimeMs = 0;
+            setState(PTTState::READY);
+        } else if (_stopStartTimeMs > 0 && nowMs >= _stopStartTimeMs && (nowMs - _stopStartTimeMs >= 1500)) {
+            _stopStartTimeMs = 0;
+            if (_voice.isReady()) {
+                _diag.logPttRecovery("Interruption stabilisee (1.5 s) -> retour READY", 1500);
+                setState(PTTState::READY);
+            }
+        }
+    }
+
+    // Synchronisation non bloquante si PTT est en PROCESSING mais que VoiceKit a termine
+    if (_state == PTTState::PROCESSING) {
+        if (_voice.isReady() && !_voice.isBusy() && !_voice.isSpeaking() && !_voice.isListening()) {
+            uint32_t procDur = (_processingStartTimeMs > 0 && nowMs >= _processingStartTimeMs) ? (nowMs - _processingStartTimeMs) : 0;
+            _diag.logPttRecovery("Synchronisation PTT -> READY : reponse achevee sans restitution audio", procDur);
+            _processingStartTimeMs = 0;
+            _touchListening = false;
+            _serialListening = false;
+            setState(PTTState::READY);
+        }
+    }
     // Securite de coherence physique : si le doigt n'est plus sur l'ecran mais _touchListening est actif
     if (!isPhysicalTouchActive && _touchListening && !_serialListening) {
         if (nowMs - _pressStartTimeMs > 200) {

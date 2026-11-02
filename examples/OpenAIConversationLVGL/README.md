@@ -1,6 +1,9 @@
-# OpenAIConversationLVGL — Modern Voice UI avec LVGL 9 sur M5Stack CoreS3
+# OpenAIConversationLVGL v0.1.0.1 — Modern Voice UI avec LVGL 9 sur M5Stack CoreS3
 
 Exemple autonome de référence pour **VoiceKit** combinant le modèle conversationnel haute fidélité **OpenAI Realtime (`gpt-realtime-2.1-mini`)** et une interface tactile dark mode moderne propulsée nativement par **LVGL 9** sur microcontrôleur **ESP32-S3 (M5Stack CoreS3)**.
+
+> [!NOTE]
+> La version **v0.1.0.1** apporte les correctifs critiques de déblocage de l'état `PROCESSING`, l'instrumentation des événements OpenAI Realtime, la machine d'états PTT durcie et l'élimination des allocations mémoire dans les sections critiques FreeRTOS.
 
 ---
 
@@ -8,11 +11,12 @@ Exemple autonome de référence pour **VoiceKit** combinant le modèle conversat
 
 - **Interface Dark Mode Premium LVGL 9** : Remplacement intégral du rendu graphique M5GFX immédiat par un graphe de scène objet LVGL 9 (orbe lumineux animé, en-tête d'état, cartes de transcription et bouton tactile Push-to-Talk).
 - **Typographie Française Native** : Polices Segoe UI personnalisées (`font_french_12`, `font_french_14`, `font_french_bold_16`) intégrant tous les caractères accentués (`é è ê ë à â ç î ï ô ù û ü É È Ê À Ç`), les ligatures (`œ Œ`) et la ponctuation française (`« » ’ … — €`).
-- **Gestionnaire Push-to-Talk (PTT) Découplé** : Machine à états finis explicite (`DISABLED`, `READY`, `STARTING`, `LISTENING`, `STOPPING_CAPTURE`, `PROCESSING`, `SPEAKING`, `INTERRUPTING`, `RECOVERING`, `ERROR_STATE`) avec watchdogs de récupération non bloquants.
+- **Gestionnaire Push-to-Talk (PTT) Découplé & Sécurisé** : Machine à états finis explicite (`DISABLED`, `READY`, `STARTING`, `LISTENING`, `STOPPING_CAPTURE`, `PROCESSING`, `SPEAKING`, `INTERRUPTING`, `RECOVERING`, `ERROR_STATE`) avec autorisations strictes de l'état `READY` (`isReady() && !isBusy()`), watchdogs de récupération non bloquants et absorption des appuis concurrents/rapides.
+- **Support Robuste OpenAI Realtime** : Journalisation non-sensible des événements (`response.created`, `response.output_item.added`, `response.audio.delta`), gestion complète de `response.done` avec extraction des statuts (`completed`, `cancelled`, `failed`) et détails d'erreur, et reprise automatique non-bloquante lors de réponses sans flux audio.
+- **Synchronisation Sûre Inter-Threads sans Heap Allocation** : Échange d'événements et de transcriptions entre les callbacks VoiceKit et le thread d'affichage LVGL via buffers statiques bornés (512 octets) et sections critiques FreeRTOS légères (zéro allocation dynamique `String`), avec préservation de l'intégrité UTF-8 multi-octets.
 - **Orbe Vocal Animé Réactif** : Composant `VoiceOrb` concentrique en cercles LVGL avec 5 états visuels (respiration cyan en repos, pulsation corail + niveau RMS en écoute, rotation violette en analyse, ondes turquoise en réponse, rouge alerte en erreur).
 - **Ordonnancement Coopératif Non Bloquant** : Exécution conjointe de `voice.update()`, `ptt.update()` et `lv_timer_handler()` dans la boucle principale sur le Core 1 sans créer de tâche FreeRTOS dédiée à l'affichage.
 - **Empreinte Mémoire Maîtrisée** : Tampon partiel RGB565 de 20 lignes (320 × 20 = 12,8 Ko) et pool dynamique LVGL de 32 Ko, préservant plus de 100 Ko de DRAM interne pour le handshake TLS/WebSocket mbedTLS.
-- **Diagnostics Intégrés Temps Réel** : Métriques de latence par cycle (`voice.update()`, `lv_timer_handler()`, `pushImage` DMA), surveillance de la mémoire vive et journalisation série standardisée.
 
 ---
 
@@ -39,7 +43,7 @@ Exemple autonome de référence pour **VoiceKit** combinant le modèle conversat
 ```text
 examples/OpenAIConversationLVGL/
 ├── include/
-│   ├── AppConfig.h          # Constantes géométriques, couleurs, prompt et timeouts
+│   ├── AppConfig.h          # Constantes géométriques, couleurs, prompt et timeouts (v0.1.0.1)
 │   ├── Diagnostics.h        # Instrumentation et métriques de performance
 │   ├── FrenchFonts.h        # Déclarations des polices LVGL Segoe UI françaises
 │   ├── lv_conf.h            # Configuration dédiée LVGL 9 (RGB565, heap, widgets)
@@ -52,13 +56,13 @@ examples/OpenAIConversationLVGL/
 │   ├── font_french_12.c     # Police Segoe UI 12 pt avec glyphes étendus
 │   ├── font_french_14.c     # Police Segoe UI 14 pt avec glyphes étendus
 │   ├── font_french_bold_16.c# Police Segoe UI Bold 16 pt pour titres et boutons
-│   ├── main.cpp             # Boucle non-bloquante et coordination VoiceKit / LVGL
+│   ├── main.cpp             # Boucle non-bloquante, callbacks sûrs et synchronisation UI
 │   ├── PTTController.cpp    # Traitement des intentions tactiles/série et reprises
 │   ├── VoiceOrb.cpp         # Logique d'animation et variations d'échelle/couleur
-│   └── VoiceUI.cpp          # Construction de l'interface et callbacks LVGL
+│   └── VoiceUI.cpp          # Construction de l'interface et callbacks LVGL (flush SPI)
 ├── platformio.ini           # Configuration PlatformIO pour M5Stack CoreS3
-├── README.md                # Ce document
-└── RAPPORT_v0.1.0.md        # Rapport complet de validation et benchmark v0.6.3.2.2
+├── README.md                # Ce document (actualisé v0.1.0.1)
+└── RAPPORT_v0.1.0.1.md      # Rapport complet d'ingénierie et de validation v0.1.0.1
 ```
 
 ---
@@ -136,28 +140,33 @@ Le firmware répond aux commandes transmises sur le port série USB (115200 baud
 
 ## 6. Architecture Technique et Arbitrages
 
-### 6.1. Rendu LVGL 9 Découpé en Buffer Partiel
+### 6.1. Rendu LVGL 9 et Réalité du Transfert SPI
 
-Pour éviter d'allouer un framebuffer complet de 150 Ko en RAM interne, l'affichage utilise un tampon partiel de 20 lignes :
+L'affichage utilise un tampon partiel de 20 lignes :
 $$320 \times 20 \times 2\text{ octets (RGB565)} = 12\,800\text{ octets}$$
-Les transferts vers l'écran sont délégués à `M5.Display.pushImage()` exploitant le bus SPI optimisé du CoreS3 avec une latence moyenne de **2,1 ms** par bloc.
+Les transferts vers l'écran sont délégués à `M5.Display.pushImage()`.
+> [!NOTE]
+> Dans M5GFX sur CoreS3, `pushImage()` effectue un transfert SPI **synchrone** (bloquant pour la durée du transfert, typiquement 2 à 20 ms selon la surface de la zone modifiée). La notification `lv_display_flush_ready(disp)` est appelée immédiatement après la fin du transfert synchrone. L'implémentation n'effectue aucun double buffering DMA asynchrone non-bloquant.
 
-### 6.2. Cadence Maîtrisée et Protection de l'Audio
+### 6.2. Cadence Maîtrisée et Priorité Audio
 
 VoiceKit conserve une priorité absolue sur les cycles CPU :
 - `voice.update()` s'exécute à chaque tour de boucle avec un temps d'exécution typique de **35 à 60 µs**.
-- `lv_timer_handler()` est appelé périodiquement toutes les 15 à 30 ms (temps moyen : **80 à 120 µs**).
+- `lv_timer_handler()` est appelé périodiquement toutes les 15 à 30 ms (temps moyen : **80 à 120 µs**, max 42,6 ms).
 - En cas de charge serveur exceptionnelle, un mécanisme d'auto-dégradation réduit temporairement le rafraîchissement graphique de 20 fps à 5 fps si `voice.update()` dépasse 5 ms.
+
+### 6.3. Sécurité Mémoire et Concurrence
+
+- Aucune allocation dynamique `String` ou `malloc` dans les sections critiques FreeRTOS.
+- Utilisation de tampons statiques protégés par `portMUX_TYPE` pour transférer les transcriptions et messages vers `loop()`.
+- Toutes les mutations de widgets LVGL s'exécutent strictement dans le thread UI de la boucle principale `loop()`.
 
 ---
 
-## 7. Résultats de Validation Matérielle
+## 7. Rapport de Validation et Non-Régression
 
-Sur banc de test physique M5Stack CoreS3 (COM4) :
-- **5 / 5** Reprises après erreur contrôlées (100% sans redémarrage matériel).
-- **10 / 10** Appuis rapides (< 100 ms) absorbés sans désynchronisation.
-- **10 / 10** Interruptions prioritaires STOP immédiates.
-- **30 / 30** Cycles de dialogue PTT consécutifs sans blocage.
-- **Mémoire SRAM libre** : ~103 Ko stables en régime permanent (aucun memory leak).
-- **Mémoire PSRAM libre** : > 8,08 Mo disponibles.
-
+Consulter le document dédié [RAPPORT_v0.1.0.1.md](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/examples/OpenAIConversationLVGL/RAPPORT_v0.1.0.1.md) pour les détails complets de validation, incluant :
+- 112 suites de tests logiciels réussies (2 210 assertions, 0 échec).
+- Compilation réussie sous PlatformIO CoreS3 (Flash: 94.8%, RAM: 38.6%).
+- Validation de non-régression de l'exemple M5GFX `OpenAIConversation`.
+- Procédure de tests matériels réels pour M5Stack CoreS3.
