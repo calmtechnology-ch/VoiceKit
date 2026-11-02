@@ -7293,11 +7293,156 @@ void test_v06321_assistant_full_text_conservation_and_dynamic_tags() {
 }
 
 // =============================================================================
+// =============================================================================
+// SUITE 109 : VoiceKit v0.6.3.2.2 — Diagnostics PTT, Causes de Rejet et Consigne Concise
+// =============================================================================
+void test_v06322_ptt_diagnostics_and_concise_instructions() {
+    std::cout << "\n[TEST SUITE 109] v0.6.3.2.2 : Diagnostics PTT, Causes de Rejet et Consigne Concise" << std::endl;
+
+    // 1. Verification de la consigne conversationnelle concise francaise v0.6.3.2.2
+    VoiceKitConfig config;
+    config.conversationInstruction =
+        "Tu es un assistant vocal français. "
+        "Réponds directement à la question en une seule phrase courte, généralement 15 à 25 mots maximum. "
+        "Évite les introductions, les répétitions et les formules de politesse inutiles. "
+        "Si l'utilisateur demande explicitement une explication détaillée, adapte la longueur de ta réponse.";
+
+    TEST_ASSERT(config.conversationInstruction.indexOf("assistant vocal français") >= 0, "1. Instruction contient le role francais");
+    TEST_ASSERT(config.conversationInstruction.indexOf("une seule phrase courte") >= 0, "2. Instruction impose une seule phrase courte");
+    TEST_ASSERT(config.conversationInstruction.indexOf("15 à 25 mots maximum") >= 0, "3. Instruction impose 15 a 25 mots maximum");
+    TEST_ASSERT(config.conversationInstruction.indexOf("Évite les introductions") >= 0, "4. Instruction interdit les formules superflues");
+    TEST_ASSERT(config.conversationInstruction.indexOf("explication détaillée") >= 0, "5. Instruction prevoit l'exception explicite");
+
+    // 2. Verification de la classification exacte des causes de rejet PTT
+    VoxCoreVoice v;
+    TEST_ASSERT(!v.isReady(), "6. Moteur non initialise n'est PAS ready");
+    TEST_ASSERT(v.getState() == VoiceState::UNINITIALIZED, "7. Etat initial UNINITIALIZED");
+
+    MockLiveTransport mockTransport;
+    config.provider = VoiceProviderType::OPENAI;
+    config.apiKey = "sk-test-key-diagnostics";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableConversation = true;
+    v.begin(config);
+    v.getOpenAIClient().setTransport(&mockTransport);
+
+    // Avant connexion, isReady doit etre faux (ne jamais forcer artificiellement READY)
+    TEST_ASSERT(!v.isReady(), "8. isReady() strictement faux avant connexion TLS");
+
+    prepareMockOpenAIVoiceReady(v, mockTransport);
+    TEST_ASSERT(v.isReady(), "9. isReady() valide apres setup session");
+    TEST_ASSERT(!v.isBusy(), "10. Moteur disponible (busy == false)");
+
+    // 3. Verification du comportement lors de la prise de parole
+    TEST_ASSERT(v.startListening(), "11. startListening() autorise quand pret");
+    TEST_ASSERT(v.isListening(), "12. isListening() actif");
+    TEST_ASSERT(v.isBusy(), "13. isBusy() actif pendant l'ecoute");
+
+    // Refus de deuxieme demarrage alors que deja en ecoute
+    TEST_ASSERT(!v.startListening(), "14. Refus d'un deuxieme startListening() concurrent");
+
+    v.stopListening();
+    TEST_ASSERT(v.getState() == VoiceState::WAITING_RESPONSE, "15. Transition propre vers WAITING_RESPONSE");
+
+    v.stop();
+    v.getOpenAIClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 110 : VoiceKit v0.6.3.2.2 — Protection Annulations Tardives et Reprise Erreur
+// =============================================================================
+void test_v06322_stale_cancellation_protection_and_error_recovery() {
+    std::cout << "\n[TEST SUITE 110] v0.6.3.2.2 : Protection Annulations Tardives et Reprise Erreur" << std::endl;
+
+    VoxCoreVoice v;
+    MockLiveTransport mockTransport;
+    VoiceKitConfig config;
+    config.provider = VoiceProviderType::OPENAI;
+    config.apiKey = "sk-test-stale-cancel";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableConversation = true;
+    v.begin(config);
+    v.getOpenAIClient().setTransport(&mockTransport);
+    prepareMockOpenAIVoiceReady(v, mockTransport);
+
+    // 1. Demarrage et interruption du Tour 1
+    v.startListening();
+    uint64_t turn1Id = v.getConversationController().getMetrics().turnId;
+    TEST_ASSERT(turn1Id > 0, "1. Tour 1 ID assigne");
+
+    // Interruption STOP pendant le Tour 1
+    v.stop();
+    TEST_ASSERT(!v.getConversationController().isTurnActive(), "2. Tour 1 inactif apres stop()");
+
+    // 2. Demarrage du Tour 2
+    TEST_ASSERT(v.startListening(), "3. Demarrage Tour 2 reussi");
+    uint64_t turn2Id = v.getConversationController().getMetrics().turnId;
+    TEST_ASSERT(turn2Id > turn1Id, "4. Tour 2 ID strictement superieur a Tour 1");
+
+    // Arrivee tardive de l'evenement response.cancelled associe au Tour 1
+    const char* cancelEvt = "{\"type\":\"response.cancelled\"}";
+    v.getOpenAIClient().handleIncomingMessage(cancelEvt, strlen(cancelEvt));
+    v.update();
+
+    // Verifier que le Tour 2 n'a PAS ete corrompu ou annule par l'evenement tardif
+    TEST_ASSERT(v.isListening(), "5. Tour 2 toujours en ecoute active malgre cancel tardif");
+    TEST_ASSERT(v.getConversationController().isTurnActive(), "6. Tour 2 toujours actif");
+
+    // 3. Verification de la reprise apres etat LiveSessionState::ERROR
+    v.getSession().transitionTo(LiveSessionState::ERROR, "Erreur simulee de test");
+    TEST_ASSERT(v.getSession().getState() == LiveSessionState::ERROR, "7. Session en etat ERROR");
+
+    // Appel de requestStop() sur la session : doit restaurer CONNECTED sans reboot
+    v.getSession().requestStop();
+    TEST_ASSERT(v.getSession().getState() == LiveSessionState::CONNECTED, "8. Session restauree a CONNECTED sans reboot");
+
+    v.stop();
+    v.getOpenAIClient().setTransport(nullptr);
+}
+
+// =============================================================================
+// SUITE 111 : VoiceKit v0.6.3.2.2 — Reponse Sans Audio et Watchdog Non-Bloquant
+// =============================================================================
+void test_v06322_empty_audio_response_and_nonblocking_recovery() {
+    std::cout << "\n[TEST SUITE 111] v0.6.3.2.2 : Reponse Sans Audio et Watchdog Non-Bloquant" << std::endl;
+
+    VoxCoreVoice v;
+    MockLiveTransport mockTransport;
+    VoiceKitConfig config;
+    config.provider = VoiceProviderType::OPENAI;
+    config.apiKey = "sk-test-empty-audio";
+    config.wifiMode = WiFiMode::EXTERNAL_WIFI;
+    config.enableConversation = true;
+    v.begin(config);
+    v.getOpenAIClient().setTransport(&mockTransport);
+    prepareMockOpenAIVoiceReady(v, mockTransport);
+
+    // 1. Prise de parole normale
+    v.startListening();
+    v.stopListening();
+    TEST_ASSERT(v.getState() == VoiceState::WAITING_RESPONSE, "1. En attente de reponse serveur");
+
+    // 2. Le serveur termine le tour sans streaming audio (ex: reponse textuelle ou annulation externe)
+    v.getSession().transitionTo(LiveSessionState::CONNECTED, "Termine sans audio");
+    v.update();
+
+    // Verifier que ConversationController a detecte CONNECTED sans audio et est revenu a READY
+    TEST_ASSERT(v.isReady(), "2. Retour automatique a READY sans blocage");
+    TEST_ASSERT(!v.getConversationController().isTurnActive(), "3. Tour termine proprement");
+
+    // 3. Nouveau tour immediatement possible (aucun verrou residuel)
+    TEST_ASSERT(v.startListening(), "4. Prise de parole immediate autorisee apres cycle a vide");
+    v.stop();
+
+    v.getOpenAIClient().setTransport(nullptr);
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.3.2.1  " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.3.2.2  " << std::endl;
     std::cout << "  Corrective de Stabilite et WakeNet Configurable — CoreS3 " << std::endl;
     std::cout << "  Architecture Multi-Fournisseurs (Gemini + OpenAI Realtime)" << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
@@ -7444,6 +7589,11 @@ int main() {
     test_v06321_websocket_control_frames_and_json_parse_diagnostics();
     test_v06321_fragmented_transcription_and_utf8_word_cutting();
     test_v06321_assistant_full_text_conservation_and_dynamic_tags();
+
+    // Nouvelles suites correctives VoiceKit v0.6.3.2.2 (Stabilite PTT, Annulations tardives, Non-blocage)
+    test_v06322_ptt_diagnostics_and_concise_instructions();
+    test_v06322_stale_cancellation_protection_and_error_recovery();
+    test_v06322_empty_audio_response_and_nonblocking_recovery();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

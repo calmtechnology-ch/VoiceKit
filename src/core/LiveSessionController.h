@@ -155,6 +155,7 @@ private:
     std::atomic<bool> _turnActive{false};
     std::atomic<bool> _turnCancelled{false};
     uint64_t _currentTurnId = 0;
+    uint64_t _interruptedTurnId = 0;
     bool _turnCompleteReceived = false;
     uint32_t _turnCompleteTimeMs = 0;
     bool _turnCompletedLogged = false;

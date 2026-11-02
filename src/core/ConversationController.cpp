@@ -191,7 +191,7 @@ void ConversationController::abortTurnForSessionClose() {
 void ConversationController::tick() {
     if (!_isTurnActive) return;
 
-    // Détection de transition vers la restitution vocale
+    // Detection de transition vers la restitution vocale
     if (_state == VoiceState::WAITING_RESPONSE) {
         if (_session && _session->getState() == LiveSessionState::PLAYING) {
             _metrics.firstAudioLatencyMs = _session->getFirstAudioLatencyMs();
@@ -205,14 +205,25 @@ void ConversationController::tick() {
             Serial.printf("[Conversation] Reponse audio recue (latence premier son : %u ms)\n",
                           (unsigned)_metrics.firstAudioLatencyMs);
             setState(VoiceState::SPEAKING);
+        } else if (_session && _session->getState() == LiveSessionState::CONNECTED && _player && !_player->isPlaying()) {
+            Serial.println("[Conversation] Fin de tour detectee sans restitution audio (transition directe CONNECTED)");
+            handleTurnFinished(_session->getCurrentTurnId());
+            return;
         }
     }
 
-    // Détection de fin de restitution si non gérée par événement
+    // Detection de fin de restitution si non geree par evenement
     if (_state == VoiceState::SPEAKING) {
         if (_session && _session->getState() == LiveSessionState::CONNECTED && _player && !_player->isPlaying()) {
             handleTurnFinished(_session->getCurrentTurnId());
+            return;
         }
+    }
+
+    // Timeout de securite non bloquant si le tour vocal est anormalement persistant (> 20 s)
+    if (_turnStartTimeMs > 0 && (millis() - _turnStartTimeMs >= 20000)) {
+        Serial.println("[Conversation] Timeout de securite du tour vocal (20 s) -> reinitialisation propre");
+        requestStop();
     }
 }
 

@@ -663,8 +663,12 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
             const char* codeStr = (codeItem && cJSON_IsString(codeItem) && codeItem->valuestring) ? codeItem->valuestring : "";
 
             // Ignorer l'erreur bénigne d'annulation si aucune réponse n'était active au moment du STOP
-            if (strstr(msgStr, "no active response") != nullptr || strcmp(codeStr, "response_cancel_failed") == 0) {
-                Serial.printf("[OpenAIClient] Info annulation (sans reponse active) : %s\n", msgStr);
+            if (strstr(msgStr, "no active response") != nullptr ||
+                strcmp(codeStr, "response_cancel_failed") == 0 ||
+                strcmp(codeStr, "input_audio_buffer_commit_empty") == 0 ||
+                strstr(msgStr, "buffer too small") != nullptr) {
+                Serial.printf("[OpenAIClient] Info annulation / appui rapide (benigne) : %s\n", msgStr);
+                _waitingForResponse.store(false, std::memory_order_release);
             } else {
                 _lastError = msgStr;
                 Serial.printf("[OpenAIClient] ERREUR SERVEUR (%s) : %s\n", codeStr, msgStr);

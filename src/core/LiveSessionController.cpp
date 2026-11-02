@@ -314,6 +314,12 @@ bool LiveSessionController::begin(IVoiceProvider* provider, void*, LiveAudioPlay
 
     _provider->setOnInterrupted([this]() {
         Serial.println("[LiveSession] Interruption confirmee par le serveur");
+        // Si un nouveau tour a deja demarre apres la demande d'interruption, ne pas annuler le nouveau tour
+        if (_turnActive.load(std::memory_order_acquire) && !_turnCancelled.load(std::memory_order_acquire) && _currentTurnId > _interruptedTurnId) {
+            Serial.printf("[LiveSession] Interruption recue pour tour precedent (#%llu vs actif #%llu) - ignoree pour tour en cours\n",
+                          (unsigned long long)_interruptedTurnId, (unsigned long long)_currentTurnId);
+            return;
+        }
         _turnCancelled.store(true, std::memory_order_release);
         _turnActive.store(false, std::memory_order_release);
         if (_state == LiveSessionState::PLAYING || _state == LiveSessionState::WAITING_RESPONSE) {
@@ -502,6 +508,16 @@ void LiveSessionController::tick() {
             }
         }
     }
+
+    // Timeout de securite attente reponse serveur (15 s)
+    if (_state == LiveSessionState::WAITING_RESPONSE && _waitingStartTimeMs > 0) {
+        if (now - _waitingStartTimeMs >= 15000) {
+            Serial.println("[LiveSession] Timeout attente premiere reponse (15 s) -> retour CONNECTED");
+            _turnCancelled.store(true, std::memory_order_release);
+            _turnActive.store(false, std::memory_order_release);
+            transitionTo(LiveSessionState::CONNECTED, "Timeout attente reponse serveur");
+        }
+    }
     recordTickDurationUs(micros() - t0Us);
 }
 
@@ -586,6 +602,7 @@ void LiveSessionController::finishAudioCapture() {
 
 void LiveSessionController::requestStop() {
     Serial.println("\n[LiveSession] >>> DEMANDE INTERRUPTION STOP PRIORITAIRE <<<");
+    _interruptedTurnId = _currentTurnId;
     _turnCancelled.store(true, std::memory_order_release);
     _turnActive.store(false, std::memory_order_release);
     _turnCompletedLogged = true;
@@ -597,8 +614,14 @@ void LiveSessionController::requestStop() {
         _player->stop(AudioStopReason::USER_STOP);
     }
     printAudioEndCheck("STOP");
-    if (_state != LiveSessionState::DISCONNECTED && _state != LiveSessionState::ERROR) {
-        transitionTo(LiveSessionState::CONNECTED, "Interruption STOP demandee");
+    if (_state != LiveSessionState::DISCONNECTED) {
+        if (_state == LiveSessionState::ERROR) {
+            if (_provider && _provider->isConnected() && _provider->isSetupComplete()) {
+                transitionTo(LiveSessionState::CONNECTED, "Interruption STOP et reprise apres erreur");
+            }
+        } else {
+            transitionTo(LiveSessionState::CONNECTED, "Interruption STOP demandee");
+        }
     }
 }
 
