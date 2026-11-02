@@ -7,15 +7,18 @@
 /**
  * @file FrenchUI.h
  * @brief Utilitaires de rendu et de formatage multi-lignes pour texte francais UTF-8
- *        sur ecran M5Stack CoreS3 (320x240 M5GFX).
+ *        sur ecran M5Stack CoreS3 (320x240 M5GFX) pour VoiceKit v0.6.3.2.
  *
- * VoiceKit v0.6.3.1 :
- * - Decoupage strict des lignes respectant les mots entiers (word-wrap).
- * - Preservation absolue des frontieres de codepoints UTF-8 (zero coupure d'octet).
- * - Troncature propre avec points de suspension sans sequelle d'octet tronque.
- * - Rendu haute precision des accents francais (e, e, e, e, a, a, c, i, i, o, u, u, u),
- *   majuscules accentuees (E, E, E, A, C) et typographie (« », ', -, ...)
- *   sans necessiter d'embarquer des polices CJK volumineuses (> 1.5 Mo).
+ * Améliorations v0.6.3.2 :
+ * - Calcul du retour à la ligne basé sur la LARGEUR RÉELLE EN PIXELS (display.textWidth)
+ *   et non plus sur un nombre arbitraire de caractères.
+ * - Mesure pixel exacte prenant en compte les glyphes accentués et ligatures françaises.
+ * - Troncature propre aux frontières de codepoints avec points de suspension (...).
+ * - Maintien intégral de la transcription en mémoire (la carte n'affiche que ce qui tient
+ *   mais la mémoire conserve la chaîne complète).
+ * - Dessin haute précision des accents français (é, è, ê, ë, à, â, ç, î, ï, ô, ù, û, ü),
+ *   majuscules accentuées (É, È, Ê, À, Ç), ligatures (œ, Œ) et typographie (« », ’, —, …).
+ * - Centrage horizontal automatique pour les textes d'état.
  */
 class FrenchUI {
 public:
@@ -32,28 +35,109 @@ public:
     }
 
     /**
-     * @brief Tronque une chaine UTF-8 a au plus maxBytes en garantissant l'integrite du dernier codepoint.
+     * @brief Mesure la largeur exacte en pixels d'une chaîne UTF-8 avec accents français.
      */
-    static String truncateUtf8(const String& str, size_t maxBytes, const String& ellipsis = "...") {
-        if (str.length() <= maxBytes) return str;
-        size_t elen = ellipsis.length();
-        if (maxBytes <= elen) return ellipsis.substring(0, maxBytes);
-        size_t limit = maxBytes - elen;
-        size_t idx = limit;
+    static int measureUtf8PixelWidth(M5GFX& display, const String& str) {
+        if (str.isEmpty()) return 0;
+        int totalWidth = 0;
         const uint8_t* p = reinterpret_cast<const uint8_t*>(str.c_str());
-        while (idx > 0 && !isUtf8Start(p[idx])) {
-            idx--;
+        char chBuf[2] = {0, 0};
+
+        while (*p) {
+            if (*p < 0x80) {
+                chBuf[0] = static_cast<char>(*p++);
+                totalWidth += display.textWidth(chBuf);
+            } else if (p[0] == 0xC3 && p[1] != 0) {
+                uint8_t c2 = p[1];
+                p += 2;
+                bool isUpper = (c2 >= 0x80 && c2 <= 0x9F);
+                char baseChar = 'e';
+                switch (c2) {
+                    case 0x89: case 0xA9: baseChar = isUpper ? 'E' : 'e'; break;
+                    case 0x88: case 0xA8: baseChar = isUpper ? 'E' : 'e'; break;
+                    case 0x8A: case 0xAA: baseChar = isUpper ? 'E' : 'e'; break;
+                    case 0x8B: case 0xAB: baseChar = isUpper ? 'E' : 'e'; break;
+                    case 0x80: case 0xA0: baseChar = isUpper ? 'A' : 'a'; break;
+                    case 0x82: case 0xA2: baseChar = isUpper ? 'A' : 'a'; break;
+                    case 0x87: case 0xA7: baseChar = isUpper ? 'C' : 'c'; break;
+                    case 0x8E: case 0xAE: baseChar = isUpper ? 'I' : 'i'; break;
+                    case 0x8F: case 0xAF: baseChar = isUpper ? 'I' : 'i'; break;
+                    case 0x94: case 0xB4: baseChar = isUpper ? 'O' : 'o'; break;
+                    case 0x99: case 0xB9: baseChar = isUpper ? 'U' : 'u'; break;
+                    case 0x9B: case 0xBB: baseChar = isUpper ? 'U' : 'u'; break;
+                    case 0x9C: case 0xBC: baseChar = isUpper ? 'U' : 'u'; break;
+                    default: baseChar = isUpper ? 'E' : 'e'; break;
+                }
+                chBuf[0] = baseChar;
+                totalWidth += display.textWidth(chBuf);
+            } else if (p[0] == 0xC2 && (p[1] == 0xAB || p[1] == 0xBB)) {
+                p += 2;
+                totalWidth += 9;
+            } else if (p[0] == 0xE2 && p[1] == 0x80) {
+                if (p[2] == 0x94) {
+                    p += 3;
+                    totalWidth += 10;
+                } else if (p[2] == 0x99 || p[2] == 0x98) {
+                    p += 3;
+                    chBuf[0] = '\'';
+                    totalWidth += display.textWidth(chBuf);
+                } else if (p[2] == 0x9C || p[2] == 0x9D) {
+                    p += 3;
+                    chBuf[0] = '"';
+                    totalWidth += display.textWidth(chBuf);
+                } else if (p[2] == 0xA6) {
+                    p += 3;
+                    totalWidth += display.textWidth("...");
+                } else {
+                    p += 3;
+                }
+            } else if (p[0] == 0xC5 && (p[1] == 0x92 || p[1] == 0x93)) {
+                bool isUpper = (p[1] == 0x92);
+                p += 2;
+                totalWidth += display.textWidth(isUpper ? "OE" : "oe");
+            } else {
+                p++;
+            }
         }
-        return str.substring(0, idx) + ellipsis;
+        return totalWidth;
     }
 
     /**
-     * @brief Decoupe un texte UTF-8 en plusieurs lignes sans couper de mots ni de caracteres multi-octets.
+     * @brief Tronque proprement une chaîne UTF-8 pour qu'elle tienne dans maxPixelWidth avec des points de suspension.
      */
-    static std::vector<String> wrapUtf8Words(const String& text, size_t maxCharsPerLine, size_t maxLines) {
-        std::vector<String> lines;
-        if (text.isEmpty()) return lines;
+    static String truncateUtf8ToPixels(M5GFX& display, const String& str, int maxPixelWidth, const String& ellipsis = "...") {
+        if (measureUtf8PixelWidth(display, str) <= maxPixelWidth) return str;
+        int elWidth = measureUtf8PixelWidth(display, ellipsis);
+        if (maxPixelWidth <= elWidth) return ellipsis;
 
+        int targetWidth = maxPixelWidth - elWidth;
+        String result = "";
+        size_t i = 0;
+        size_t len = str.length();
+        const uint8_t* bytes = reinterpret_cast<const uint8_t*>(str.c_str());
+
+        while (i < len) {
+            size_t clen = utf8CharLen(bytes[i]);
+            if (clen == 0 || i + clen > len) break;
+            String glyph = str.substring(i, i + clen);
+            int gWidth = measureUtf8PixelWidth(display, glyph);
+            if (measureUtf8PixelWidth(display, result) + gWidth > targetWidth) {
+                break;
+            }
+            result += glyph;
+            i += clen;
+        }
+        return result + ellipsis;
+    }
+
+    /**
+     * @brief Découpe un texte UTF-8 en plusieurs lignes selon la LARGEUR RÉELLE EN PIXELS.
+     */
+    static std::vector<String> wrapUtf8WordsByPixels(M5GFX& display, const String& text, int maxPixelWidth, size_t maxLines) {
+        std::vector<String> lines;
+        if (text.isEmpty() || maxPixelWidth <= 0 || maxLines == 0) return lines;
+
+        // 1. Découpage en mots UTF-8
         std::vector<String> words;
         size_t i = 0;
         size_t len = text.length();
@@ -70,34 +154,53 @@ public:
             words.push_back(text.substring(start, i));
         }
 
+        if (words.empty()) return lines;
+
+        int spaceWidth = display.textWidth(" ");
         String curLine = "";
-        size_t curGlyphs = 0;
+        int curLineWidth = 0;
 
         for (size_t w = 0; w < words.size(); ++w) {
             const String& word = words[w];
-            size_t wGlyphs = 0;
-            for (size_t b = 0; b < word.length(); ) {
-                size_t clen = utf8CharLen(static_cast<uint8_t>(word[b]));
-                b += (clen > 0) ? clen : 1;
-                wGlyphs++;
-            }
+            int wWidth = measureUtf8PixelWidth(display, word);
 
-            if (curGlyphs == 0) {
-                curLine = word;
-                curGlyphs = wGlyphs;
-            } else if (curGlyphs + 1 + wGlyphs <= maxCharsPerLine) {
+            if (curLineWidth == 0) {
+                if (wWidth <= maxPixelWidth) {
+                    curLine = word;
+                    curLineWidth = wWidth;
+                } else {
+                    // Mot unique plus large que la ligne
+                    if (lines.size() + 1 >= maxLines) {
+                        lines.push_back(truncateUtf8ToPixels(display, word, maxPixelWidth));
+                        return lines;
+                    } else {
+                        lines.push_back(truncateUtf8ToPixels(display, word, maxPixelWidth));
+                        curLine = "";
+                        curLineWidth = 0;
+                    }
+                }
+            } else if (curLineWidth + spaceWidth + wWidth <= maxPixelWidth) {
                 curLine += " " + word;
-                curGlyphs += 1 + wGlyphs;
+                curLineWidth += spaceWidth + wWidth;
             } else {
+                // Dépassement de la ligne courante
                 if (lines.size() + 1 >= maxLines) {
-                    // Derniere ligne autorisee atteinte : ajout propre de suspension
-                    curLine = truncateUtf8(curLine + " " + word, maxCharsPerLine, "...");
-                    lines.push_back(curLine);
+                    // Dernière ligne autorisée : troncature élégante avec le reste
+                    String remainder = curLine + " " + word;
+                    for (size_t rest = w + 1; rest < words.size(); ++rest) {
+                        remainder += " " + words[rest];
+                    }
+                    lines.push_back(truncateUtf8ToPixels(display, remainder, maxPixelWidth));
                     return lines;
                 }
                 lines.push_back(curLine);
-                curLine = word;
-                curGlyphs = wGlyphs;
+                if (wWidth <= maxPixelWidth) {
+                    curLine = word;
+                    curLineWidth = wWidth;
+                } else {
+                    curLine = truncateUtf8ToPixels(display, word, maxPixelWidth);
+                    curLineWidth = measureUtf8PixelWidth(display, curLine);
+                }
             }
         }
 
@@ -108,7 +211,7 @@ public:
     }
 
     /**
-     * @brief Affiche une ligne de texte francais UTF-8 en restituant les accents et glyphes.
+     * @brief Affiche une ligne de texte français UTF-8 en restituant géométriquement les accents.
      */
     static void drawFrenchLine(M5GFX& display, int x, int y, const char* utf8, uint16_t fg, uint16_t bg) {
         display.setTextSize(1);
@@ -120,17 +223,15 @@ public:
 
         while (*p) {
             if (*p < 0x80) {
-                // Caractere ASCII standard
                 chBuf[0] = static_cast<char>(*p++);
                 display.drawString(chBuf, cx, y);
                 cx += display.textWidth(chBuf);
             } else if (p[0] == 0xC3 && p[1] != 0) {
-                // Bloc Latin-1 supplement (accents francais majeurs)
                 uint8_t c2 = p[1];
                 p += 2;
                 bool isUpper = (c2 >= 0x80 && c2 <= 0x9F);
                 char baseChar = ' ';
-                int accentType = 0; // 1: aigu, 2: grave, 3: circonflexe, 4: trema, 5: cedille
+                int accentType = 0; // 1: aigu, 2: grave, 3: circonflexe, 4: tréma, 5: cédille
 
                 switch (c2) {
                     case 0x89: case 0xA9: baseChar = isUpper ? 'E' : 'e'; accentType = 1; break; // é, É
@@ -156,27 +257,21 @@ public:
                 int ay = y + (isUpper ? 0 : 1);
 
                 if (accentType == 1) {
-                    // Accent aigu (/)
                     display.drawLine(ax - 1, ay, ax + 2, ay - 2, fg);
                 } else if (accentType == 2) {
-                    // Accent grave (\)
                     display.drawLine(ax + 1, ay, ax - 2, ay - 2, fg);
                 } else if (accentType == 3) {
-                    // Accent circonflexe (^)
                     display.drawLine(ax - 2, ay, ax, ay - 2, fg);
                     display.drawLine(ax, ay - 2, ax + 2, ay, fg);
                 } else if (accentType == 4) {
-                    // Trema (..)
                     display.drawPixel(ax - 2, ay - 1, fg);
                     display.drawPixel(ax + 2, ay - 1, fg);
                 } else if (accentType == 5) {
-                    // Cedille (,) sous la lettre
                     int cy = y + 7;
                     display.drawLine(ax, cy, ax - 1, cy + 2, fg);
                 }
                 cx += w;
             } else if (p[0] == 0xC2 && (p[1] == 0xAB || p[1] == 0xBB)) {
-                // Guillemets francais « »
                 bool isLeft = (p[1] == 0xAB);
                 p += 2;
                 int cy = y + 4;
@@ -194,19 +289,21 @@ public:
                 cx += 9;
             } else if (p[0] == 0xE2 && p[1] == 0x80) {
                 if (p[2] == 0x94) {
-                    // Tiret cadratin (—)
                     p += 3;
                     int cy = y + 4;
                     display.drawFastHLine(cx, cy, 8, fg);
                     cx += 10;
-                } else if (p[2] == 0x99) {
-                    // Apostrophe typographique (’)
+                } else if (p[2] == 0x99 || p[2] == 0x98) {
                     p += 3;
                     chBuf[0] = '\'';
                     display.drawString(chBuf, cx, y);
                     cx += display.textWidth(chBuf);
+                } else if (p[2] == 0x9C || p[2] == 0x9D) {
+                    p += 3;
+                    chBuf[0] = '"';
+                    display.drawString(chBuf, cx, y);
+                    cx += display.textWidth(chBuf);
                 } else if (p[2] == 0xA6) {
-                    // Points de suspension (…)
                     p += 3;
                     display.drawString("...", cx, y);
                     cx += display.textWidth("...");
@@ -214,43 +311,22 @@ public:
                     p += 3;
                 }
             } else if (p[0] == 0xC5 && (p[1] == 0x92 || p[1] == 0x93)) {
-                // Ligature oe / OE
                 bool isUpper = (p[1] == 0x92);
                 p += 2;
                 display.drawString(isUpper ? "OE" : "oe", cx, y);
                 cx += display.textWidth(isUpper ? "OE" : "oe");
             } else {
-                // Octet inconnu ou non supporte : avance securisee
                 p++;
             }
         }
     }
 
     /**
-     * @brief Affiche un texte dans un cadre avec retour a la ligne automatique et effacement de zone.
+     * @brief Affiche une ligne de texte français centrée horizontalement autour de centerX.
      */
-    static void drawCardContent(M5GFX& display, int boxX, int boxY, int boxW, int boxH,
-                                const String& text, const String& placeholder,
-                                uint16_t fgText, uint16_t fgPlaceholder, uint16_t bg, uint16_t borderCol,
-                                size_t maxCharsPerLine = 46, size_t maxLines = 3) {
-        // Redessine le fond de la carte pour effacer l'ancien contenu
-        display.fillRoundRect(boxX, boxY, boxW, boxH, 4, bg);
-        display.drawRoundRect(boxX, boxY, boxW, boxH, 4, borderCol);
-
-        int textX = boxX + 6;
-        int textY = boxY + 6;
-        int lineSpacing = 13;
-
-        if (text.isEmpty()) {
-            display.setTextColor(fgPlaceholder, bg);
-            drawFrenchLine(display, textX, textY, placeholder.c_str(), fgPlaceholder, bg);
-            return;
-        }
-
-        std::vector<String> lines = wrapUtf8Words(text, maxCharsPerLine, maxLines);
-        for (size_t i = 0; i < lines.size() && i < maxLines; ++i) {
-            drawFrenchLine(display, textX, textY + (i * lineSpacing), lines[i].c_str(), fgText, bg);
-        }
+    static void drawCenteredFrenchLine(M5GFX& display, int centerX, int y, const char* utf8, uint16_t fg, uint16_t bg) {
+        int w = measureUtf8PixelWidth(display, utf8);
+        int x = centerX - (w / 2);
+        drawFrenchLine(display, x, y, utf8, fg, bg);
     }
 };
-

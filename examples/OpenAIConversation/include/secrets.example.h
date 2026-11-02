@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-// VoiceKit v0.6.3.1 — OpenAIConversation Configuration des Secrets (Exemple)
+// VoiceKit v0.6.3.2 — OpenAIConversation Configuration des Secrets (Exemple)
 // =============================================================================
 // Copiez ce fichier sous le nom "secrets.h" dans ce même répertoire include/ :
 //     cp include/secrets.example.h include/secrets.h
