@@ -1,13 +1,22 @@
-# VoiceKit v0.6.3.1 — Wake Word Driven Conversation, Stabilité Temps Réel & Architecture Multi-Fournisseurs (Gemini Live & OpenAI Realtime)
+# VoiceKit v0.6.4 — Local Tool Registry, Wake Word & Architecture Multi-Fournisseurs (Gemini Live & OpenAI Realtime)
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
 [![ESP32-S3](https://img.shields.io/badge/Target-M5Stack%20CoreS3%20(ESP32--S3)-blue.svg)](https://docs.m5stack.com/en/core/CoreS3)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)**, de **conversation vocale bidirectionnelle native (Mode B)** et de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** pour **M5Stack CoreS3** (ESP32-S3).
+Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)**, de **conversation vocale bidirectionnelle native (Mode B)**, de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** et de **registre local d'outils (Local Tool Registry)** pour **M5Stack CoreS3** (ESP32-S3).
 
 Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)** supportant à la fois **Google Gemini Live** (moteur par défaut, 100% rétrocompatible) et **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`), construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
+
+La version **v0.6.4** introduit une infrastructure de **registre local d'outils (`Local Tool Registry`)** permettant aux applications ESP32 d'enregistrer, découvrir, valider et exécuter des commandes locales de façon totalement indépendante du Wi-Fi, de Gemini Live et d'OpenAI Realtime :
+- **Registre Local d'Outils Découplé (`ToolRegistry`, `ToolDefinition`, `ToolExecutor`, `ToolValidator`, `ToolEvents`)** :
+  - **Enregistrement & Découverte** : Capacité configurable (16 commandes par défaut), vérification d'unicité des identifiants (rejet des doublons), validation de schéma au moment de l'enregistrement, énumération complète, recherche par identifiant et inspection des métadonnées/paramètres.
+  - **Typage & Validation Stricte des Paramètres** : Validation des types (`STRING`, `INT`, `FLOAT`, `BOOLEAN`), vérification des paramètres obligatoires vs optionnels avec valeurs par défaut, bornage min/max numérique, et rejet systématique des paramètres inconnus (sauf autorisation explicite `allowUnknownParams`).
+  - **Niveaux de Sécurité & Confirmation Sensible** : 3 niveaux de sécurité (`READ_ONLY`, `WRITE`, `SENSITIVE`). Une commande `SENSITIVE` exige une confirmation explicite liée à un jeton à usage unique (`CONF-xxxxxxxx`), protégé contre le rejeu et limité dans le temps (expiration configurable, 30 s par défaut).
+  - **Exécution Contrôlée & Protection Anti-Réentrance** : Exécution protégée contre la réentrance concurrente (`BUSY`), gestion d'erreurs d'exécution (`EXECUTION_FAILED`), support d'exécution différée non bloquante (`enqueueDeferred`), et résultats structurés (`ToolResult`).
+  - **Cycle de Vie & Événements** : 5 événements observables (`TOOL_REQUESTED`, `TOOL_STARTED`, `TOOL_COMPLETED`, `TOOL_FAILED`, `TOOL_CONFIRMATION_REQUIRED`) prêts pour l'intégration UI (VoiceKit-SmartUI).
+  - **Fondation Découplée pour le Futur** : Socle autonome préparé pour de futurs appels d'outils IA et une interopérabilité MCP (sans annoncer de support prématuré dans cette version — voir [Documentation Architecture Registre, IA & MCP](docs/architecture_tools_registry_ai_mcp.md)).
 
 La version **v0.6.3.1** est une version corrective qui fiabilise la latence de `voice.update()`, consolide les transitions audio et prépare la sélection explicite du modèle WakeNet sans refondre l'architecture existante :
 - **Correctifs de Stabilité & WakeNet Configurable (v0.6.3.1)** :
@@ -43,7 +52,7 @@ La version **v0.6.2.1** est une version corrective qui fiabilise et durcit la **
 - **Sélection par Configuration Zéro-Code** : Bascule instantanée entre Gemini et OpenAI par simple configuration (`config.provider = VoiceProviderType::OPENAI;`). Aucune modification requise dans le code métier de l'application !
 - **Rééchantillonneur Dédié 16 kHz $\to$ 24 kHz (`AudioResampler`)** : Algorithme linéaire ultra-rapide en virgule fixe entière (512 in $\to$ 768 out en moins de 15 µs sur Core 1), n'impactant aucunement la tâche audio critique.
 - **Sanctuaire Audio VoxCore Intact** : Conservation intégrale de la tâche FreeRTOS Mode 2, du buffer circulaire PSRAM 120 000 échantillons (~5 s), des buffers DMA et du protocole de vidage exact sans coupure de la syllabe finale (*« alpha tango terminé »*).
-- **Validation Exhaustive & Zéro Régression** : **1 989 tests unitaires réussis avec 0 échec** (100 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
+- **Validation Exhaustive & Zéro Régression** : **2 320 tests unitaires réussis avec 0 échec** (117 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
 
 ---
 
@@ -59,10 +68,12 @@ La version **v0.6.2.1** est une version corrective qui fiabilise et durcit la **
    - [Méthode C — Développement Local](#méthode-c--développement-local)
 5. [Configuration & Choix du Fournisseur](#5-configuration--choix-du-fournisseur)
 6. [Nouvelle API Simplifiée (`VoiceKit.h`)](#6-nouvelle-api-simplifiée-voicekith)
-7. [Contrôleur Réutilisable `ContinuousListeningController`](#7-contrôleur-réutilisable-continuouslisteningcontroller)
-8. [Référence de l'API Historique (`VoxCoreVoice`)](#8-référence-de-lapi-historique-voxcorevoice)
-9. [Exemples Inclus](#9-exemples-inclus)
-10. [Garanties de Non-Régression & Sécurité](#10-garanties-de-non-régression--sécurité)
+7. [Registre Local d'Outils (`ToolRegistry` — v0.6.4)](#7-registre-local-doutils-toolregistry--v064)
+8. [Contrôleur Réutilisable `ContinuousListeningController`](#8-contrôleur-réutilisable-continuouslisteningcontroller)
+9. [Référence de l'API Historique (`VoxCoreVoice`)](#9-référence-de-lapi-historique-voxcorevoice)
+10. [Exemples Inclus](#10-exemples-inclus)
+11. [Garanties de Non-Régression & Sécurité](#11-garanties-de-non-régression--sécurité)
+12. [Architecture : Registre Local, IA Tool Calling & MCP](#12-architecture--registre-local-ia-tool-calling--mcp)
 
 ---
 
@@ -162,12 +173,15 @@ VoiceKit v0.6.0 introduit une architecture ouverte découplée reposant sur l'in
 
 ```text
 VoiceKit/
-├── library.json                 # Manifeste PlatformIO (v0.6.2.1)
-├── library.properties           # Manifeste Arduino IDE (v0.6.2.1)
+├── library.json                 # Manifeste PlatformIO (v0.6.4)
+├── library.properties           # Manifeste Arduino IDE (v0.6.4)
 ├── LICENSE                      # Licence MIT
 ├── README.md                    # Documentation complète
 ├── CHANGELOG.md                 # Historique des versions
-├── RAPPORT_v0.6.2.md            # Rapport technique v0.6.2 (Wake Word Foundation & étude ESP-SR)
+├── RAPPORT_v0.6.4.md            # Rapport technique v0.6.4 (Local Tool Registry)
+├── RAPPORT_v0.6.3.md            # Rapport technique v0.6.3 (Wake Word Conversation)
+├── docs/                        # Architecture & documentation approfondie
+│   └── architecture_tools_registry_ai_mcp.md # Registre Local, Tool Calling & MCP
 ├── src/                         # Sources et en-têtes (Standard Arduino 1.5)
 │   ├── VoiceKit.h               # Façade simplifiée unifiée (TTS, STT, Continuous, Conversation, WakeWord)
 │   ├── VoiceKit.cpp             # Implémentation de la façade simplifiée
@@ -176,6 +190,13 @@ VoiceKit/
 │   ├── VoiceKitConfig.h         # Configuration, choix du fournisseur, profils & Wake Word
 │   ├── Utf8Utils.h              # Utilitaires UTF-8 & échappement JSON RFC 8259
 │   ├── core/                    # Moteur interne VoxCore, Fournisseurs & Wake Word
+│   │   ├── tools/               # Registre Local d'Outils (v0.6.4)
+│   │   │   ├── ToolDefinition.h # Types, arguments, résultats et définitions
+│   │   │   ├── ToolEvents.h     # Événements du cycle de vie des commandes
+│   │   │   ├── ToolValidator.h  # Validateur strict des types et contraintes
+│   │   │   ├── ToolExecutor.h   # Exécuteur avec garde anti-réentrance et file différée
+│   │   │   ├── ToolRegistry.h   # Registre principal (enregistrement, découverte, sécurité)
+│   │   │   └── ToolRegistry.cpp # Implémentation du registre d'outils
 │   │   ├── WakeWordConversationController (.h/.cpp) # Contrôleur de conversation déclenchée par mot de réveil (v0.6.3)
 │   │   ├── IWakeWordEngine.h              # Interface abstraite des moteurs de mot de réveil (v0.6.2)
 │   │   ├── WakeWordAudioBridge (.h/.cpp)  # Pont audio temps réel SPSC borné 16 kHz (v0.6.2)
@@ -204,7 +225,9 @@ VoiceKit/
 │       ├── M5AudioOutput (.h/.cpp)        # HAL haut-parleur M5.Speaker
 │       ├── M5AudioInput (.h/.cpp)         # HAL microphone M5.Mic (ES7210)
 │       └── HardwareManager.h              # Arbitrage I2S centralisé HP / Micro
-├── examples/                    # Exemples d'application (11 exemples)
+├── examples/                    # Exemples d'application (13 exemples)
+│   ├── LocalToolRegistryDemo/   # NOUVEAU v0.6.4 : Démonstrateur Registre Local d'outils hors ligne
+│   ├── WakeWordConversation/    # NOUVEAU v0.6.3 : Conversation vocale mains libres (« Bonjour ESP »)
 │   ├── WakeWordFoundation/      # NOUVEAU v0.6.2 : Fondation Wake Word hors ligne (sans LVGL ni réseau)
 │   ├── OpenAIConversation/      # Conversation avec OpenAI Realtime
 │   ├── VoiceDiagnostics/        # Outil officiel de diagnostic (6 onglets dont LATENCY) & CSV
@@ -218,7 +241,7 @@ VoiceKit/
 │   └── MinimalTTS_Arduino/      # Exemple autonome Arduino IDE (.ino)
 └── tests/
     ├── run_tests.bat            # Lanceur des tests automatisés MinGW
-    └── test_voicekit_all.cpp    # 100 suites de tests unitaires (1 989 validations, 0 échec)
+    └── test_voicekit_all.cpp    # 117 suites de tests unitaires (2 320 validations, 0 échec)
 ```
 
 ---
@@ -517,7 +540,87 @@ voice.enableWakeWordConversation(true);
 
 ---
 
-## 7. Contrôleur Réutilisable `ContinuousListeningController`
+## 7. Registre Local d'Outils (`ToolRegistry` — v0.6.4)
+
+La version **v0.6.4** introduit une infrastructure de registre local de commandes, entièrement autonome (sans Wi-Fi, sans Gemini Live, sans OpenAI Realtime et sans initialisation préalable du moteur vocal) pour ESP32-S3 / M5Stack CoreS3.
+
+### 7.1 Architecture & Composants Découplés
+
+Le registre d'outils est structuré en modules complémentaires dans `src/core/tools/` :
+- **`ToolDefinition.h`** : Définition des métadonnées, paramètres typés (`STRING`, `INT`, `FLOAT`, `BOOLEAN`), arguments (`ToolArgs`), valeurs par défaut, politiques de sécurité (`READ_ONLY`, `WRITE`, `SENSITIVE`) et statuts structurés (`ToolExecutionStatus`, `ToolResult`).
+- **`ToolValidator.h`** : Validation stricte préalable : existence de la commande, présence des paramètres obligatoires, conformité des types, respect des bornes minimales/maximales, et rejet catégorique des paramètres inconnus (sauf autorisation explicite `allowUnknownParams`).
+- **`ToolExecutor.h`** : Exécuteur d'outils avec protection anti-réentrance concurrente (`BUSY`), interception sûre des exceptions et gestion d'une file d'exécution différée (`enqueueDeferred`, `update`).
+- **`ToolEvents.h`** : Cycle de vie complet des commandes sous forme d'événements observables (`TOOL_REQUESTED`, `TOOL_STARTED`, `TOOL_COMPLETED`, `TOOL_FAILED`, `TOOL_CONFIRMATION_REQUIRED`), prêt pour l'intégration UI (VoiceKit-SmartUI).
+- **`ToolRegistry.h / .cpp`** : Registre central orchestrant l'enregistrement (capacité initiale 16 commandes configurables, rejet des doublons et déclarations invalides), la découverte, la validation, les autorisations et le cycle de confirmation sensible.
+
+### 7.2 Niveaux de Sécurité & Confirmation Sensible
+
+1. **`READ_ONLY`** : Lecture d'état sans modification (ex. `system.get_status`).
+2. **`WRITE`** : Modification d'état autorisée sans confirmation supplémentaire (ex. `audio.set_volume`, `display.set_brightness`).
+3. **`SENSITIVE`** : Opération critique (ex. `system.factory_reset`, effacement mémoire). **Une commande sensible ne s'exécute jamais automatiquement**. Le registre génère un jeton sécurisé unique (`CONF-xxxxxxxx`) avec expiration paramétrable (30 secondes par défaut) et protection stricte contre le rejeu. L'exécution est débloquée uniquement par l'appel explicite de `executeWithConfirmation("commande", args, token)`.
+
+### 7.3 Exemple d'Utilisation C++
+
+```cpp
+#include <ToolRegistry.h>
+
+ToolRegistry registry;
+
+// 1. Déclaration d'une commande de lecture
+ToolDefinition statusTool;
+statusTool.id = "system.get_status";
+statusTool.description = "Retourne l'état du CoreS3 (batterie, mémoire)";
+statusTool.security = ToolSecurityPolicy::READ_ONLY;
+statusTool.handler = [](const ToolArgs& args) -> ToolResult {
+    return ToolResult::ok("{\"battery\": 98, \"free_psram\": 4194304}");
+};
+registry.registerTool(statusTool);
+
+// 2. Déclaration d'une commande d'écriture avec paramètre borné
+ToolDefinition volTool;
+volTool.id = "audio.set_volume";
+volTool.description = "Règle le volume sonore (0-100)";
+volTool.security = ToolSecurityPolicy::WRITE;
+volTool.parameters.push_back(
+    ToolParam::requiredInt("volume", "Niveau sonore en pourcent")
+        .withRange(0, 100)
+);
+volTool.handler = [](const ToolArgs& args) -> ToolResult {
+    int vol = args.getInt("volume");
+    // Appliquer au matériel...
+    return ToolResult::ok("Volume réglé à " + String(vol) + "%");
+};
+registry.registerTool(volTool);
+
+// 3. Exécution d'une commande
+ToolArgs args;
+args.set("volume", 75);
+ToolResult res = registry.execute("audio.set_volume", args);
+if (res.isSuccess()) {
+    Serial.println(res.output);
+}
+```
+
+### 7.4 Méthodes Publiques Clés
+
+| Méthode | Description |
+| :--- | :--- |
+| `bool registerTool(const ToolDefinition& def)` | Enregistre une commande (vérifie validité, unicité et capacité max). |
+| `bool unregisterTool(const String& id)` | Désenregistre une commande et libère son emplacement. |
+| `size_t getToolCount() const` | Retourne le nombre d'outils enregistrés. |
+| `bool hasTool(const String& id) const` | Vérifie l'existence d'une commande par son identifiant. |
+| `const ToolDefinition* findTool(const String& id) const` | Recherche une commande pour consulter sa description et ses paramètres. |
+| `std::vector<String> getToolIds() const` | Liste l'ensemble des identifiants des commandes enregistrées. |
+| `ToolResult execute(const String& id, const ToolArgs& args)` | Valide et exécute une commande de manière synchrone et sécurisée. |
+| `ToolResult executeWithConfirmation(id, args, token)` | Valide et exécute une commande sensible avec son jeton de confirmation. |
+| `bool cancelConfirmation(const String& token)` | Révoque immédiatement un jeton de confirmation en attente. |
+| `void setEventListener(ToolEventCallback cb)` | Souscrit aux événements du cycle de vie des outils. |
+| `void setAuthorizationChecker(checker)` | Définit un hook d'autorisation personnalisée avant toute exécution. |
+| `void update()` | Traite la file des commandes différées et nettoie les jetons expirés. |
+
+---
+
+## 8. Contrôleur Réutilisable `ContinuousListeningController`
 
 Intégré au cœur de la bibliothèque (`src/core/ContinuousListeningController.h` / `.cpp`), ce contrôleur abstrait toute la complexité d'une dictée vocale continue mains libres :
 - **Détection VAD Intégrée** : Analyse en direct les blocs PCM 16 kHz capturés par le microphone matériel.
@@ -532,7 +635,7 @@ Intégré au cœur de la bibliothèque (`src/core/ContinuousListeningController.
 
 ---
 
-## 8. Référence de l'API Historique (`VoxCoreVoice`)
+## 9. Référence de l'API Historique (`VoxCoreVoice`)
 
 Pour assurer une rétrocompatibilité ascendante stricte à 100%, la classe `VoxCoreVoice` (`VoxCoreVoice.h`) reste intégralement disponible avec toutes ses méthodes publiques historiques :
 
@@ -573,11 +676,14 @@ Pour assurer une rétrocompatibilité ascendante stricte à 100%, la classe `Vox
 
 ---
 
-## 9. Exemples Inclus
+## 10. Exemples Inclus
 
-La bibliothèque fournit 12 exemples complets prêts à l'emploi :
+La bibliothèque fournit 13 exemples complets prêts à l'emploi :
 
-1. **`examples/WakeWordConversation/`** (PlatformIO) — **NOUVEAU v0.6.3** :  
+1. **`examples/LocalToolRegistryDemo/`** (PlatformIO) — **NOUVEAU v0.6.4** :  
+   Démonstrateur autonome de registre local d'outils sur M5Stack CoreS3 **sans Wi-Fi, sans Gemini Live ni OpenAI**, avec écran de diagnostic M5GFX (320 × 240) et menu interactif série. Enregistre trois commandes matérielles réelles (`system.get_status`, `audio.set_volume`, `display.set_brightness`) et une commande sensible d'exemple (`system.factory_reset`) avec validation stricte de types/bornes et confirmation par jeton à usage unique.
+
+2. **`examples/WakeWordConversation/`** (PlatformIO) — **NOUVEAU v0.6.3** :  
    Application de conversation vocale entièrement mains libres sur M5Stack CoreS3 (affichage M5GFX 320 × 240, sans LVGL), déclenchée par le mot de réveil local « Bonjour ESP ». Affiche clairement les 9 états en français (`EN ATTENTE — « Bonjour ESP »`, `MOT DE RÉVEIL DÉTECTÉ`, `CONNEXION GEMINI / OPENAI`, `PRÊT — PARLEZ`, `ÉCOUTE`, `RÉPONSE VOCALE`, `FIN DE CONVERSATION`, `RETOUR EN ÉCOUTE`, `ERREUR / RÉCUPÉRATION`), les compteurs de sessions, détections, reconnexions et erreurs, et distingue strictement une détection acoustique réelle (`WAKENET`) d'une détection simulée (`TEST`).
 
 1. **`examples/WakeWordFoundation/`** (PlatformIO) — **NOUVEAU v0.6.2** :  
@@ -605,14 +711,29 @@ La bibliothèque fournit 12 exemples complets prêts à l'emploi :
 
 ---
 
-## 10. Garanties de Non-Régression & Sécurité
+## 11. Garanties de Non-Régression & Sécurité
 
-La version **v0.6.3** garantit une non-régression absolue sur l'ensemble des modules préexistants :
+La version **v0.6.4** garantit une non-régression absolue sur l'ensemble des modules préexistants :
 - **Intégrité absolue du moteur audio VoxCore** : Aucune réduction arbitraire du buffer circulaire PSRAM (120 000 échantillons @ 24 kHz) ni des marges DMA (160 ms). Préservation intégrale de la tâche FreeRTOS Mode 2 et du vidage exact sans coupure de syllabe.
 - **Validation Repère Acoustique (« alpha tango terminé »)** : Vérification rigoureuse que les derniers mots émis (par Gemini Live comme par OpenAI) sont intégralement restitués sans troncature, y compris lors de la réception de `response.done`.
 - **Rééchantillonnage 16k $\to$ 24k en arithmétique entière** : Exécution en < 15 µs sur ESP32-S3 Core 1 sans blocage de la boucle de capture audio.
 - **Zéro identifiant en clair** : Aucun secret, SSID Wi-Fi ni clé API n'est publié dans le dépôt. Masquage systématique des clés dans les logs.
-- **Suite de tests automatisés** : 100 suites de tests unitaires et 1 989 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
+- **Suite de tests automatisés** : 117 suites de tests unitaires et 2 320 assertions validées avec 0 échec (`tests/test_voicekit_all.exe`).
+- **Autonomie du Registre Local** : Aucune dépendance réseau, aucune allocation audio ni tâche FreeRTOS superflue pour `ToolRegistry`.
 - **Compilations d'exemples validées à 100%** : Tous les exemples cibles PlatformIO compilent sans aucune erreur.
 
-Consultez le [Rapport Technique v0.6.3](RAPPORT_v0.6.3.md) (ainsi que le [Rapport Technique v0.6.2.1](RAPPORT_v0.6.2.1.md), le [Rapport Technique v0.6.2](RAPPORT_v0.6.2.md), le [Rapport de Livraison v0.6.1](RAPPORT_LIVRAISON_v0.6.1.md) et le [Rapport de Livraison v0.6.0](RAPPORT_LIVRAISON_v0.6.0.md)) pour les détails d'architecture, la machine à états `WakeWordConversationController`, l'étude WakeNet10 / ESP-SR et les métriques exposées.
+Consultez le [Rapport Technique v0.6.4](RAPPORT_v0.6.4.md) (ainsi que le [Rapport Technique v0.6.3](RAPPORT_v0.6.3.md), le [Rapport Technique v0.6.2.1](RAPPORT_v0.6.2.1.md), le [Rapport Technique v0.6.2](RAPPORT_v0.6.2.md), le [Rapport de Livraison v0.6.1](RAPPORT_LIVRAISON_v0.6.1.md) et le [Rapport de Livraison v0.6.0](RAPPORT_LIVRAISON_v0.6.0.md)) pour les détails d'architecture du registre local, les mesures de compilation et les métriques exposées.
+
+---
+
+## 12. Architecture : Registre Local, IA Tool Calling & MCP
+
+Un document d'architecture détaillé est disponible dans le dossier `docs/` :  
+**[Architecture : Registre Local d'Outils, Appels d'Outils IA et MCP](docs/architecture_tools_registry_ai_mcp.md)**.
+
+Il clarifie les responsabilités et frontières conceptuelles entre :
+1. **Le Registre Local d'Outils (VoiceKit v0.6.4)** : Couche embarquée temps réel sur ESP32, déterministe, synchrone, sans dépendance réseau.
+2. **L'Appel d'Outils par l'IA (IA Tool Calling — versions futures)** : Traduction bidirectionnelle de schémas JSON Schema pour Gemini Live (`functionDeclarations`) et OpenAI Realtime (`session.update.tools`), avec boucle d'exécution asynchrone des résultats vers le LLM.
+3. **Le Model Context Protocol (MCP — versions futures)** : Protocole de découverte et d'échange client/serveur standardisé via JSON-RPC 2.0 pour agents et outils distribués.
+
+> **Note importante** : VoiceKit v0.6.4 ne prétend pas être un serveur MCP ni déclarer de compatibilité directe avec les schémas d'outils Gemini/OpenAI dans cette version. Il en pose les fondations architecturales rigoureuses.

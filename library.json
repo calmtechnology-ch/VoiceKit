@@ -1,10 +1,12 @@
 {
   "name": "VoiceKit",
-  "version": "0.6.3.1",
-  "description": "Bibliothèque C++/Arduino multi-fournisseurs (Gemini Live & OpenAI Realtime) de synthèse vocale (TTS), reconnaissance vocale (STT), dictée continue (ContinuousSTT), conversation bidirectionnelle native, fondation locale de détection de mot de réveil (Wake Word Foundation hors ligne stabilisée), conversation mains libres déclenchée par « Bonjour ESP » (WakeWordConversationController, WakeNet configurable) et moteur VoxCore stabilisé pour M5Stack CoreS3 — v0.6.3.1",
+  "version": "0.6.4",
+  "description": "Bibliotheque C++/Arduino multi-fournisseurs (Gemini Live & OpenAI Realtime) avec Registre Local d'Outils (Local Tool Registry v0.6.4), synthese vocale (TTS), reconnaissance vocale (STT), dictee continue (ContinuousSTT), conversation bidirectionnelle native, fondation locale de detection de mot de reveil (Wake Word Foundation hors ligne stabilisee), conversation mains libres declenchee par « Bonjour ESP » (WakeWordConversationController, WakeNet configurable) et moteur VoxCore stabilise pour M5Stack CoreS3 — v0.6.4",
   "keywords": [
     "voicekit",
     "voxcore",
+    "tools",
+    "tool-registry",
     "tts",
     "stt",
     "wakeword",
@@ -38,7 +40,8 @@
   "headers": [
     "VoiceKit.h",
     "VoxCoreVoice.h",
-    "WakeWordConversationController.h"
+    "WakeWordConversationController.h",
+    "ToolRegistry.h"
   ],
   "dependencies": {
     "m5stack/M5CoreS3": "1.0.0",
@@ -49,6 +52,7 @@
     "srcFilter": [
       "+<*>",
       "+<core/*>",
+      "+<core/tools/*>",
       "+<hal/*>",
       "+<esp_sr/*>"
     ],

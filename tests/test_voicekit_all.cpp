@@ -16,6 +16,7 @@
 #include "core/AudioResampler.h"
 #include "core/OpenAIRealtimeClient.h"
 #include "core/GeminiVoiceProvider.h"
+#include "core/tools/ToolRegistry.h"
 #include "../examples/OrientationClockVoice/include/FrenchTimeFormatter.h"
 #include "../examples/OrientationClockVoice/src/FrenchTimeFormatter.cpp"
 #include "../examples/OrientationClockVoice/include/WiFiTimeSync.h"
@@ -7541,13 +7542,575 @@ void test_v0101_openai_realtime_events_failed_and_ptt_transitions() {
 }
 
 // =============================================================================
+// SUITE 113 : VoiceKit v0.6.4 — Local Tool Registry : Enregistrement valide
+// =============================================================================
+void test_v064_tool_valid_registration() {
+    std::cout << "\n[TEST SUITE 113] v0.6.4 : Enregistrement valide et decouverte" << std::endl;
+    ToolRegistry reg(16);
+
+    // Enregistrement simple
+    bool r1 = reg.registerTool("system.get_status", "Lire l'etat du CoreS3", []() {
+        return ToolResult::success("{\"battery\": 100}");
+    }, ToolSecurityPolicy::READ_ONLY);
+    TEST_ASSERT(r1, "Enregistrement de system.get_status reussi");
+
+    // Enregistrement avec parametres
+    std::vector<ToolParam> params = {
+        ToolParam("volume", ToolParamType::INT, 0, 100, true, "Niveau sonore 0-100")
+    };
+    bool r2 = reg.registerTool("audio.set_volume", "Regler le volume", [](const ToolArgs& args) {
+        return ToolResult::success("Volume regle a " + String(args.getInt("volume")));
+    }, params, ToolSecurityPolicy::WRITE);
+    TEST_ASSERT(r2, "Enregistrement de audio.set_volume reussi");
+
+    // Verification decouverte
+    TEST_ASSERT(reg.getToolCount() == 2, "Compte d'outils == 2");
+    TEST_ASSERT(reg.hasTool("system.get_status"), "hasTool system.get_status == true");
+    TEST_ASSERT(reg.hasTool("audio.set_volume"), "hasTool audio.set_volume == true");
+    TEST_ASSERT(!reg.hasTool("unknown.tool"), "hasTool unknown == false");
+
+    const ToolDefinition* def = reg.findTool("audio.set_volume");
+    TEST_ASSERT(def != nullptr, "findTool audio.set_volume != nullptr");
+    TEST_ASSERT(def->description == "Regler le volume", "Description correcte");
+    TEST_ASSERT(def->securityPolicy == ToolSecurityPolicy::WRITE, "Politique WRITE correcte");
+    TEST_ASSERT(def->parameters.size() == 1, "Nombre de parametres == 1");
+    TEST_ASSERT(def->parameters[0].name == "volume", "Nom du parametre 'volume'");
+    TEST_ASSERT(def->parameters[0].type == ToolParamType::INT, "Type INT");
+    TEST_ASSERT(def->parameters[0].hasMin && def->parameters[0].minValue == 0, "Borne min == 0");
+    TEST_ASSERT(def->parameters[0].hasMax && def->parameters[0].maxValue == 100, "Borne max == 100");
+}
+
+// =============================================================================
+// SUITE 114 : VoiceKit v0.6.4 — Local Tool Registry : Identifiant dupliqué
+// =============================================================================
+void test_v064_tool_duplicate_id() {
+    std::cout << "\n[TEST SUITE 114] v0.6.4 : Rejet d'identifiant duplique et declarations invalides" << std::endl;
+    ToolRegistry reg(16);
+
+    bool r1 = reg.registerTool("test.tool", "Premiere definition", []() {
+        return ToolResult::success();
+    });
+    TEST_ASSERT(r1, "Premier enregistrement reussi");
+
+    // Tentative d'enregistrement avec le même identifiant
+    bool r2 = reg.registerTool("test.tool", "Deuxieme definition", []() {
+        return ToolResult::success();
+    });
+    TEST_ASSERT(!r2, "Rejet strict de l'identifiant duplique 'test.tool'");
+    TEST_ASSERT(reg.getToolCount() == 1, "Le compte reste a 1");
+
+    // Tentative d'enregistrement avec identifiant vide
+    bool r3 = reg.registerTool("", "Vide", []() { return ToolResult::success(); });
+    TEST_ASSERT(!r3, "Rejet identifiant vide");
+
+    // Tentative d'enregistrement avec espaces
+    bool r4 = reg.registerTool("bad id with spaces", "Espaces", []() { return ToolResult::success(); });
+    TEST_ASSERT(!r4, "Rejet identifiant contenant des espaces");
+
+    // Tentative avec parametre min > max
+    ToolDefinition badDef("bad.params", "Test");
+    badDef.addParam(ToolParam("x", ToolParamType::INT, 100, 10)); // min 100 > max 10
+    badDef.setHandler([](const ToolArgs&) { return ToolResult::success(); });
+    bool r5 = reg.registerTool(badDef);
+    TEST_ASSERT(!r5, "Rejet declaration invalide min > max");
+
+    // Tentative sans handler
+    ToolDefinition noHandler("no.handler", "Test");
+    bool r6 = reg.registerTool(noHandler);
+    TEST_ASSERT(!r6, "Rejet definition sans handler");
+}
+
+// =============================================================================
+// SUITE 115 : VoiceKit v0.6.4 — Local Tool Registry : Capacité maximale
+// =============================================================================
+void test_v064_tool_max_capacity() {
+    std::cout << "\n[TEST SUITE 115] v0.6.4 : Capacite maximale configurable et rejet de depassement" << std::endl;
+    ToolRegistry reg(3); // Capacité fixée à 3
+    TEST_ASSERT(reg.getMaxCapacity() == 3, "Capacite maximale fixee a 3");
+
+    bool r1 = reg.registerTool("tool.1", "T1", []() { return ToolResult::success(); });
+    bool r2 = reg.registerTool("tool.2", "T2", []() { return ToolResult::success(); });
+    bool r3 = reg.registerTool("tool.3", "T3", []() { return ToolResult::success(); });
+    TEST_ASSERT(r1 && r2 && r3, "Les 3 premiers outils sont enregistres");
+    TEST_ASSERT(reg.getToolCount() == 3, "Compte d'outils == 3");
+
+    // 4ème outil : doit être rejeté pour dépassement de capacité
+    bool r4 = reg.registerTool("tool.4", "T4", []() { return ToolResult::success(); });
+    TEST_ASSERT(!r4, "4eme outil rejete car capacite maximale atteinte");
+    TEST_ASSERT(reg.getToolCount() == 3, "Compte reste a 3");
+
+    // Augmentation dynamique de la capacité
+    reg.setMaxCapacity(5);
+    bool r5 = reg.registerTool("tool.4", "T4", []() { return ToolResult::success(); });
+    TEST_ASSERT(r5, "Enregistrement accepte apres extension de capacite");
+    TEST_ASSERT(reg.getToolCount() == 4, "Nouveau compte == 4");
+}
+
+// =============================================================================
+// SUITE 116 : VoiceKit v0.6.4 — Local Tool Registry : Commande inexistante
+// =============================================================================
+void test_v064_tool_not_found() {
+    std::cout << "\n[TEST SUITE 116] v0.6.4 : Recherche et execution d'une commande inexistante" << std::endl;
+    ToolRegistry reg(16);
+
+    TEST_ASSERT(reg.findTool("inexistant") == nullptr, "findTool retourne nullptr");
+    ToolResult res = reg.execute("inexistant");
+    TEST_ASSERT(res.status == ToolExecutionStatus::NOT_FOUND, "Statut NOT_FOUND");
+    TEST_ASSERT(!res.isSuccess(), "isSuccess == false");
+    TEST_ASSERT(res.error.indexOf("inexistant") != -1, "Message d'erreur cite la commande inexistante");
+}
+
+// =============================================================================
+// SUITE 117 : VoiceKit v0.6.4 — Local Tool Registry : Exécution réussie
+// =============================================================================
+void test_v064_tool_successful_execution() {
+    std::cout << "\n[TEST SUITE 117] v0.6.4 : Execution reussie avec arguments et types" << std::endl;
+    ToolRegistry reg(16);
+
+    std::vector<ToolParam> params = {
+        ToolParam("a", ToolParamType::INT, true),
+        ToolParam("b", ToolParamType::INT, true),
+        ToolParam("operation", ToolParamType::STRING, false)
+    };
+
+    reg.registerTool("calc.add", "Addition", [](const ToolArgs& args) {
+        int a = args.getInt("a");
+        int b = args.getInt("b");
+        int sum = a + b;
+        return ToolResult::success(String(sum));
+    }, params);
+
+    ToolArgs args;
+    args.set("a", 15);
+    args.set("b", 27);
+    ToolResult res = reg.execute("calc.add", args);
+    TEST_ASSERT(res.isSuccess(), "Execution reussie");
+    TEST_ASSERT(res.status == ToolExecutionStatus::SUCCESS, "Statut SUCCESS");
+    TEST_ASSERT(res.output == "42", "Addition 15 + 27 == 42");
+}
+
+// =============================================================================
+// SUITE 118 : VoiceKit v0.6.4 — Local Tool Registry : Paramètre manquant
+// =============================================================================
+void test_v064_tool_missing_required_param() {
+    std::cout << "\n[TEST SUITE 118] v0.6.4 : Parametre obligatoire manquant" << std::endl;
+    ToolRegistry reg(16);
+    bool handlerCalled = false;
+
+    std::vector<ToolParam> params = {
+        ToolParam("volume", ToolParamType::INT, 0, 100, true, "Volume requis")
+    };
+    reg.registerTool("audio.set_volume", "Volume", [&](const ToolArgs&) {
+        handlerCalled = true;
+        return ToolResult::success();
+    }, params);
+
+    ToolArgs emptyArgs;
+    ToolResult res = reg.execute("audio.set_volume", emptyArgs);
+    TEST_ASSERT(!res.isSuccess(), "Execution refusee");
+    TEST_ASSERT(res.status == ToolExecutionStatus::INVALID_ARGUMENT, "Statut INVALID_ARGUMENT");
+    TEST_ASSERT(res.error.indexOf("volume") != -1, "Erreur cite le parametre manquant 'volume'");
+    TEST_ASSERT(!handlerCalled, "Fonction d'execution JAMAIS appelee si validation echoue");
+}
+
+// =============================================================================
+// SUITE 119 : VoiceKit v0.6.4 — Local Tool Registry : Paramètre de type incorrect
+// =============================================================================
+void test_v064_tool_wrong_param_type() {
+    std::cout << "\n[TEST SUITE 119] v0.6.4 : Parametre de type incorrect (INT, FLOAT, BOOLEAN)" << std::endl;
+    ToolRegistry reg(16);
+    bool handlerCalled = false;
+
+    std::vector<ToolParam> params = {
+        ToolParam("num_int", ToolParamType::INT, true),
+        ToolParam("num_float", ToolParamType::FLOAT, true),
+        ToolParam("flag_bool", ToolParamType::BOOLEAN, true)
+    };
+    reg.registerTool("types.check", "Test types", [&](const ToolArgs&) {
+        handlerCalled = true;
+        return ToolResult::success();
+    }, params);
+
+    // 1. Mauvais type pour INT ("cent")
+    ToolArgs badIntArgs;
+    badIntArgs.set("num_int", "cent");
+    badIntArgs.set("num_float", "3.14");
+    badIntArgs.set("flag_bool", "true");
+    ToolResult r1 = reg.execute("types.check", badIntArgs);
+    TEST_ASSERT(r1.status == ToolExecutionStatus::INVALID_ARGUMENT, "Statut INVALID_ARGUMENT pour mauvais int");
+    TEST_ASSERT(!handlerCalled, "Handler non appele");
+
+    // 2. Mauvais type pour FLOAT ("invalide")
+    ToolArgs badFloatArgs;
+    badFloatArgs.set("num_int", "42");
+    badFloatArgs.set("num_float", "invalide");
+    badFloatArgs.set("flag_bool", "true");
+    ToolResult r2 = reg.execute("types.check", badFloatArgs);
+    TEST_ASSERT(r2.status == ToolExecutionStatus::INVALID_ARGUMENT, "Statut INVALID_ARGUMENT pour mauvais float");
+    TEST_ASSERT(!handlerCalled, "Handler non appele");
+
+    // 3. Mauvais type pour BOOLEAN ("peut-etre")
+    ToolArgs badBoolArgs;
+    badBoolArgs.set("num_int", "42");
+    badBoolArgs.set("num_float", "3.14");
+    badBoolArgs.set("flag_bool", "peut-etre");
+    ToolResult r3 = reg.execute("types.check", badBoolArgs);
+    TEST_ASSERT(r3.status == ToolExecutionStatus::INVALID_ARGUMENT, "Statut INVALID_ARGUMENT pour mauvais boolean");
+    TEST_ASSERT(!handlerCalled, "Handler non appele");
+}
+
+// =============================================================================
+// SUITE 120 : VoiceKit v0.6.4 — Local Tool Registry : Valeur hors limites
+// =============================================================================
+void test_v064_tool_param_out_of_bounds() {
+    std::cout << "\n[TEST SUITE 120] v0.6.4 : Valeur hors limites minimales et maximales" << std::endl;
+    ToolRegistry reg(16);
+    bool handlerCalled = false;
+
+    std::vector<ToolParam> params = {
+        ToolParam("volume", ToolParamType::INT, 0, 100, true)
+    };
+    reg.registerTool("audio.set_volume", "Volume", [&](const ToolArgs&) {
+        handlerCalled = true;
+        return ToolResult::success();
+    }, params);
+
+    // Inférieur au min
+    ToolArgs tooLow;
+    tooLow.set("volume", -5);
+    ToolResult r1 = reg.execute("audio.set_volume", tooLow);
+    TEST_ASSERT(r1.status == ToolExecutionStatus::INVALID_ARGUMENT, "INVALID_ARGUMENT pour volume < 0");
+    TEST_ASSERT(r1.error.indexOf("< min") != -1, "Message d'erreur explicite sur borne min");
+    TEST_ASSERT(!handlerCalled, "Handler non appele");
+
+    // Supérieur au max
+    ToolArgs tooHigh;
+    tooHigh.set("volume", 150);
+    ToolResult r2 = reg.execute("audio.set_volume", tooHigh);
+    TEST_ASSERT(r2.status == ToolExecutionStatus::INVALID_ARGUMENT, "INVALID_ARGUMENT pour volume > 100");
+    TEST_ASSERT(r2.error.indexOf("> max") != -1, "Message d'erreur explicite sur borne max");
+    TEST_ASSERT(!handlerCalled, "Handler non appele");
+}
+
+// =============================================================================
+// SUITE 121 : VoiceKit v0.6.4 — Local Tool Registry : Paramètre inconnu
+// =============================================================================
+void test_v064_tool_unknown_param() {
+    std::cout << "\n[TEST SUITE 121] v0.6.4 : Rejet des parametres inconnus sauf autorisation explicite" << std::endl;
+    ToolRegistry reg(16);
+    bool handlerCalled = false;
+
+    std::vector<ToolParam> params = {
+        ToolParam("volume", ToolParamType::INT, 0, 100, true)
+    };
+    // Par défaut : allowUnknownParams = false
+    reg.registerTool("audio.set_volume", "Volume", [&](const ToolArgs&) {
+        handlerCalled = true;
+        return ToolResult::success();
+    }, params, ToolSecurityPolicy::WRITE, false);
+
+    ToolArgs argsWithExtra;
+    argsWithExtra.set("volume", 50);
+    argsWithExtra.set("unauthorized_arg", "val");
+    ToolResult r1 = reg.execute("audio.set_volume", argsWithExtra);
+    TEST_ASSERT(r1.status == ToolExecutionStatus::INVALID_ARGUMENT, "INVALID_ARGUMENT pour parametre non declare");
+    TEST_ASSERT(r1.error.indexOf("unauthorized_arg") != -1, "Erreur cite le parametre inconnu");
+    TEST_ASSERT(!handlerCalled, "Handler non appele");
+
+    // Avec autorisation explicite
+    reg.registerTool("tools.flexible", "Flexible", [&](const ToolArgs&) {
+        handlerCalled = true;
+        return ToolResult::success("Flexible OK");
+    }, params, ToolSecurityPolicy::WRITE, true);
+
+    ToolResult r2 = reg.execute("tools.flexible", argsWithExtra);
+    TEST_ASSERT(r2.isSuccess(), "Execution autorisee quand allowUnknownParams = true");
+    TEST_ASSERT(handlerCalled, "Handler appele");
+}
+
+// =============================================================================
+// SUITE 122 : VoiceKit v0.6.4 — Local Tool Registry : Commande non autorisée
+// =============================================================================
+void test_v064_tool_unauthorized() {
+    std::cout << "\n[TEST SUITE 122] v0.6.4 : Politique d'autorisation et commande non autorisee" << std::endl;
+    ToolRegistry reg(16);
+    bool rebootCalled = false;
+
+    reg.registerTool("system.get_status", "Status", []() { return ToolResult::success(); });
+    reg.registerTool("system.reboot", "Reboot", [&]() {
+        rebootCalled = true;
+        return ToolResult::success();
+    }, ToolSecurityPolicy::WRITE);
+
+    // Politique : interdire tout reboot
+    reg.setAuthorizationChecker([](const ToolDefinition& def, const ToolArgs&) {
+        return def.id != "system.reboot";
+    });
+
+    ToolResult r1 = reg.execute("system.reboot");
+    TEST_ASSERT(r1.status == ToolExecutionStatus::PERMISSION_DENIED, "PERMISSION_DENIED pour commande bloquee par checker");
+    TEST_ASSERT(!rebootCalled, "Handler reboot non execute");
+
+    ToolResult r2 = reg.execute("system.get_status");
+    TEST_ASSERT(r2.status == ToolExecutionStatus::SUCCESS, "Commande autorisee executee avec succes");
+}
+
+// =============================================================================
+// SUITE 123 : VoiceKit v0.6.4 — Local Tool Registry : Confirmation sensible
+// =============================================================================
+void test_v064_tool_sensitive_confirmation() {
+    std::cout << "\n[TEST SUITE 123] v0.6.4 : Commande SENSITIVE et cycle de confirmation explicite" << std::endl;
+    ToolRegistry reg(16);
+    bool factoryResetCalled = false;
+
+    reg.registerTool("system.factory_reset", "Remise a zero", [&]() {
+        factoryResetCalled = true;
+        return ToolResult::success("Reset effectue");
+    }, ToolSecurityPolicy::SENSITIVE);
+
+    // 1. Demande d'exécution directe sans confirmation : JAMAIS exécutée automatiquement
+    ToolResult r1 = reg.execute("system.factory_reset");
+    TEST_ASSERT(r1.status == ToolExecutionStatus::CONFIRMATION_REQUIRED, "Statut CONFIRMATION_REQUIRED");
+    TEST_ASSERT(!r1.confirmationToken.isEmpty(), "Jeton de confirmation non vide genere");
+    TEST_ASSERT(!factoryResetCalled, "Commande sensible JAMAIS executee automatiquement");
+
+    // 2. Confirmation explicite avec le jeton
+    ToolResult r2 = reg.confirm(r1.confirmationToken);
+    TEST_ASSERT(r2.status == ToolExecutionStatus::SUCCESS, "Statut SUCCESS apres confirmation");
+    TEST_ASSERT(r2.output == "Reset effectue", "Sortie du handler confirmee");
+    TEST_ASSERT(factoryResetCalled, "Handler execute APRES confirmation explicite");
+}
+
+// =============================================================================
+// SUITE 124 : VoiceKit v0.6.4 — Local Tool Registry : Confirmation expirée ou réutilisée
+// =============================================================================
+void test_v064_tool_confirmation_expired_or_reused() {
+    std::cout << "\n[TEST SUITE 124] v0.6.4 : Protection anti-rejeu et expiration du jeton de confirmation" << std::endl;
+    ToolRegistry reg(16);
+    int callCount = 0;
+
+    reg.registerTool("system.wipe", "Wipe", [&]() {
+        callCount++;
+        return ToolResult::success();
+    }, ToolSecurityPolicy::SENSITIVE);
+
+    // Cas 1 : Protection anti-rejeu (réutilisation du même jeton)
+    ToolResult r1 = reg.execute("system.wipe");
+    String token1 = r1.confirmationToken;
+    ToolResult r2 = reg.confirm(token1);
+    TEST_ASSERT(r2.isSuccess(), "Premiere confirmation reussie");
+    TEST_ASSERT(callCount == 1, "Handler execute 1 fois");
+
+    // Deuxième utilisation du même jeton
+    ToolResult r3 = reg.confirm(token1);
+    TEST_ASSERT(r3.status == ToolExecutionStatus::PERMISSION_DENIED, "PERMISSION_DENIED lors de la reutilisation du jeton");
+    TEST_ASSERT(r3.error.indexOf("anti-rejeu") != -1 || r3.error.indexOf("utilise") != -1, "Protection anti-rejeu explicite");
+    TEST_ASSERT(callCount == 1, "Handler non reexecute (anti-rejeu)");
+
+    // Cas 2 : Expiration temporelle
+    ToolResult r4 = reg.execute("system.wipe");
+    String token2 = r4.confirmationToken;
+
+    // Avancement artificiel du temps au-delà du timeout (30s)
+    advanceMockMillis(35000);
+
+    ToolResult r5 = reg.confirm(token2);
+    TEST_ASSERT(r5.status == ToolExecutionStatus::PERMISSION_DENIED, "PERMISSION_DENIED pour jeton expire");
+    TEST_ASSERT(r5.error.indexOf("expire") != -1, "Message d'erreur cite l'expiration");
+    TEST_ASSERT(callCount == 1, "Handler non execute pour jeton expire");
+}
+
+// =============================================================================
+// SUITE 125 : VoiceKit v0.6.4 — Local Tool Registry : Erreur de fonction d'exécution
+// =============================================================================
+void test_v064_tool_execution_failure() {
+    std::cout << "\n[TEST SUITE 125] v0.6.4 : Erreur de fonction d'execution et remontee structuree" << std::endl;
+    ToolRegistry reg(16);
+
+    reg.registerTool("sensor.read", "Lecture capteur", []() {
+        return ToolResult::executionFailed("I2C bus timeout error");
+    });
+
+    ToolResult res = reg.execute("sensor.read");
+    TEST_ASSERT(res.status == ToolExecutionStatus::EXECUTION_FAILED, "Statut EXECUTION_FAILED");
+    TEST_ASSERT(res.error == "I2C bus timeout error", "Message d'erreur preserve");
+    TEST_ASSERT(!res.isSuccess(), "isSuccess == false");
+}
+
+// =============================================================================
+// SUITE 126 : VoiceKit v0.6.4 — Local Tool Registry : Double demande d'exécution (Busy)
+// =============================================================================
+void test_v064_tool_double_execution_busy() {
+    std::cout << "\n[TEST SUITE 126] v0.6.4 : Double demande d'execution et statut BUSY" << std::endl;
+    ToolRegistry reg(16);
+    ToolResult innerResult;
+
+    reg.registerTool("test.dummy", "Dummy", []() {
+        return ToolResult::success("Dummy OK");
+    });
+
+    // Commande réentrante appelant le registre pendant qu'elle est en cours d'exécution
+    reg.registerTool("test.reentrant", "Reentrant", [&](const ToolArgs&) {
+        innerResult = reg.execute("test.dummy");
+        return ToolResult::success("Reentrant completed");
+    });
+
+    ToolResult outer = reg.execute("test.reentrant");
+    TEST_ASSERT(outer.isSuccess(), "Execution parente completee");
+    TEST_ASSERT(innerResult.status == ToolExecutionStatus::BUSY, "Appel reentrant concurrent refuse avec statut BUSY");
+    TEST_ASSERT(innerResult.error.indexOf("occupe") != -1, "Erreur explicite sur occupation");
+}
+
+// =============================================================================
+// SUITE 127 : VoiceKit v0.6.4 — Local Tool Registry : Ordre correct des événements
+// =============================================================================
+void test_v064_tool_event_ordering() {
+    std::cout << "\n[TEST SUITE 127] v0.6.4 : Ordre correct des evenements du registre" << std::endl;
+    ToolRegistry reg(16);
+    std::vector<ToolEventType> recordedEvents;
+
+    reg.onEvent([&](const ToolEvent& e) {
+        recordedEvents.push_back(e.type);
+    });
+
+    reg.registerTool("tool.success", "Success", []() { return ToolResult::success(); });
+    reg.registerTool("tool.fail", "Fail", []() { return ToolResult::executionFailed("err"); });
+    reg.registerTool("tool.sensitive", "Sensitive", []() { return ToolResult::success(); }, ToolSecurityPolicy::SENSITIVE);
+
+    // Scenario 1 : Succès -> REQUESTED -> STARTED -> COMPLETED
+    recordedEvents.clear();
+    reg.execute("tool.success");
+    TEST_ASSERT(recordedEvents.size() == 3, "3 evenements pour un succes");
+    if (recordedEvents.size() == 3) {
+        TEST_ASSERT(recordedEvents[0] == ToolEventType::TOOL_REQUESTED, "1. TOOL_REQUESTED");
+        TEST_ASSERT(recordedEvents[1] == ToolEventType::TOOL_STARTED,   "2. TOOL_STARTED");
+        TEST_ASSERT(recordedEvents[2] == ToolEventType::TOOL_COMPLETED, "3. TOOL_COMPLETED");
+    }
+
+    // Scenario 2 : Échec d'exécution -> REQUESTED -> STARTED -> FAILED
+    recordedEvents.clear();
+    reg.execute("tool.fail");
+    TEST_ASSERT(recordedEvents.size() == 3, "3 evenements pour echec d'execution");
+    if (recordedEvents.size() == 3) {
+        TEST_ASSERT(recordedEvents[0] == ToolEventType::TOOL_REQUESTED, "1. TOOL_REQUESTED");
+        TEST_ASSERT(recordedEvents[1] == ToolEventType::TOOL_STARTED,   "2. TOOL_STARTED");
+        TEST_ASSERT(recordedEvents[2] == ToolEventType::TOOL_FAILED,    "3. TOOL_FAILED");
+    }
+
+    // Scenario 3 : Commande inexistante -> REQUESTED -> FAILED
+    recordedEvents.clear();
+    reg.execute("tool.unknown");
+    TEST_ASSERT(recordedEvents.size() == 2, "2 evenements pour commande inexistante");
+    if (recordedEvents.size() == 2) {
+        TEST_ASSERT(recordedEvents[0] == ToolEventType::TOOL_REQUESTED, "1. TOOL_REQUESTED");
+        TEST_ASSERT(recordedEvents[1] == ToolEventType::TOOL_FAILED,    "2. TOOL_FAILED");
+    }
+
+    // Scenario 4 : Commande sensible -> REQUESTED -> CONFIRMATION_REQUIRED
+    recordedEvents.clear();
+    ToolResult sensRes = reg.execute("tool.sensitive");
+    TEST_ASSERT(recordedEvents.size() == 2, "2 evenements avant confirmation");
+    if (recordedEvents.size() == 2) {
+        TEST_ASSERT(recordedEvents[0] == ToolEventType::TOOL_REQUESTED, "1. TOOL_REQUESTED");
+        TEST_ASSERT(recordedEvents[1] == ToolEventType::TOOL_CONFIRMATION_REQUIRED, "2. TOOL_CONFIRMATION_REQUIRED");
+    }
+
+    // Suite Scenario 4 : confirm() -> STARTED -> COMPLETED
+    recordedEvents.clear();
+    reg.confirm(sensRes.confirmationToken);
+    TEST_ASSERT(recordedEvents.size() == 2, "2 evenements apres confirmation");
+    if (recordedEvents.size() == 2) {
+        TEST_ASSERT(recordedEvents[0] == ToolEventType::TOOL_STARTED,   "1. TOOL_STARTED");
+        TEST_ASSERT(recordedEvents[1] == ToolEventType::TOOL_COMPLETED, "2. TOOL_COMPLETED");
+    }
+}
+
+// =============================================================================
+// SUITE 128 : VoiceKit v0.6.4 — Local Tool Registry : Libération des ressources
+// =============================================================================
+void test_v064_tool_resource_cleanup() {
+    std::cout << "\n[TEST SUITE 128] v0.6.4 : Liberation des ressources et reinitialisation" << std::endl;
+    ToolRegistry reg(16);
+
+    for (int i = 0; i < 5; ++i) {
+        reg.registerTool("tool." + String(i), "Desc", []() { return ToolResult::success(); });
+    }
+    TEST_ASSERT(reg.getToolCount() == 5, "5 outils enregistres");
+
+    // Desenregistrement unitaire
+    bool unreg = reg.unregisterTool("tool.2");
+    TEST_ASSERT(unreg, "unregisterTool tool.2 reussi");
+    TEST_ASSERT(reg.getToolCount() == 4, "Compte passe a 4");
+    TEST_ASSERT(!reg.hasTool("tool.2"), "tool.2 n'existe plus");
+
+    // Vidage complet
+    reg.clear();
+    TEST_ASSERT(reg.getToolCount() == 0, "getToolCount == 0 apres clear()");
+    TEST_ASSERT(reg.pendingConfirmationCount() == 0, "pendingConfirmations == 0 apres clear()");
+
+    // Re-enregistrement immediat apres clear
+    bool rNew = reg.registerTool("tool.new", "Nouveau", []() { return ToolResult::success(); });
+    TEST_ASSERT(rNew, "Re-enregistrement possible apres clear");
+    TEST_ASSERT(reg.getToolCount() == 1, "Compte == 1");
+}
+
+// =============================================================================
+// SUITE 129 : VoiceKit v0.6.4 — Local Tool Registry : Les 3 commandes de démonstration
+// =============================================================================
+void test_v064_demo_three_tools_and_json() {
+    std::cout << "\n[TEST SUITE 129] v0.6.4 : Verification des 3 commandes de demonstration et parseur JSON" << std::endl;
+    ToolRegistry reg(16);
+
+    // 1. system.get_status
+    reg.registerTool("system.get_status", "Retourne l'etat du CoreS3", []() {
+        return ToolResult::success("{\"battery\": 98, \"heap\": 182400, \"uptime_s\": 120}");
+    }, ToolSecurityPolicy::READ_ONLY);
+
+    // 2. audio.set_volume
+    std::vector<ToolParam> volParams = {
+        ToolParam("volume", ToolParamType::INT, 0, 100, true, "Niveau sonore (0-100)")
+    };
+    int currentVolume = 50;
+    reg.registerTool("audio.set_volume", "Modifie le volume", [&](const ToolArgs& args) {
+        currentVolume = args.getInt("volume");
+        return ToolResult::success("Volume regle a " + String(currentVolume));
+    }, volParams, ToolSecurityPolicy::WRITE);
+
+    // 3. display.set_brightness
+    std::vector<ToolParam> brightParams = {
+        ToolParam("brightness", ToolParamType::INT, 0, 255, true, "Luminosite ecran (0-255)")
+    };
+    int currentBrightness = 128;
+    reg.registerTool("display.set_brightness", "Modifie la luminosite", [&](const ToolArgs& args) {
+        currentBrightness = args.getInt("brightness");
+        return ToolResult::success("Luminosite reglee a " + String(currentBrightness));
+    }, brightParams, ToolSecurityPolicy::WRITE);
+
+    // Test system.get_status
+    ToolResult rStatus = reg.execute("system.get_status");
+    TEST_ASSERT(rStatus.isSuccess(), "system.get_status reussi");
+    TEST_ASSERT(rStatus.output.indexOf("\"battery\": 98") != -1, "Etat batterie conforme");
+
+    // Test audio.set_volume via parseur JSON
+    ToolArgs volJsonArgs = ToolArgs::fromJson("{\"volume\": 85}");
+    ToolResult rVol = reg.execute("audio.set_volume", volJsonArgs);
+    TEST_ASSERT(rVol.isSuccess(), "audio.set_volume via JSON reussi");
+    TEST_ASSERT(currentVolume == 85, "Volume mis a jour a 85");
+
+    // Test display.set_brightness via parseur JSON
+    ToolArgs brightJsonArgs = ToolArgs::fromJson("{\"brightness\": 220}");
+    ToolResult rBright = reg.execute("display.set_brightness", brightJsonArgs);
+    TEST_ASSERT(rBright.isSuccess(), "display.set_brightness via JSON reussi");
+    TEST_ASSERT(currentBrightness == 220, "Luminosite mise a jour a 220");
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.3.2.2  " << std::endl;
-    std::cout << "  Corrective de Stabilite et WakeNet Configurable — CoreS3 " << std::endl;
-    std::cout << "  Architecture Multi-Fournisseurs (Gemini + OpenAI Realtime)" << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.4    " << std::endl;
+    std::cout << "  Local Tool Registry & Architecture Multi-Fournisseurs   " << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
     std::cout << "===========================================================" << std::endl;
 
@@ -7698,6 +8261,25 @@ int main() {
     test_v06322_stale_cancellation_protection_and_error_recovery();
     test_v06322_empty_audio_response_and_nonblocking_recovery();
     test_v0101_openai_realtime_events_failed_and_ptt_transitions();
+
+    // Nouvelles suites VoiceKit v0.6.4 (Local Tool Registry — Section 3 & 6)
+    test_v064_tool_valid_registration();
+    test_v064_tool_duplicate_id();
+    test_v064_tool_max_capacity();
+    test_v064_tool_not_found();
+    test_v064_tool_successful_execution();
+    test_v064_tool_missing_required_param();
+    test_v064_tool_wrong_param_type();
+    test_v064_tool_param_out_of_bounds();
+    test_v064_tool_unknown_param();
+    test_v064_tool_unauthorized();
+    test_v064_tool_sensitive_confirmation();
+    test_v064_tool_confirmation_expired_or_reused();
+    test_v064_tool_execution_failure();
+    test_v064_tool_double_execution_busy();
+    test_v064_tool_event_ordering();
+    test_v064_tool_resource_cleanup();
+    test_v064_demo_three_tools_and_json();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

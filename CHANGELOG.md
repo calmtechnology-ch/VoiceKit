@@ -7,6 +7,84 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.4] - 2026-11-03 (Local Tool Registry — Registre Local d'Outils pour M5Stack CoreS3)
+
+### 1. Registre Local d'Outils (`src/core/tools/`)
+- **Infrastructure Autonome Découplée (`ToolRegistry`, `ToolDefinition`, `ToolExecutor`, `ToolValidator`, `ToolEvents`)** :
+  - Permet aux applications ESP32-S3 d'enregistrer, de découvrir, de valider et d'exécuter des commandes locales de façon déterministe et autonome.
+  - Fonctionne sans Wi-Fi, sans initialisation audio, et indépendamment de Gemini Live et d'OpenAI Realtime.
+  - Conçu comme la fondation d'un futur système d'appels d'outils IA et d'une éventuelle interopérabilité MCP (sans annoncer de support prématuré dans cette version).
+- **Capacité, Enregistrement & Découverte (`ToolRegistry.h/.cpp`)** :
+  - Capacité initiale configurable (16 commandes par défaut), extensible dynamiquement (`maxTools`).
+  - Refus catégorique des identifiants dupliqués (`registerTool` renvoie `false`).
+  - Refus des déclarations invalides (`isValid()` vérifie l'identifiant non vide et le gestionnaire non nul).
+  - Méthodes d'inspection et de découverte : `getToolCount()`, `hasTool(id)`, `findTool(id)`, `getToolIds()`.
+- **Validation Stricte des Paramètres (`ToolValidator.h`)** :
+  - Typage des paramètres : `ToolParamType` (`STRING`, `INT`, `FLOAT`, `BOOLEAN`).
+  - Paramètres obligatoires et optionnels avec valeurs par défaut injectées automatiquement si omises.
+  - Bornage numérique automatique : `withRange(min, max)` pour entiers et flottants.
+  - Rejet systématique des arguments inconnus non déclarés, sauf autorisation explicite (`allowUnknownParams = true`).
+  - Échec immédiat de la validation si le type, l'existence ou les bornes ne correspondent pas : le gestionnaire d'exécution n'est jamais appelé si la validation échoue.
+- **Politiques de Sécurité & Confirmation Sensible (`ToolSecurityPolicy`)** :
+  - Trois niveaux stricts : `READ_ONLY` (lecture/télémétrie), `WRITE` (modification autorisée), `SENSITIVE` (opération critique).
+  - Une commande `SENSITIVE` ne s'exécute jamais automatiquement : un appel direct `execute()` retourne `CONFIRMATION_REQUIRED` et génère un jeton cryptographiquement robuste (`CONF-xxxxxxxx`).
+  - Jeton lié à une requête précise (identifiant d'outil + arguments), limité dans le temps (expiration configurable, 30 s par défaut) et protégé contre le rejeu (invalidation immédiate après usage).
+  - Méthode d'exécution confirmée : `executeWithConfirmation(id, args, token)` et méthode d'annulation explicite : `cancelConfirmation(token)`.
+  - Hook d'autorisation personnalisé : `setAuthorizationChecker(checker)` permettant de rejeter une commande en amont avec le statut `PERMISSION_DENIED`.
+- **Exécution Contrôlée & Protection Anti-Réentrance (`ToolExecutor.h`)** :
+  - Garde atomique anti-réentrance (`_isBusy.exchange(true)`) : toute exécution concurrente sur le même exécuteur retourne immédiatement `BUSY`.
+  - Encadrement d'exécution avec interception des exceptions (`EXECUTION_FAILED`).
+  - File d'exécution différée (`enqueueDeferred`, `update()`) pour différer les opérations matérielles longues hors des contextes critiques.
+- **Cycle de Vie & Événements Applicatifs (`ToolEvents.h`)** :
+  - 5 événements standardisés émis vers `ToolEventCallback` :
+    - `TOOL_REQUESTED` : Dès la réception de la demande d'exécution.
+    - `TOOL_STARTED` : Dès le démarrage effectif du gestionnaire après validation.
+    - `TOOL_COMPLETED` : Lors du succès de l'exécution avec le résultat associé.
+    - `TOOL_FAILED` : Lors d'un échec (validation, non trouvé, non autorisé, erreur d'exécution).
+    - `TOOL_CONFIRMATION_REQUIRED` : Lorsqu'une commande sensible attend son jeton.
+  - Prêt pour l'intégration de retours visuels dans VoiceKit-SmartUI.
+
+### 2. Nouvel Exemple Officiel `examples/LocalToolRegistryDemo/`
+- Exemple autonome sur M5Stack CoreS3 **sans Wi-Fi, sans Gemini Live ni OpenAI**.
+- Enregistrement de 4 commandes réelles :
+  - `system.get_status` (`READ_ONLY`) : Télémétrie CoreS3 (tension batterie, Heap libre, PSRAM libre, uptime).
+  - `audio.set_volume` (`WRITE`) : Réglage du volume audio matériel (0-100) avec confirmation sonore (bip AW88298).
+  - `display.set_brightness` (`WRITE`) : Réglage du rétroéclairage LCD matériel (0-255).
+  - `system.factory_reset` (`SENSITIVE`) : Exemple pédagogique de commande critique exigeant un jeton de confirmation.
+- Tableau de bord graphique M5GFX (320 × 240) et moniteur série interactif (options 1 à 9 et commande help).
+- Compilation réussie sous PlatformIO `espressif32@6.9.0` (RAM: 7.1%, Flash: 26.4%).
+
+### 3. Tests Automatisés & Non-Régression
+- **17 Nouvelles Suites de Tests Unitaires (Suites 113 à 129)** :
+  - Couverture exhaustive des 16 exigences du cahier des charges :
+    1. Enregistrement valide.
+    2. Identifiant dupliqué.
+    3. Capacité maximale.
+    4. Recherche d'une commande inexistante.
+    5. Exécution réussie.
+    6. Paramètre manquant.
+    7. Paramètre de type incorrect.
+    8. Valeur hors limites.
+    9. Paramètre inconnu (rejet et acceptation).
+    10. Commande non autorisée.
+    11. Confirmation sensible requise et exécution confirmée.
+    12. Confirmation expirée ou réutilisée (anti-rejeu).
+    13. Erreur de fonction d'exécution.
+    14. Double demande d'exécution (protection anti-réentrance BUSY).
+    15. Ordre correct des événements émis.
+    16. Libération des ressources et désenregistrement.
+    17. Validation des trois commandes de l'exemple (`system.get_status`, `audio.set_volume`, `display.set_brightness`).
+- **Résultat Global** : **2 320 tests unitaires validés avec 0 échec** (contre 2 100 en v0.6.3.1).
+- **Zéro Régression** : Vérification de la compilation sans erreur des exemples préexistants (`MinimalTTS`, `OrientationClockVoice` avec LVGL 9, `MinimalVoiceKit`).
+- **Sanctuaire Audio Intact** : Pipeline VoxCore, WakeNet et liaisons WebSocket TLS Gemini/OpenAI inchangés.
+
+### 4. Documentation
+- Création du document d'architecture : `docs/architecture_tools_registry_ai_mcp.md` détaillant les distinctions et synergies entre Registre Local, IA Tool Calling et MCP.
+- Mise à jour de `library.json` et `library.properties` en version `0.6.4`.
+- Mise à jour complète du `README.md`.
+
+---
+
 ## [0.6.3.1] - 2026-10-29 (Corrective de stabilité et WakeNet configurable — M5Stack CoreS3)
 
 ### 1. Correction Prioritaire — Latence de `voice.update()` & Transitions Non Bloquantes

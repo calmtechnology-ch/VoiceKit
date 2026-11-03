@@ -22,9 +22,9 @@ public:
     String(uint64_t val) : std::string(std::to_string(val)) {}
 
     bool isEmpty() const { return empty(); }
-    int indexOf(char c) const { auto pos = find(c); return pos == std::string::npos ? -1 : (int)pos; }
-    int indexOf(const char* s) const { auto pos = find(s); return pos == std::string::npos ? -1 : (int)pos; }
-    int indexOf(const String& s) const { auto pos = find(s); return pos == std::string::npos ? -1 : (int)pos; }
+    int indexOf(char c, size_t fromIndex = 0) const { auto pos = find(c, fromIndex); return pos == std::string::npos ? -1 : (int)pos; }
+    int indexOf(const char* s, size_t fromIndex = 0) const { auto pos = find(s, fromIndex); return pos == std::string::npos ? -1 : (int)pos; }
+    int indexOf(const String& s, size_t fromIndex = 0) const { auto pos = find(s, fromIndex); return pos == std::string::npos ? -1 : (int)pos; }
     int lastIndexOf(const char* s) const { auto pos = rfind(s); return pos == std::string::npos ? -1 : (int)pos; }
     bool startsWith(const char* prefix) const { return rfind(prefix, 0) == 0; }
     bool startsWith(const String& prefix) const { return startsWith(prefix.c_str()); }
