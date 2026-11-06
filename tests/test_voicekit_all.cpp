@@ -35,6 +35,8 @@ static int s_testsFailed = 0;
         } \
     } while(0)
 
+#include "test_voiceux_suites.h"
+
 // =============================================================================
 // SUITE 1 : Formatage de l'heure en français (FrenchTimeFormatter)
 // =============================================================================
@@ -8109,7 +8111,7 @@ void test_v064_demo_three_tools_and_json() {
 // =============================================================================
 int main() {
     std::cout << "===========================================================" << std::endl;
-    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.4    " << std::endl;
+    std::cout << "  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.4.1    " << std::endl;
     std::cout << "  Local Tool Registry & Architecture Multi-Fournisseurs   " << std::endl;
     std::cout << "  Cible logique C++14 / C++17                             " << std::endl;
     std::cout << "===========================================================" << std::endl;
@@ -8280,6 +8282,9 @@ int main() {
     test_v064_tool_event_ordering();
     test_v064_tool_resource_cleanup();
     test_v064_demo_three_tools_and_json();
+
+    // Nouvelles suites VoiceKit v0.6.4.1 (Voice UX Foundation)
+    run_all_voiceux_tests();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

@@ -1,4 +1,4 @@
-# VoiceKit v0.6.4 — Local Tool Registry, Wake Word & Architecture Multi-Fournisseurs (Gemini Live & OpenAI Realtime)
+# VoiceKit v0.6.4.1 — Voice UX Foundation, Local Tool Registry & Architecture Multi-Fournisseurs (Gemini Live & OpenAI Realtime)
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -8,6 +8,14 @@
 Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)**, de **conversation vocale bidirectionnelle native (Mode B)**, de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** et de **registre local d'outils (Local Tool Registry)** pour **M5Stack CoreS3** (ESP32-S3).
 
 Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)** supportant à la fois **Google Gemini Live** (moteur par défaut, 100% rétrocompatible) et **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`), construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
+
+La version **v0.6.4.1** introduit la fondation logicielle expérimentale **Voice UX Foundation (`VoiceUxController`)**, permettant d'analyser localement les transcriptions textuelles et d'exécuter des décisions conversationnelles déterministes en français sans solliciter de modèle d'IA externe :
+- **Fondation Voice UX Locale (`VoiceUxController`, `TextGate`, `VoiceIntentRouter`, `ReplyMemory`, `VoiceUxTypes`)** :
+  - **Filtrage Déterministe `TextGate`** : Évalue chaque transcription (`ACCEPT`, `IGNORE`, `INCOMPLETE`). Rejette les entrées vides, la ponctuation seule et les hésitations isolées (« euh », « heu », « hum », « hmm »). Conserve intégralement les commandes courtes (« oui », « non », « stop », « répète ») et n'invalide jamais une phrase complexe contenant une hésitation. Détecte à titre purement informatif les phrases potentiellement incomplètes (points de suspension ou conjonction/préposition orpheline finale).
+  - **Routeur d'Intentions Conversationnelles Françaises `VoiceIntentRouter`** : Reconnaissance locale instantanée (1 à 4 µs) de 7 intentions majeures : `REPEAT`, `PREVIOUS`, `STOP`, `PAUSE`, `RESUME`, `SLOWER`, `REPHRASE`. Tolère les formules de politesse en préfixe/suffixe (« s'il te plaît », « merci », « peux-tu »). Protège strictement contre les faux positifs : les énoncés avec complément d'objet (« Arrête la minuterie », « Continue cette équation », « Peux-tu répéter cette expérience scientifique ? ») ou questions complexes (« Pourquoi la voiture s'arrête-t-elle ? ») retournent strictement `NONE`.
+  - **Mémoire Conversationnelle Bornée `ReplyMemory`** : Mémorise en RAM uniquement les 5 dernières réponses complètes de l'assistant (sans base de données ni écriture Flash). Éviction FIFO de la plus ancienne lors de la saturation. Permet le rappel immédiat sur intention `REPEAT` (`getLastReply()`) ou `PREVIOUS` (`getPreviousReply()`). Protège rigoureusement l'encodage UTF-8 RFC 3629 lors de la troncature à la taille maximale autorisée (1024 octets).
+  - **Façade Découplée & Stricte Neutralité** : Désactivée par défaut (`_enabled = false`) pour préserver l'intégrité de tous les projets existants. N'exécute aucune action matérielle directe (`say`, `stop`, `listen`) : émet des événements structurés (`VoiceUxResult`) et laisse l'application maîtresse décider des actions.
+  - **Démonstration Dédiée CoreS3 (`examples/VoiceUxDemo/`)** : Fonctionne à 100% hors-ligne sans Wi-Fi, sans clé API et sans capture audio, avec affichage M5GFX et pilotage série interactif (commandes `T`, `M`, `H`, `C`, `D`).
 
 La version **v0.6.4** introduit une infrastructure de **registre local d'outils (`Local Tool Registry`)** permettant aux applications ESP32 d'enregistrer, découvrir, valider et exécuter des commandes locales de façon totalement indépendante du Wi-Fi, de Gemini Live et d'OpenAI Realtime :
 - **Registre Local d'Outils Découplé (`ToolRegistry`, `ToolDefinition`, `ToolExecutor`, `ToolValidator`, `ToolEvents`)** :
@@ -52,7 +60,7 @@ La version **v0.6.2.1** est une version corrective qui fiabilise et durcit la **
 - **Sélection par Configuration Zéro-Code** : Bascule instantanée entre Gemini et OpenAI par simple configuration (`config.provider = VoiceProviderType::OPENAI;`). Aucune modification requise dans le code métier de l'application !
 - **Rééchantillonneur Dédié 16 kHz $\to$ 24 kHz (`AudioResampler`)** : Algorithme linéaire ultra-rapide en virgule fixe entière (512 in $\to$ 768 out en moins de 15 µs sur Core 1), n'impactant aucunement la tâche audio critique.
 - **Sanctuaire Audio VoxCore Intact** : Conservation intégrale de la tâche FreeRTOS Mode 2, du buffer circulaire PSRAM 120 000 échantillons (~5 s), des buffers DMA et du protocole de vidage exact sans coupure de la syllabe finale (*« alpha tango terminé »*).
-- **Validation Exhaustive & Zéro Régression** : **2 320 tests unitaires réussis avec 0 échec** (117 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
+- **Validation Exhaustive & Zéro Régression** : **2 487 tests unitaires réussis avec 0 échec** (134 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
 
 ---
 

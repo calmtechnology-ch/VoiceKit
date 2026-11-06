@@ -7,6 +7,57 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.4.1] - 2026-11-06 (Voice UX Foundation — Filtrage TextGate, Intentions Locales & ReplyMemory)
+
+### 1. Sous-Système Voice UX (`src/core/voiceux/`)
+- **Architecture Modulaire et Découplée (`VoiceUxController`, `TextGate`, `VoiceIntentRouter`, `ReplyMemory`, `VoiceUxTypes`)** :
+  - Couche logicielle expérimentale autonome permettant d'analyser localement les transcriptions textuelles finales et de gérer les interactions conversationnelles courantes en français sans appel IA ni connexion Internet.
+  - Fonctionne de manière déterministe en quelques microsecondes sur ESP32-S3 (1 à 4 µs mesurés en natif).
+  - Désactivée par défaut (`_enabled = false`) : aucun effet sur les applications existantes qui ne l'utilisent pas.
+  - Neutralité matérielle absolue : `VoiceUxController` n'appelle jamais directement `say()`, `stop()`, `listen()` ou les contrôleurs audio ; il émet des événements structurés et laisse l'application maîtresse décider des actions.
+- **Filtre Déterministe de Transcriptions (`TextGate.h/.cpp`)** :
+  - Décisions : `ACCEPT` (texte exploitable), `IGNORE` (transcription vide, bruit ou hésitation isolée), `INCOMPLETE` (informatif).
+  - Rejet des chaînes vides et espaces/ponctuation seuls.
+  - Rejet des hésitations isolées (« euh », « heu », « hum », « hmm », « hm », etc.) y compris combinées ou ponctuées (« Euh... », « hum ! », « euh hum »).
+  - Préservation intégrale des commandes courtes valides (« oui », « non », « stop », « répète », « pause »).
+  - Ne rejette jamais une phrase entière sur la simple présence d'une hésitation (« Euh quelle heure est-il ? » -> `ACCEPT`).
+  - Détection informative des énoncés incomplets (points de suspension ou conjonction/préposition orpheline en fin de phrase).
+  - Normalisation lexicale interne pour l'analyse avec conservation scrupuleuse de la chaîne originale (`rawText`).
+- **Routeur d'Intentions Conversationnelles Françaises (`VoiceIntentRouter.h/.cpp`)** :
+  - Détection locale de 7 intentions majeures : `REPEAT`, `PREVIOUS`, `STOP`, `PAUSE`, `RESUME`, `SLOWER`, `REPHRASE` (et `NONE`).
+  - Tolérance stricte des formules de politesse en préfixe ou suffixe (« s'il te plaît », « merci », « peux-tu », « s'il vous plaît »).
+  - Insensibilité à la casse, à la ponctuation et aux accents français.
+  - Protection absolue contre les faux positifs : les énoncés avec complément d'objet (« Arrête la minuterie », « Continue cette équation », « Peux-tu répéter cette expérience scientifique ? ») ou questions complexes (« Pourquoi la voiture s'arrête-t-elle ? ») retournent strictement `NONE`.
+- **Mémoire Conversationnelle Bornée en RAM (`ReplyMemory.h/.cpp`)** :
+  - Mémorisation des 5 dernières réponses complètes de l'assistant (capacité configurable).
+  - Stockage en RAM uniquement (zéro écriture Flash, zéro base de données).
+  - Éviction FIFO de la réponse la plus ancienne en cas de saturation.
+  - Consultation de la dernière réponse (`getLastReply()`), de la précédente (`getPreviousReply()`) ou parcours d'historique (`getReplyAt()`).
+  - Borne stricte de taille (1024 octets par défaut) avec troncature sécurisée respectant les limites des séquences UTF-8 RFC 3629 (aucun point de code scindé).
+- **Façade Unifiée (`VoiceUxController.h/.cpp`)** :
+  - API claire : `begin()`, `setEnabled()`, `isEnabled()`, `processFinalText()`, `rememberReply()`, `update()`.
+  - Notification par callback d'événement : `onResult(ResultCallback)`.
+  - Compteurs statistiques de production (`processedCount`, `acceptedCount`, `ignoredCount`, `recognizedIntentCount`).
+
+### 2. Nouvel Exemple Officiel `examples/VoiceUxDemo/`
+- Exemple autonome sur M5Stack CoreS3 **sans Wi-Fi, sans clé API et sans capture audio**.
+- Interface double écran M5GFX (320 × 240) et moniteur série interactif (115 200 bauds).
+- Commandes série : `T <texte>` (analyser), `M <reponse>` (mémoriser), `H` (historique), `C` (effacer), `D` (activer/désactiver).
+- Bascule tactile directe par appui sur l'écran du CoreS3.
+- Compilation réussie sous PlatformIO `espressif32@6.9.0` (RAM: 7.0%, Flash: 25.2%).
+
+### 3. Tests Automatisés & Non-Régression
+- **5 Nouvelles Suites de Tests Unitaires (Suites 130 à 134)** :
+  - Suite 130 : Validation complète de TextGate (chaîne vide, hésitations, commandes courtes, accents, phrases incomplètes).
+  - Suite 131 : Validation de VoiceIntentRouter (toutes les intentions, politesse, casse, accents, faux positifs critiques, commandes inconnues).
+  - Suite 132 : Cycle de vie de ReplyMemory (capacité 5, éviction FIFO, recul, clear, troncature et intégrité UTF-8).
+  - Suite 133 : Façade VoiceUxController (activation/désactivation, événements, neutralité audio, rappels de mémoire).
+  - Suite 134 : Performances, déterminisme et stabilité sur 100 requêtes consécutives (latences mesurées de 1 à 4 µs).
+- **Bilan Global** : **2 487 tests réussis avec 0 échec** (134 suites de tests).
+- Zéro régression sur `LocalToolRegistryDemo`, `ContinuousSTT` et l'ensemble de la chaîne audio de VoiceKit.
+
+---
+
 ## [0.6.4] - 2026-11-03 (Local Tool Registry — Registre Local d'Outils pour M5Stack CoreS3)
 
 ### 1. Registre Local d'Outils (`src/core/tools/`)
