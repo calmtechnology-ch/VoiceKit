@@ -354,7 +354,7 @@ void WiFiManager::fallbackToNormalScan(bool asyncDispatch) {
     Serial.println("[WiFi] Connexion standard (recherche multi-canaux)...");
 
     AsyncCmd cmd;
-    cmd.type = AsyncCmdType::NORMAL_SCAN;
+    cmd.type = AsyncCmdType::DISCONNECT_AND_NORMAL_SCAN;
     if (asyncDispatch) {
         dispatchAsyncCmd(cmd);
     } else {

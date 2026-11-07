@@ -95,44 +95,69 @@ static void drawUI() {
     M5.Display.setTextColor(wifiColor, M5.Display.color565(15, 30, 60));
     M5.Display.drawRightString(wifiOk ? "WiFi OK" : "WiFi ...", dw - 6, 6);
 
-    // 2. Badge d'état principal du pont
+    // 2. Badge d'état principal du pont & du moteur vocal
     VoiceUxBridgeState st = s_bridge.getState();
     const char* stateLabel = voiceUxBridgeStateToString(st);
     uint16_t stateColor = TFT_LIGHTGRAY;
+    bool voiceReady = (s_voice.isReady() || s_voice.getState() == VoiceState::READY);
 
-    switch (st) {
-        case VoiceUxBridgeState::READY:
-            stateLabel = "PRET";
-            stateColor = TFT_GREEN;
-            break;
-        case VoiceUxBridgeState::LISTENING:
-            stateLabel = "ECOUTE";
-            stateColor = TFT_RED;
-            break;
-        case VoiceUxBridgeState::TRANSCRIBING:
-            stateLabel = "TRANSCRIPTION";
-            stateColor = TFT_CYAN;
-            break;
-        case VoiceUxBridgeState::VOICE_UX_PROCESSING:
-            stateLabel = "ANALYSE UX";
-            stateColor = TFT_MAGENTA;
-            break;
-        case VoiceUxBridgeState::ACTION_PENDING:
-            stateLabel = "ACTION";
-            stateColor = TFT_YELLOW;
-            break;
-        case VoiceUxBridgeState::SPEAKING:
-            stateLabel = "REPONSE VOCALE";
-            stateColor = TFT_SKYBLUE;
-            break;
-        case VoiceUxBridgeState::PAUSED:
-            stateLabel = "PAUSE";
-            stateColor = TFT_ORANGE;
-            break;
-        case VoiceUxBridgeState::ERROR:
-            stateLabel = "ERREUR";
-            stateColor = TFT_RED;
-            break;
+    if (st == VoiceUxBridgeState::READY && !voiceReady) {
+        VoiceState vs = s_voice.getState();
+        switch (vs) {
+            case VoiceState::CONNECTING_WIFI:
+                stateLabel = "CONNEXION WIFI...";
+                stateColor = TFT_ORANGE;
+                break;
+            case VoiceState::CONNECTING_SERVICE:
+                stateLabel = (s_voice.getConfig().provider == VoiceProviderType::OPENAI)
+                                 ? "CONNEXION OPENAI..."
+                                 : "CONNEXION GEMINI...";
+                stateColor = TFT_YELLOW;
+                break;
+            case VoiceState::ERROR_STATE:
+                stateLabel = "ERREUR SERVICE VOCAL";
+                stateColor = TFT_RED;
+                break;
+            default:
+                stateLabel = "INITIALISATION VOCALE...";
+                stateColor = TFT_LIGHTGRAY;
+                break;
+        }
+    } else {
+        switch (st) {
+            case VoiceUxBridgeState::READY:
+                stateLabel = "PRET";
+                stateColor = TFT_GREEN;
+                break;
+            case VoiceUxBridgeState::LISTENING:
+                stateLabel = "ECOUTE";
+                stateColor = TFT_RED;
+                break;
+            case VoiceUxBridgeState::TRANSCRIBING:
+                stateLabel = "TRANSCRIPTION";
+                stateColor = TFT_CYAN;
+                break;
+            case VoiceUxBridgeState::VOICE_UX_PROCESSING:
+                stateLabel = "ANALYSE UX";
+                stateColor = TFT_MAGENTA;
+                break;
+            case VoiceUxBridgeState::ACTION_PENDING:
+                stateLabel = "ACTION";
+                stateColor = TFT_YELLOW;
+                break;
+            case VoiceUxBridgeState::SPEAKING:
+                stateLabel = "REPONSE VOCALE";
+                stateColor = TFT_SKYBLUE;
+                break;
+            case VoiceUxBridgeState::PAUSED:
+                stateLabel = "PAUSE";
+                stateColor = TFT_ORANGE;
+                break;
+            case VoiceUxBridgeState::ERROR:
+                stateLabel = "ERREUR";
+                stateColor = TFT_RED;
+                break;
+        }
     }
 
     // Affichage du badge d'état sous l'en-tête
@@ -198,10 +223,19 @@ static void drawUI() {
     M5.Display.drawString(lastReply, 14, memY + 24);
 
     // 5. Bouton tactile PARLER (Push-To-Talk)
-    uint16_t talkBg = (st == VoiceUxBridgeState::LISTENING)
-                        ? M5.Display.color565(200, 30, 30)
-                        : M5.Display.color565(30, 90, 200);
-    const char* talkLabel = (st == VoiceUxBridgeState::LISTENING) ? "RELACHER POUR FINIR" : "PARLER (Maintenir)";
+    uint16_t talkBg;
+    const char* talkLabel;
+
+    if (st == VoiceUxBridgeState::LISTENING) {
+        talkBg = M5.Display.color565(200, 30, 30);
+        talkLabel = "RELACHER POUR FINIR";
+    } else if (voiceReady) {
+        talkBg = M5.Display.color565(30, 90, 200);
+        talkLabel = "PARLER (Maintenir)";
+    } else {
+        talkBg = M5.Display.color565(60, 65, 80);
+        talkLabel = "EN ATTENTE SERVICE...";
+    }
 
     M5.Display.fillRoundRect(s_btnTalkX, s_btnTalkY, s_btnTalkW, s_btnTalkH, 6, talkBg);
     M5.Display.drawRoundRect(s_btnTalkX, s_btnTalkY, s_btnTalkW, s_btnTalkH, 6, TFT_WHITE);
@@ -256,8 +290,10 @@ static void handleSerialCommand(const String& line) {
                 Serial.println("[CMD][ERREUR] Echec startListening()");
             }
         } else {
-            Serial.printf("[CMD][REFUS] Capture interdite dans l'etat courant (%s)\n",
-                          voiceUxBridgeStateToString(s_bridge.getState()));
+            Serial.printf("[CMD][REFUS] Capture interdite dans l'etat courant (pont=%s, vocal=%s, wifi=%s)\n",
+                          voiceUxBridgeStateToString(s_bridge.getState()),
+                          voiceStateToString(s_voice.getState()),
+                          (WiFi.status() == WL_CONNECTED) ? "CONNECTE" : "DECONNECTE");
         }
     } else if (first == 'R' || first == 'r') {
         Serial.println("[CMD] R -> Arret ecoute STT");
@@ -360,7 +396,17 @@ void setup() {
 
     // 3. Configuration de VoiceKit STT / TTS
     VoiceKitConfig vConfig;
-    vConfig.apiKey = GEMINI_KEY;
+    if (AppConfig::VOICE_PROVIDER == 1) {
+        vConfig.provider = VoiceProviderType::OPENAI;
+        vConfig.apiKey = OPENAI_KEY;
+    } else {
+        vConfig.provider = VoiceProviderType::GEMINI;
+        vConfig.apiKey = GEMINI_KEY;
+        if (vConfig.apiKey.isEmpty() && strlen(OPENAI_KEY) > 0) {
+            vConfig.provider = VoiceProviderType::OPENAI;
+            vConfig.apiKey = OPENAI_KEY;
+        }
+    }
     vConfig.wifiMode = WiFiMode::MANAGED_WIFI;
     vConfig.wifiSSID = WIFI_SSID;
     vConfig.wifiPassword = WIFI_PASSWORD;
@@ -369,6 +415,11 @@ void setup() {
     vConfig.muteSpeakerDuringSTT = true;
 
     // 4. Enregistrement des callbacks du moteur vocal VoiceKit
+    s_voice.onStateChanged([](VoiceState vs) {
+        Serial.printf("[VOICE] Changement d'etat : %s\n", voiceStateToString(vs));
+        s_needsRedraw = true;
+    });
+
     s_voice.onReady([]() {
         Serial.println("[VOICE] Moteur vocal pret.");
         s_needsRedraw = true;
@@ -430,6 +481,14 @@ void setup() {
 // =============================================================================
 
 void loop() {
+    // 0. Détection de changement d'état Wi-Fi pour mise à jour immédiate du badge écran
+    static bool s_lastWifiOk = false;
+    bool curWifi = (WiFi.status() == WL_CONNECTED);
+    if (curWifi != s_lastWifiOk) {
+        s_lastWifiOk = curWifi;
+        s_needsRedraw = true;
+    }
+
     // 1. Maintenance du moteur vocal VoiceKit
     s_voice.update();
 
@@ -507,6 +566,11 @@ void loop() {
                 s_bridge.onListeningStarted();
                 s_needsRedraw = true;
             }
+        } else {
+            Serial.printf("[TOUCH][ATTENTE] Capture interdite : pont=%s, vocal=%s, wifi=%s\n",
+                          voiceUxBridgeStateToString(s_bridge.getState()),
+                          voiceStateToString(s_voice.getState()),
+                          (WiFi.status() == WL_CONNECTED) ? "CONNECTE" : "DECONNECTE");
         }
     }
 
