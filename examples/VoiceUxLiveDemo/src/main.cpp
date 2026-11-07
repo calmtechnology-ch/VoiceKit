@@ -31,36 +31,69 @@ static String s_serialCmdBuffer = "";
 static String s_lastActionLog = "Initialisation...";
 static uint32_t s_lastActionTimeMs = 0;
 
-// Coordonnées des zones tactiles écran (320 × 240)
-static constexpr int BTN_TALK_X = 10;
-static constexpr int BTN_TALK_Y = 175;
-static constexpr int BTN_TALK_W = 190;
-static constexpr int BTN_TALK_H = 55;
+// Coordonnées dynamiques des zones tactiles écran
+static int s_btnTalkX = 10;
+static int s_btnTalkY = 175;
+static int s_btnTalkW = 190;
+static int s_btnTalkH = 55;
 
-static constexpr int BTN_STOP_X = 210;
-static constexpr int BTN_STOP_Y = 175;
-static constexpr int BTN_STOP_W = 100;
-static constexpr int BTN_STOP_H = 55;
+static int s_btnStopX = 210;
+static int s_btnStopY = 175;
+static int s_btnStopW = 100;
+static int s_btnStopH = 55;
+
+static void updateLayout() {
+    int dw = M5.Display.width();
+    int dh = M5.Display.height();
+
+    if (dw >= 300) {
+        // Mode Paysage (320 × 240)
+        s_btnTalkX = 10;
+        s_btnTalkY = dh - 65;
+        s_btnTalkW = dw - 130;
+        s_btnTalkH = 55;
+
+        s_btnStopX = dw - 110;
+        s_btnStopY = dh - 65;
+        s_btnStopW = 100;
+        s_btnStopH = 55;
+    } else {
+        // Mode Portrait (240 × 320)
+        s_btnTalkX = 10;
+        s_btnTalkY = dh - 110;
+        s_btnTalkW = dw - 20;
+        s_btnTalkH = 48;
+
+        s_btnStopX = 10;
+        s_btnStopY = dh - 54;
+        s_btnStopW = dw - 20;
+        s_btnStopH = 44;
+    }
+}
 
 // =============================================================================
 // Interface Graphique LCD M5GFX
 // =============================================================================
 
 static void drawUI() {
+    updateLayout();
+    int dw = M5.Display.width();
+    int dh = M5.Display.height();
+
     M5.Display.startWrite();
     M5.Display.fillScreen(TFT_BLACK);
 
-    // 1. Bandeau supérieur d'en-tête (320 × 24)
-    M5.Display.fillRect(0, 0, 320, 24, M5.Display.color565(15, 30, 60));
+    // 1. Bandeau supérieur d'en-tête
+    M5.Display.fillRect(0, 0, dw, 24, M5.Display.color565(15, 30, 60));
     M5.Display.setTextSize(1);
     M5.Display.setTextColor(TFT_WHITE, M5.Display.color565(15, 30, 60));
-    M5.Display.drawString(" VoiceKit v0.6.4.2 - Voice UX Live", 6, 6);
+    M5.Display.drawString(dw >= 300 ? " VoiceKit v0.6.4.2 - Voice UX Live" : " VoiceKit UX Live", 4, 6);
 
     // Badge Wi-Fi
     bool wifiOk = (WiFi.status() == WL_CONNECTED);
     uint16_t wifiColor = wifiOk ? TFT_GREEN : TFT_ORANGE;
     M5.Display.setTextColor(wifiColor, M5.Display.color565(15, 30, 60));
-    M5.Display.drawRightString(wifiOk ? "WiFi OK" : "WiFi ...", 314, 6);
+    M5.Display.drawRightString(wifiOk ? "WiFi OK" : "WiFi ...", dw - 6, 6);
 
     // 2. Badge d'état principal du pont
     VoiceUxBridgeState st = s_bridge.getState();
@@ -103,23 +136,25 @@ static void drawUI() {
     }
 
     // Affichage du badge d'état sous l'en-tête
-    M5.Display.fillRoundRect(8, 28, 304, 22, 4, stateColor);
+    M5.Display.fillRoundRect(8, 28, dw - 16, 22, 4, stateColor);
     M5.Display.setTextColor(TFT_BLACK, stateColor);
-    M5.Display.drawCenterString(stateLabel, 160, 32);
+    M5.Display.drawCenterString(stateLabel, dw / 2, 32);
 
     // 3. Cadre central : Transcription utilisateur & intention
     int boxY = 54;
-    int boxH = 62;
-    M5.Display.drawRoundRect(8, boxY, 304, boxH, 4, M5.Display.color565(50, 60, 80));
+    int boxH = (dw >= 300) ? 62 : 72;
+    M5.Display.drawRoundRect(8, boxY, dw - 16, boxH, 4, M5.Display.color565(50, 60, 80));
     M5.Display.setTextSize(1);
+
+    int maxChars = (dw >= 300) ? 40 : 28;
 
     if (st == VoiceUxBridgeState::LISTENING) {
         M5.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
-        M5.Display.drawString("Microphone actif : dictez votre message...", 14, boxY + 6);
+        M5.Display.drawString("Microphone actif : dictez...", 14, boxY + 6);
         const String& interim = s_bridge.getInterimText();
         M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
         String disp = interim.isEmpty() ? "(En attente de voix...)" : interim;
-        if (disp.length() > 40) disp = disp.substring(0, 37) + "...";
+        if ((int)disp.length() > maxChars) disp = disp.substring(0, maxChars - 3) + "...";
         M5.Display.drawString(disp, 14, boxY + 24);
     } else {
         const String& finalTxt = s_bridge.getLastFinalText();
@@ -127,31 +162,38 @@ static void drawUI() {
         M5.Display.drawString("Derniere transcription :", 14, boxY + 6);
         M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
         String disp = finalTxt.isEmpty() ? "(Aucune prise de parole)" : finalTxt;
-        if (disp.length() > 40) disp = disp.substring(0, 37) + "...";
+        if ((int)disp.length() > maxChars) disp = disp.substring(0, maxChars - 3) + "...";
         M5.Display.drawString(disp, 14, boxY + 22);
 
         // Décision & intention
         const VoiceUxResult& res = s_bridge.getController().getLastResult();
         M5.Display.setTextColor(TFT_GOLD, TFT_BLACK);
-        String sub = "Intent: " + String(voiceUxIntentToString(res.intent)) +
-                     " | Gate: " + String(textGateDecisionToString(res.gateDecision));
-        if (res.processingTimeUs > 0) {
-            sub += " (" + String(res.processingTimeUs) + " us)";
+        String sub;
+        if (dw >= 300) {
+            sub = "Intent: " + String(voiceUxIntentToString(res.intent)) +
+                  " | Gate: " + String(textGateDecisionToString(res.gateDecision));
+            if (res.processingTimeUs > 0) {
+                sub += " (" + String(res.processingTimeUs) + " us)";
+            }
+        } else {
+            sub = "Int: " + String(voiceUxIntentToString(res.intent)) +
+                  " | " + String(textGateDecisionToString(res.gateDecision));
         }
         M5.Display.drawString(sub, 14, boxY + 40);
     }
 
     // 4. Cadre Mémoire conversationnelle (ReplyMemory)
-    int memY = 120;
-    int memH = 48;
-    M5.Display.drawRoundRect(8, memY, 304, memH, 4, M5.Display.color565(50, 60, 80));
+    int memY = (dw >= 300) ? 120 : (boxY + boxH + 6);
+    int memH = (dw >= 300) ? 48 : 56;
+    M5.Display.drawRoundRect(8, memY, dw - 16, memH, 4, M5.Display.color565(50, 60, 80));
     const ReplyMemory& mem = s_bridge.getReplyMemory();
     M5.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
     M5.Display.drawString("Memoire (" + String(mem.getCount()) + "/" + String(mem.getCapacity()) + ") :", 14, memY + 6);
 
     String lastReply = mem.getLastReply();
     if (lastReply.isEmpty()) lastReply = "(Memoire vide)";
-    if (lastReply.length() > 42) lastReply = lastReply.substring(0, 39) + "...";
+    int memChars = (dw >= 300) ? 42 : 30;
+    if ((int)lastReply.length() > memChars) lastReply = lastReply.substring(0, memChars - 3) + "...";
     M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
     M5.Display.drawString(lastReply, 14, memY + 24);
 
@@ -161,17 +203,17 @@ static void drawUI() {
                         : M5.Display.color565(30, 90, 200);
     const char* talkLabel = (st == VoiceUxBridgeState::LISTENING) ? "RELACHER POUR FINIR" : "PARLER (Maintenir)";
 
-    M5.Display.fillRoundRect(BTN_TALK_X, BTN_TALK_Y, BTN_TALK_W, BTN_TALK_H, 6, talkBg);
-    M5.Display.drawRoundRect(BTN_TALK_X, BTN_TALK_Y, BTN_TALK_W, BTN_TALK_H, 6, TFT_WHITE);
+    M5.Display.fillRoundRect(s_btnTalkX, s_btnTalkY, s_btnTalkW, s_btnTalkH, 6, talkBg);
+    M5.Display.drawRoundRect(s_btnTalkX, s_btnTalkY, s_btnTalkW, s_btnTalkH, 6, TFT_WHITE);
     M5.Display.setTextColor(TFT_WHITE, talkBg);
-    M5.Display.drawCenterString(talkLabel, BTN_TALK_X + (BTN_TALK_W / 2), BTN_TALK_Y + 18);
+    M5.Display.drawCenterString(talkLabel, s_btnTalkX + (s_btnTalkW / 2), s_btnTalkY + (s_btnTalkH / 2) - 4);
 
     // 6. Bouton tactile STOP prioritaire
     uint16_t stopBg = M5.Display.color565(160, 20, 20);
-    M5.Display.fillRoundRect(BTN_STOP_X, BTN_STOP_Y, BTN_STOP_W, BTN_STOP_H, 6, stopBg);
-    M5.Display.drawRoundRect(BTN_STOP_X, BTN_STOP_Y, BTN_STOP_W, BTN_STOP_H, 6, TFT_WHITE);
+    M5.Display.fillRoundRect(s_btnStopX, s_btnStopY, s_btnStopW, s_btnStopH, 6, stopBg);
+    M5.Display.drawRoundRect(s_btnStopX, s_btnStopY, s_btnStopW, s_btnStopH, 6, TFT_WHITE);
     M5.Display.setTextColor(TFT_WHITE, stopBg);
-    M5.Display.drawCenterString("STOP", BTN_STOP_X + (BTN_STOP_W / 2), BTN_STOP_Y + 18);
+    M5.Display.drawCenterString("STOP", s_btnStopX + (s_btnStopW / 2), s_btnStopY + (s_btnStopH / 2) - 4);
 
     M5.Display.endWrite();
     s_needsRedraw = false;
@@ -191,6 +233,7 @@ static void printHelp() {
     Serial.println("  H          : Afficher l'historique de reponses");
     Serial.println("  C          : Effacer l'historique");
     Serial.println("  D          : Activer/desactiver le module Voice UX");
+    Serial.println("  O <0..3>   : Changer l'orientation ecran (0=Portrait, 1=Paysage, 2=Port.inv, 3=Pays.inv)");
     Serial.println("  ?          : Afficher cette aide");
     Serial.println("-------------------------------------------------");
 }
@@ -260,6 +303,15 @@ static void handleSerialCommand(const String& line) {
         s_bridge.setEnabled(!current);
         Serial.printf("[UX] Voice UX %s\n", !current ? "ACTIVE" : "DESACTIVE");
         s_needsRedraw = true;
+    } else if ((first == 'O' || first == 'o') && cmd.length() > 2) {
+        int r = cmd.substring(2).toInt();
+        if (r >= 0 && r <= 3) {
+            M5.Display.setRotation(r);
+            Serial.printf("[DISPLAY] Rotation ecran reglee a %d (%dx%d)\n", r, M5.Display.width(), M5.Display.height());
+            s_needsRedraw = true;
+        } else {
+            Serial.println("[DISPLAY][ERREUR] Rotation invalide (0=Portrait, 1=Paysage, 2=Portrait inv, 3=Paysage inv)");
+        }
     } else if (first == '?') {
         printHelp();
     } else {
@@ -285,7 +337,7 @@ void setup() {
     cfg.internal_spk = true;
     cfg.internal_mic = true;
     M5.begin(cfg);
-    M5.Display.setRotation(1);
+    M5.Display.setRotation(0);
 
     // 2. Initialisation du pont applicatif VoiceUxLiveBridge
     if (!s_bridge.begin()) {
@@ -439,11 +491,11 @@ void loop() {
     M5.update();
     auto touch = M5.Touch.getDetail();
 
-    bool inTalkArea = (touch.x >= BTN_TALK_X && touch.x <= (BTN_TALK_X + BTN_TALK_W) &&
-                       touch.y >= BTN_TALK_Y && touch.y <= (BTN_TALK_Y + BTN_TALK_H));
+    bool inTalkArea = (touch.x >= s_btnTalkX && touch.x <= (s_btnTalkX + s_btnTalkW) &&
+                       touch.y >= s_btnTalkY && touch.y <= (s_btnTalkY + s_btnTalkH));
 
-    bool inStopArea = (touch.x >= BTN_STOP_X && touch.x <= (BTN_STOP_X + BTN_STOP_W) &&
-                       touch.y >= BTN_STOP_Y && touch.y <= (BTN_STOP_Y + BTN_STOP_H));
+    bool inStopArea = (touch.x >= s_btnStopX && touch.x <= (s_btnStopX + s_btnStopW) &&
+                       touch.y >= s_btnStopY && touch.y <= (s_btnStopY + s_btnStopH));
 
     // Appui sur le bouton PARLER (Push-To-Talk)
     if (touch.wasPressed() && inTalkArea) {

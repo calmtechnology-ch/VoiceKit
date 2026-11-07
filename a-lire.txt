@@ -62,3 +62,7 @@ pio run  -t upload
 pio run -d examples/VoiceUxDemo -t upload -p COM4
 
 pio device monitor -b 115200 -p COM4
+
+pio run -t upload -p COM4
+
+pio run -d examples/VoiceUxLiveDemo -t upload
