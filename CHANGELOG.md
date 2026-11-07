@@ -7,6 +7,47 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.4.2] - 2026-11-07 (Voice UX Live Bridge — Pont STT/TTS Réel, Machine à États & CoreS3 Demo)
+
+### 1. Pont Applicatif Voice UX Live Bridge (`VoiceUxLiveBridge.h/.cpp`)
+- **Adaptateur Découplé Indépendant (`src/core/voiceux/VoiceUxLiveBridge.h/.cpp`)** :
+  - Orchestration temps réel entre la reconnaissance vocale STT du microphone CoreS3, l'arbitrage d'intentions locales `VoiceUxController`, l'historique conversationnel `ReplyMemory` et la restitution vocale TTS de VoiceKit.
+  - Découplage strict des tâches : aucune opération audio (TTS) n'est exécutée directement depuis un callback STT ou une tâche réseau ; les actions sont mises en attente sous forme de requêtes structurées (`VoiceUxBridgeAction`) et consommées depuis la boucle principale applicative (`loop()`).
+  - Ne prend pas possession du microphone (la gestion matérielle reste assurée exclusivement par VoiceKit).
+- **Exécution Locale Déterministe des Commandes Conversationnelles** :
+  - `REPEAT` : « Répète » récupère instantanément la dernière réponse complète mémorisée dans `ReplyMemory` et demande sa restitution TTS locale sans appel au modèle d'IA distant.
+  - `PREVIOUS` : « Réponse précédente » récupère l'avant-dernière réponse et déclenche la synthèse vocale locale.
+  - `STOP` : Commande prioritaire tactile, série ou vocale interrompant immédiatement toute opération audio en cours.
+  - `PAUSE` / `RESUME` : Définition formelle de l'état `PAUSED` ignorant les requêtes conversationnelles ordinaires et n'autorisant que la reprise vocale (« Continue ») ou tactile.
+  - `SLOWER` / `REPHRASE` : Intentions reconnues et loguées pour diagnostic sans simulation d'altération de vitesse.
+- **Machine à États Robuste & Sûreté Audio** :
+  - États explicites : `READY`, `LISTENING`, `TRANSCRIBING`, `VOICE_UX_PROCESSING`, `ACTION_PENDING`, `SPEAKING`, `PAUSED`, `ERROR`.
+  - Aucune capture micro concurrente (`canStartListening()` verrouillé).
+  - Aucune restitution TTS pendant une capture active (`canSpeak()` verrouillé).
+  - Suivi par identifiant de génération de tour (`turnId`) : rejet strict des transcriptions partielles (intérim), dédoublonnage des transcriptions finales d'un même tour, et rejet des événements tardifs ou annulés.
+  - Mémorisation exclusive des restitutions complètes validées : non-mémorisation des réponses partielles, annulées ou répétitions.
+  - Gestion d'erreur non-bloquante avec récupération contrôlée (`recoverFromError()`).
+
+### 2. Nouvelle Démonstration Matérielle CoreS3 (`examples/VoiceUxLiveDemo/`)
+- Application complète pour M5Stack CoreS3 (ESP32-S3) combinant capture vocale réelle et arbitrage local.
+- Interface M5Unified / M5GFX (320 × 240) épurée, sans dépendance LVGL 9, avec boutons tactiles `PARLER` (PTT) et `STOP`.
+- Pré-chargement des deux réponses déterministes de test prescrites par le cahier des charges :
+  1. « La température actuelle est de vingt-deux degrés. »
+  2. « L'humidité relative est de quarante-huit pour cent. »
+- Console de diagnostic série à 115 200 bauds avec mode hybride voix réelle (`[STT][REAL]`) et simulation (`[STT][SIM]`).
+- Compilation réussie sous PlatformIO `espressif32@6.9.0` (RAM: 24.2%, Flash: 81.9%).
+
+### 3. Validation Exhaustive & Non-Régression
+- **4 Nouvelles Suites de Tests Unitaires (Suites 135 à 138)** :
+  - Suite 135 : Transmission STT, filtrage intérim, commandes `REPEAT` (mémoire vide et avec mémoire), `PREVIOUS` et `STOP`.
+  - Suite 136 : Gestion de la pause, rejet des demandes ordinaires en pause, reprise vocale et tactile (`PAUSE` / `RESUME`).
+  - Suite 137 : Sécurité, concurrence, dédoublonnage de tour, événements tardifs, annulations et `FORWARD_AI`.
+  - Suite 138 : Machine à états complète, cycle TTS, non double restitution, conservation des réponses validées et résilience d'erreur.
+- **Bilan Global** : **2 579 tests unitaires réussis avec 0 échec** (138 suites de tests).
+- Compilation validée à 100% sur les 8 exemples cibles : `VoiceUxLiveDemo`, `VoiceUxDemo`, `MinimalSTT`, `ContinuousSTT`, `MinimalTTS`, `WakeWordConversation`, `OpenAIConversationLVGL`, `LocalToolRegistryDemo`.
+
+---
+
 ## [0.6.4.1] - 2026-11-06 (Voice UX Foundation — Filtrage TextGate, Intentions Locales & ReplyMemory)
 
 ### 1. Sous-Système Voice UX (`src/core/voiceux/`)

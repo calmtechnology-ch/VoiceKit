@@ -8283,7 +8283,7 @@ int main() {
     test_v064_tool_resource_cleanup();
     test_v064_demo_three_tools_and_json();
 
-    // Nouvelles suites VoiceKit v0.6.4.1 (Voice UX Foundation)
+    // Suites VoiceKit v0.6.4.1 (Voice UX Foundation) & v0.6.4.2 (Voice UX Live Bridge)
     run_all_voiceux_tests();
 
     std::cout << "\n===========================================================" << std::endl;

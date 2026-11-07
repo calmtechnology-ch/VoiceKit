@@ -5,6 +5,7 @@
 #include "core/voiceux/VoiceIntentRouter.h"
 #include "core/voiceux/ReplyMemory.h"
 #include "core/voiceux/VoiceUxController.h"
+#include "core/voiceux/VoiceUxLiveBridge.h"
 #include "core/Utf8Utils.h"
 #include <iostream>
 
@@ -383,11 +384,251 @@ inline void test_v0641_performance_metrics_and_stability() {
               << " us, Hesitation=" << dt3 << " us" << std::endl;
 }
 
+inline void test_v0642_livebridge_stt_and_intents() {
+    std::cout << "\n[TEST SUITE 135] v0.6.4.2 : VoiceUxLiveBridge (Transmission STT, Filtrage interim & REPEAT/PREVIOUS/STOP)" << std::endl;
+
+    VoiceUxLiveBridge bridge;
+    TEST_ASSERT(bridge.begin(), "Initialisation du pont VoiceUxLiveBridge");
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "Etat initial = READY");
+
+    // 1. Rejet des transcriptions intermediaires (interim)
+    bool dispatched = bridge.feedTranscription("Répète", false);
+    TEST_ASSERT(!dispatched, "Transcription interim -> aucune action dispatchee");
+    TEST_ASSERT(!bridge.hasPendingAction(), "hasPendingAction = false");
+    TEST_ASSERT(bridge.getInterimText() == "Répète", "Texte interim enregistre pour l'UI");
+    TEST_ASSERT(bridge.getBridgeStats().partialTranscriptionsIgnored == 1, "Compteur de transcriptions partielles incremente");
+
+    // 2. REPEAT avec mémoire vide
+    dispatched = bridge.feedTranscription("Répète", true);
+    TEST_ASSERT(dispatched, "Transcription finale REPEAT -> action dispatchee");
+    TEST_ASSERT(bridge.hasPendingAction(), "hasPendingAction = true");
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::ACTION_PENDING, "Etat ACTION_PENDING");
+
+    VoiceUxBridgeAction act = bridge.consumePendingAction();
+    TEST_ASSERT(act.type == VoiceUxBridgeActionType::TTS_SPEAK, "Type d'action TTS_SPEAK");
+    TEST_ASSERT(act.intent == VoiceUxIntent::REPEAT, "Intention REPEAT");
+    TEST_ASSERT(act.isFeedback == true, "Reponse memoire vide marquee isFeedback");
+    TEST_ASSERT(act.text == "Aucune réponse à répéter.", "Message de retour sur memoire vide conforme");
+    TEST_ASSERT(!bridge.hasPendingAction(), "Action consommee");
+
+    // 3. Remplissage des reponses deterministes de test prescrites
+    bridge.seedTestReplies();
+    TEST_ASSERT(bridge.getReplyMemory().getCount() == 2, "2 reponses de test enregistrees");
+
+    // 4. REPEAT avec memoire disponible
+    dispatched = bridge.feedTranscription("Répète", true);
+    TEST_ASSERT(dispatched, "REPEAT avec memoire dispatche");
+    act = bridge.consumePendingAction();
+    TEST_ASSERT(act.type == VoiceUxBridgeActionType::TTS_SPEAK, "Action TTS_SPEAK");
+    TEST_ASSERT(act.intent == VoiceUxIntent::REPEAT, "Intention REPEAT");
+    TEST_ASSERT(act.isRecall == true, "Marquage isRecall = true");
+    TEST_ASSERT(act.text == "L'humidité relative est de quarante-huit pour cent.", "Derniere reponse correctement rappelee");
+
+    // 5. PREVIOUS avec plusieurs reponses
+    dispatched = bridge.feedTranscription("Réponse précédente", true);
+    TEST_ASSERT(dispatched, "PREVIOUS dispatche");
+    act = bridge.consumePendingAction();
+    TEST_ASSERT(act.type == VoiceUxBridgeActionType::TTS_SPEAK, "Action TTS_SPEAK");
+    TEST_ASSERT(act.intent == VoiceUxIntent::PREVIOUS, "Intention PREVIOUS");
+    TEST_ASSERT(act.isRecall == true, "Marquage isRecall = true");
+    TEST_ASSERT(act.text == "La température actuelle est de vingt-deux degrés.", "Avant-derniere reponse rappelee");
+
+    // 6. PREVIOUS avec une seule reponse
+    bridge.clearMemory();
+    bridge.rememberReply("Seule et unique réponse.");
+    TEST_ASSERT(bridge.getReplyMemory().getCount() == 1, "Une seule reponse en memoire");
+
+    dispatched = bridge.feedTranscription("Réponse précédente", true);
+    TEST_ASSERT(dispatched, "PREVIOUS avec 1 reponse dispatche");
+    act = bridge.consumePendingAction();
+    TEST_ASSERT(act.type == VoiceUxBridgeActionType::TTS_SPEAK, "Action TTS_SPEAK");
+    TEST_ASSERT(act.isFeedback == true, "Marque isFeedback");
+    TEST_ASSERT(act.text == "Aucune réponse précédente disponible.", "Message d'info sur absence de precedente conforme");
+
+    // 7. Commande STOP vocale
+    dispatched = bridge.feedTranscription("Arrête", true);
+    TEST_ASSERT(dispatched, "STOP vocal dispatche");
+    act = bridge.consumePendingAction();
+    TEST_ASSERT(act.type == VoiceUxBridgeActionType::STOP, "Action STOP");
+    TEST_ASSERT(act.intent == VoiceUxIntent::STOP, "Intention STOP");
+
+    // 8. Commandes diagnostiques SLOWER et REPHRASE (pas d'action TTS)
+    dispatched = bridge.feedTranscription("Parle moins vite", true);
+    TEST_ASSERT(!dispatched, "SLOWER -> aucune action materielle");
+    TEST_ASSERT(!bridge.hasPendingAction(), "hasPendingAction = false");
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "Retour a READY apres diagnostic");
+}
+
+inline void test_v0642_livebridge_pause_resume() {
+    std::cout << "\n[TEST SUITE 136] v0.6.4.2 : VoiceUxLiveBridge (Gestion de la pause, commandes en pause et reprise)" << std::endl;
+
+    VoiceUxLiveBridge bridge;
+    bridge.begin();
+
+    // 1. Commande vocale PAUSE
+    bool dispatched = bridge.feedTranscription("Mets en pause", true);
+    TEST_ASSERT(dispatched, "PAUSE vocale dispatchee");
+    VoiceUxBridgeAction act = bridge.consumePendingAction();
+    TEST_ASSERT(act.type == VoiceUxBridgeActionType::PAUSE, "Action PAUSE");
+
+    bridge.setPaused(true);
+    TEST_ASSERT(bridge.isPaused(), "Bridge est en pause");
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::PAUSED, "Etat = PAUSED");
+
+    // 2. En mode PAUSED : les demandes conversationnelles ordinaires sont ignorees
+    dispatched = bridge.feedTranscription("Quel temps fait-il ?", true);
+    TEST_ASSERT(!dispatched, "Demande ordinaire en pause rejetee");
+    TEST_ASSERT(!bridge.hasPendingAction(), "Aucune action creee en pause");
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::PAUSED, "Reste en PAUSED");
+
+    // 3. En mode PAUSED : la reprise vocale RESUME est autorisee
+    dispatched = bridge.feedTranscription("Continue", true);
+    TEST_ASSERT(dispatched, "RESUME vocal en pause autorise");
+    act = bridge.consumePendingAction();
+    TEST_ASSERT(act.type == VoiceUxBridgeActionType::RESUME, "Action RESUME");
+
+    bridge.setPaused(false);
+    TEST_ASSERT(!bridge.isPaused(), "Bridge n'est plus en pause");
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "Etat revenu a READY");
+
+    // 4. Reprise par bouton tactile ou serie
+    bridge.setPaused(true);
+    TEST_ASSERT(bridge.isPaused(), "Pause tactile activee");
+    bridge.setPaused(false);
+    TEST_ASSERT(!bridge.isPaused(), "Reprise tactile effectuee");
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "Etat READY");
+}
+
+inline void test_v0642_livebridge_concurrency_and_turn_safety() {
+    std::cout << "\n[TEST SUITE 137] v0.6.4.2 : VoiceUxLiveBridge (Securite, concurrence, dedoublonnage, evenements tardifs & annulations)" << std::endl;
+
+    VoiceUxLiveBridge bridge;
+    bridge.begin();
+    bridge.seedTestReplies();
+
+    // 1. Routage d'une phrase ordinaire non-locale (FORWARD_AI)
+    bool dispatched = bridge.feedTranscription("Quelle est la capitale de la France ?", true);
+    TEST_ASSERT(dispatched, "Phrase ordinaire traitee");
+    VoiceUxBridgeAction act = bridge.consumePendingAction();
+    TEST_ASSERT(act.type == VoiceUxBridgeActionType::FORWARD_AI, "Action FORWARD_AI");
+    TEST_ASSERT(act.text == "Quelle est la capitale de la France ?", "Texte original transmis intact");
+
+    // 2. Rejet des hesitations isolees (TextGate IGNORE)
+    dispatched = bridge.feedTranscription("Euh...", true);
+    TEST_ASSERT(!dispatched, "Hesitation isolee -> rejet");
+    TEST_ASSERT(!bridge.hasPendingAction(), "Pas d'action pour hesitation isolee");
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "Etat reste READY");
+
+    // 3. Dedoublonnage des transcriptions finales pour un meme tour
+    TEST_ASSERT(bridge.onListeningStarted(), "Demarrage capture");
+    uint32_t turn = bridge.getActiveTurnId();
+    bridge.onListeningFinished();
+
+    dispatched = bridge.feedTranscription("Répète", true, turn);
+    TEST_ASSERT(dispatched, "Premiere transcription finale du tour acceptee");
+    TEST_ASSERT(bridge.hasPendingAction(), "Action en attente");
+
+    // Deuxieme appel final pour le meme tour
+    dispatched = bridge.feedTranscription("Répète", true, turn);
+    TEST_ASSERT(!dispatched, "Deuxieme transcription finale du tour rejetee (dedoublonnage)");
+    TEST_ASSERT(bridge.getBridgeStats().duplicateTranscriptionsIgnored == 1, "Compteur doublon incremente");
+
+    act = bridge.consumePendingAction();
+    TEST_ASSERT(act.type == VoiceUxBridgeActionType::TTS_SPEAK, "Action consommee");
+
+    // 4. Evenement tardif d'un ancien tour rejete
+    dispatched = bridge.feedTranscription("Répète", true, turn - 1);
+    TEST_ASSERT(!dispatched, "Evenement tardif turnId anterieur rejete");
+    TEST_ASSERT(bridge.getBridgeStats().staleTranscriptionsIgnored == 1, "Compteur stale incremente");
+
+    // 5. STOP prioritaire et annulation de tour
+    TEST_ASSERT(bridge.onListeningStarted(), "Nouvelle ecoute");
+    uint32_t cancelledTurn = bridge.getActiveTurnId();
+    bridge.triggerPriorityStop();
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "STOP prioritaire remet l'etat a READY");
+
+    // Une transcription arrivant pour ce tour annule doit etre rejetee
+    dispatched = bridge.feedTranscription("Répète", true, cancelledTurn);
+    TEST_ASSERT(!dispatched, "Transcription d'un tour annule rejetee");
+
+    // 6. Annulation explicite d'une action mise en attente
+    bridge.feedSimulatedText("Répète");
+    TEST_ASSERT(bridge.hasPendingAction(), "Action simulee en attente");
+    bridge.cancelPendingAction();
+    TEST_ASSERT(!bridge.hasPendingAction(), "Action annulee avec succes");
+}
+
+inline void test_v0642_livebridge_state_machine_tts_cycle_and_resilience() {
+    std::cout << "\n[TEST SUITE 138] v0.6.4.2 : VoiceUxLiveBridge (Machine a etats, cycle TTS complet, gestion des erreurs & resilience)" << std::endl;
+
+    VoiceUxLiveBridge bridge;
+    bridge.begin();
+    bridge.seedTestReplies();
+
+    // 1. Cycle complet de la machine a etats
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "1. READY");
+    TEST_ASSERT(bridge.canStartListening(), "Peut demarrer ecoute");
+
+    TEST_ASSERT(bridge.onListeningStarted(), "Appui PARLER -> demarrage ecoute");
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::LISTENING, "2. LISTENING");
+    TEST_ASSERT(!bridge.canStartListening(), "Refus de seconde capture concurrente");
+
+    bridge.onListeningFinished();
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::TRANSCRIBING, "3. TRANSCRIBING");
+
+    bridge.feedTranscription("Répète", true);
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::ACTION_PENDING, "4. ACTION_PENDING");
+
+    VoiceUxBridgeAction act = bridge.consumePendingAction();
+    TEST_ASSERT(bridge.canSpeak(), "Peut demarrer restitution TTS");
+
+    bridge.notifySpeechStarted(act.text);
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::SPEAKING, "5. SPEAKING");
+    TEST_ASSERT(!bridge.canStartListening(), "Microphone interdit pendant la restitution TTS");
+
+    bridge.notifySpeechFinished(true);
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "6. Retour a READY");
+    TEST_ASSERT(bridge.canStartListening(), "Microphone a nouveau autorise");
+
+    // 2. Regle memoire : restitution interrompue non memorisee vs reponse terminee memorisee
+    bridge.clearMemory();
+    TEST_ASSERT(bridge.getReplyMemory().isEmpty(), "Memoire vide");
+
+    // Simulation reponse interrompue
+    bridge.notifySpeechStarted("Phrase qui va être interrompue");
+    bridge.triggerPriorityStop(); // Interruption STOP
+    TEST_ASSERT(bridge.getReplyMemory().isEmpty(), "Reponse interrompue NON memorisee");
+    TEST_ASSERT(bridge.getBridgeStats().ttsCancelledCount >= 1, "Compteur TTS annule incremente");
+
+    // Simulation reponse complete d'un assistant
+    bridge.notifySpeechStarted("La lune est un satellite naturel.");
+    bridge.notifySpeechFinished(true);
+    TEST_ASSERT(bridge.getReplyMemory().getCount() == 1, "Reponse complete bien memorisee");
+    TEST_ASSERT(bridge.getReplyMemory().getLastReply() == "La lune est un satellite naturel.", "Contenu exact mémorise");
+
+    // 3. Simulation de perte de connexion et recuperation non bloquante
+    bridge.notifyError("Connexion WebSocket perdue (1006)");
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::ERROR, "Etat ERROR");
+    TEST_ASSERT(bridge.getLastError().indexOf("WebSocket") >= 0, "Message d'erreur sauvegarde");
+    TEST_ASSERT(!bridge.hasPendingAction(), "Action pending videe apres erreur");
+
+    bridge.recoverFromError();
+    TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "Recuperation -> READY");
+    TEST_ASSERT(bridge.getLastError() == "", "Derniere erreur effacee");
+
+    // 4. Verification de non double restitution TTS
+    TEST_ASSERT(bridge.getBridgeStats().ttsDispatchedCount > 0, "Statistiques TTS enregistrees");
+}
+
 inline void run_all_voiceux_tests() {
     test_v0641_textgate_validation();
     test_v0641_intent_router_recognition_and_false_positives();
     test_v0641_reply_memory_lifecycle_and_utf8_truncation();
     test_v0641_voiceux_controller_facade_and_events();
     test_v0641_performance_metrics_and_stability();
+    test_v0642_livebridge_stt_and_intents();
+    test_v0642_livebridge_pause_resume();
+    test_v0642_livebridge_concurrency_and_turn_safety();
+    test_v0642_livebridge_state_machine_tts_cycle_and_resilience();
 }
 

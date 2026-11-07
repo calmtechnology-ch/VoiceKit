@@ -1,11 +1,13 @@
 {
   "name": "VoiceKit",
-  "version": "0.6.4.1",
-  "description": "Bibliotheque C++/Arduino multi-fournisseurs (Gemini Live & OpenAI Realtime) avec Fondation Voice UX locale (Voice UX Foundation v0.6.4.1), Registre Local d'Outils (Local Tool Registry v0.6.4), synthese vocale (TTS), reconnaissance vocale (STT), dictee continue (ContinuousSTT), conversation bidirectionnelle native, fondation locale de detection de mot de reveil (Wake Word Foundation hors ligne stabilisee), conversation mains libres declenchee par « Bonjour ESP » (WakeWordConversationController, WakeNet configurable) et moteur VoxCore stabilise pour M5Stack CoreS3 — v0.6.4.1",
+  "version": "0.6.4.2",
+  "description": "Bibliotheque C++/Arduino multi-fournisseurs (Gemini Live & OpenAI Realtime) avec Pont Vocal Temps Reel (Voice UX Live Bridge v0.6.4.2), Fondation Voice UX locale (Voice UX Foundation v0.6.4.1), Registre Local d'Outils (Local Tool Registry v0.6.4), synthese vocale (TTS), reconnaissance vocale (STT), dictee continue (ContinuousSTT), conversation bidirectionnelle native, fondation locale de detection de mot de reveil (Wake Word Foundation hors ligne stabilisee), conversation mains libres declenchee par « Bonjour ESP » (WakeWordConversationController, WakeNet configurable) et moteur VoxCore stabilise pour M5Stack CoreS3 — v0.6.4.2",
   "keywords": [
     "voicekit",
     "voxcore",
     "voice-ux",
+    "voice-ux-live-bridge",
+    "voice-bridge",
     "textgate",
     "intent-router",
     "reply-memory",
@@ -46,7 +48,8 @@
     "VoxCoreVoice.h",
     "WakeWordConversationController.h",
     "ToolRegistry.h",
-    "VoiceUxController.h"
+    "VoiceUxController.h",
+    "VoiceUxLiveBridge.h"
   ],
   "dependencies": {
     "m5stack/M5CoreS3": "1.0.0",

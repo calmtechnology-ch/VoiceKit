@@ -1,4 +1,4 @@
-# VoiceKit v0.6.4.1 — Voice UX Foundation, Local Tool Registry & Architecture Multi-Fournisseurs (Gemini Live & OpenAI Realtime)
+# VoiceKit v0.6.4.2 — Voice UX Live Bridge, Voice UX Foundation, Local Tool Registry & Architecture Multi-Fournisseurs (Gemini Live & OpenAI Realtime)
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -8,6 +8,14 @@
 Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)**, de **conversation vocale bidirectionnelle native (Mode B)**, de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** et de **registre local d'outils (Local Tool Registry)** pour **M5Stack CoreS3** (ESP32-S3).
 
 Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)** supportant à la fois **Google Gemini Live** (moteur par défaut, 100% rétrocompatible) et **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`), construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
+
+La version **v0.6.4.2** introduit le pont applicatif **Voice UX Live Bridge (`VoiceUxLiveBridge`)**, reliant pour la première fois la reconnaissance vocale STT du microphone du M5Stack CoreS3, l'arbitrage d'intentions locales `VoiceUxController`, la mémoire de réponses `ReplyMemory` et la restitution sonore TTS haute fluidité :
+- **Pont Applicatif `VoiceUxLiveBridge` (`src/core/voiceux/VoiceUxLiveBridge.h/.cpp`)** :
+  - **Coordination Découplée STT $\to$ UX $\to$ MEM $\to$ TTS** : Reçoit les transcriptions finales STT, les transmet à `VoiceUxController` et met en attente des requêtes d'action structurées (`VoiceUxBridgeAction`) consommées en toute sécurité depuis `loop()`. Aucune opération TTS n'est exécutée dans un callback STT.
+  - **Exécution Locale Déterministe** : Les commandes vocales de contrôle comme « Répète » (`REPEAT`) et « Réponse précédente » (`PREVIOUS`) rappellent directement les réponses mémorisées dans `ReplyMemory` et déclenchent la restitution TTS locale sans aucun appel à un modèle d'IA distant.
+  - **Sûreté Audio & Machine à États** : Micro libéré avant toute restitution audio, interdiction de capture pendant la restitution TTS, dédoublonnage des transcriptions finales d'un même tour, rejet strict des événements tardifs ou annulés grâce au suivi par identifiants de tour (`turnId`), et priorité absolue de la commande `STOP` (tactile ou série).
+  - **Gestion Explicite de Pause** : État `PAUSED` ignorant les demandes conversationnelles ordinaires et autorisant uniquement la reprise vocale (`RESUME` / « Continue ») ou tactile.
+  - **Nouvelle Démonstration Matérielle CoreS3 (`examples/VoiceUxLiveDemo/`)** : Interface graphique M5Unified/M5GFX (320 × 240) sans LVGL 9, boutons tactiles `PARLER` (PTT) et `STOP`, console de diagnostic série avec mode hybride voix réelle (`[STT][REAL]`) et simulation (`[STT][SIM]`).
 
 La version **v0.6.4.1** introduit la fondation logicielle expérimentale **Voice UX Foundation (`VoiceUxController`)**, permettant d'analyser localement les transcriptions textuelles et d'exécuter des décisions conversationnelles déterministes en français sans solliciter de modèle d'IA externe :
 - **Fondation Voice UX Locale (`VoiceUxController`, `TextGate`, `VoiceIntentRouter`, `ReplyMemory`, `VoiceUxTypes`)** :
@@ -60,7 +68,7 @@ La version **v0.6.2.1** est une version corrective qui fiabilise et durcit la **
 - **Sélection par Configuration Zéro-Code** : Bascule instantanée entre Gemini et OpenAI par simple configuration (`config.provider = VoiceProviderType::OPENAI;`). Aucune modification requise dans le code métier de l'application !
 - **Rééchantillonneur Dédié 16 kHz $\to$ 24 kHz (`AudioResampler`)** : Algorithme linéaire ultra-rapide en virgule fixe entière (512 in $\to$ 768 out en moins de 15 µs sur Core 1), n'impactant aucunement la tâche audio critique.
 - **Sanctuaire Audio VoxCore Intact** : Conservation intégrale de la tâche FreeRTOS Mode 2, du buffer circulaire PSRAM 120 000 échantillons (~5 s), des buffers DMA et du protocole de vidage exact sans coupure de la syllabe finale (*« alpha tango terminé »*).
-- **Validation Exhaustive & Zéro Régression** : **2 487 tests unitaires réussis avec 0 échec** (134 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
+- **Validation Exhaustive & Zéro Régression** : **2 579 tests unitaires réussis avec 0 échec** (138 suites de tests) et 100% des exemples PlatformIO compilés avec succès.
 
 ---
 
