@@ -7,6 +7,23 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [Non publié] - 2026-11-10 (Réorganisation du dépôt & mise à jour de la documentation)
+
+### Modifié
+- Rapports techniques et de livraison (`RAPPORT_*.md`, v0.6.0 → v0.6.4.2) déplacés de la racine vers `docs/rapports/`.
+- Scripts Python de validation matérielle (`validate_v06322.py`, `validate_lvgl_v010.py`, `test_voice_turn.py`) déplacés vers `tools/validation/`.
+- Liens absolus locaux (`file:///c:/Users/...`) remplacés par des liens relatifs dans les rapports et dans `examples/OpenAIConversationLVGL/README.md`.
+- `README.md` : arborescence mise à jour (dossier `src/core/voiceux/`, `docs/rapports/`, `tools/`, manifestes v0.6.4.2), liste des exemples complétée (16 exemples dont `VoiceUxLiveDemo`, `VoiceUxDemo`, `OpenAIConversationLVGL`) et renumérotée, bilan de tests et liens vers les rapports actualisés.
+
+### Ajouté
+- `docs/README.md` : index de la documentation et des rapports par version.
+- `tools/validation/README.md` : mode d'emploi des scripts de validation série.
+
+### Retiré
+- `a-lire.txt` (notes personnelles) retiré du suivi Git et ajouté au `.gitignore` (le fichier reste disponible localement).
+
+---
+
 ## [0.6.4.2] - 2026-11-07 (Voice UX Live Bridge — Pont STT/TTS Réel, Machine à États & CoreS3 Demo)
 
 ### 1. Pont Applicatif Voice UX Live Bridge (`VoiceUxLiveBridge.h/.cpp`)

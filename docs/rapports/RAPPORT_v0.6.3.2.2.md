@@ -34,18 +34,18 @@ L'audit des événements tactiles, de la machine à états VoiceKit et du transp
 
 ### Cause Racine 1 : Collision d'événements d'interruption lors d'appuis rapides successifs
 * **Mécanisme du bogue** : Lorsqu'un utilisateur interrompait une réponse vocale avec STOP, le client émettait `response.cancel`. Si l'utilisateur réappuyait sur PARLER immédiatement avant qu'OpenAI n'ait acquitté l'annulation précédente, l'événement serveur `response.cancelled` arrivait pendant le *nouveau* tour de parole. Le client appliquait alors l'annulation au tour courant (`_turnActive = false`, `_turnCancelled = true`), jetant tous les paquets audio entrants et bloquant le moteur en `WAITING_RESPONSE`.
-* **Correction appliquée** : Introduction d'un identifiant monotone d'interruption `_interruptedTurnId` dans [`LiveSessionController`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/LiveSessionController.h). Dans le callback `onInterrupted`, le contrôleur vérifie si `_currentTurnId > _interruptedTurnId`. Si un nouveau tour a débuté, l'acquittement tardif d'annulation est ignoré et le tour courant continue normalement.
+* **Correction appliquée** : Introduction d'un identifiant monotone d'interruption `_interruptedTurnId` dans [`LiveSessionController`](../../src/core/LiveSessionController.h). Dans le callback `onInterrupted`, le contrôleur vérifie si `_currentTurnId > _interruptedTurnId`. Si un nouveau tour a débuté, l'acquittement tardif d'annulation est ignoré et le tour courant continue normalement.
 
 ### Cause Racine 2 : Blocage lors de réponses textuelles seules ou cycles sans audio
-* **Mécanisme du bogue** : Lorsque le serveur terminait un tour sans émettre de flux audio PCM (réponse textuelle pure, silence ou fin de tour immédiate), `LiveSessionState` revenait directement à `CONNECTED`. Cependant, [`ConversationController::tick()`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/ConversationController.cpp) n'attendait la sortie de `WAITING_RESPONSE` que sur transition vers `LiveSessionState::PLAYING`. La conversation restait donc indéfiniment verrouillée avec `_isTurnActive = true`.
+* **Mécanisme du bogue** : Lorsque le serveur terminait un tour sans émettre de flux audio PCM (réponse textuelle pure, silence ou fin de tour immédiate), `LiveSessionState` revenait directement à `CONNECTED`. Cependant, [`ConversationController::tick()`](../../src/core/ConversationController.cpp) n'attendait la sortie de `WAITING_RESPONSE` que sur transition vers `LiveSessionState::PLAYING`. La conversation restait donc indéfiniment verrouillée avec `_isTurnActive = true`.
 * **Correction appliquée** : Ajout d'une détection synchrone dans `ConversationController::tick()` : si `_state == VoiceState::WAITING_RESPONSE`, que la session sous-jacente est revenue à `CONNECTED` et que le lecteur audio ne joue rien, la méthode appelle immédiatement `handleTurnFinished()`, réarmant l'état `READY` sans délai.
 
 ### Cause Racine 3 : Erreur fatale sur micro-appui (< 100 ms)
 * **Mécanisme du bogue** : Un effleurement rapide du bouton PARLER envoyait `input_audio_buffer.commit` avec 0 octet audio accumulé. L'API OpenAI Realtime renvoyait alors `{"type": "error", "error": {"code": "input_audio_buffer_commit_empty"}}`. Ce message déclenchait `_onError`, basculant la session en `LiveSessionState::ERROR` irréversible.
-* **Correction appliquée** : Dans [`OpenAIRealtimeClient::handleIncomingMessage()`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/OpenAIRealtimeClient.cpp), l'erreur `input_audio_buffer_commit_empty` est désormais interceptée comme un avertissement bénin (`_waitingForResponse = false`), sans passer par le callback fatal d'erreur.
+* **Correction appliquée** : Dans [`OpenAIRealtimeClient::handleIncomingMessage()`](../../src/core/OpenAIRealtimeClient.cpp), l'erreur `input_audio_buffer_commit_empty` est désormais interceptée comme un avertissement bénin (`_waitingForResponse = false`), sans passer par le callback fatal d'erreur.
 
 ### Cause Racine 4 : Verrouillage de la session en état ERROR
-* **Mécanisme du bogue** : Dans [`LiveSessionController::requestStop()`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/LiveSessionController.cpp), la transition vers `CONNECTED` contenait la condition restrictive `if (_state != LiveSessionState::ERROR)`. Ainsi, toute entrée en état d'erreur empêchait `requestStop()` de ramener la session à `CONNECTED`, même lorsque le socket TLS restait actif.
+* **Mécanisme du bogue** : Dans [`LiveSessionController::requestStop()`](../../src/core/LiveSessionController.cpp), la transition vers `CONNECTED` contenait la condition restrictive `if (_state != LiveSessionState::ERROR)`. Ainsi, toute entrée en état d'erreur empêchait `requestStop()` de ramener la session à `CONNECTED`, même lorsque le socket TLS restait actif.
 * **Correction appliquée** : `requestStop()` autorise désormais explicitement la reprise depuis `LiveSessionState::ERROR` vers `CONNECTED` si le fournisseur sous-jacent est connecté et prêt, déverrouillant la machine d'état sans redémarrage matériel.
 
 ### Cause Racine 5 : Gestion tactile CoreS3 fiabilisée
@@ -62,7 +62,7 @@ L'audit des événements tactiles, de la machine à états VoiceKit et du transp
 
 ## 3. Réponses Vocales Concises en Français
 
-Conformément à la directive, la consigne système a été configurée dans [`examples/OpenAIConversation/src/main.cpp`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/examples/OpenAIConversation/src/main.cpp) :
+Conformément à la directive, la consigne système a été configurée dans [`examples/OpenAIConversation/src/main.cpp`](../../examples/OpenAIConversation/src/main.cpp) :
 
 ```cpp
 config.conversationInstruction =
@@ -296,26 +296,26 @@ Le relevé des diagnostics système en fin de session complète (après 5 erreur
 
 Les fichiers suivants constituent la livraison de la version **v0.6.3.2.2** :
 
-1. [`src/core/LiveSessionController.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/LiveSessionController.h) & [`src/core/LiveSessionController.cpp`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/LiveSessionController.cpp) :
+1. [`src/core/LiveSessionController.h`](../../src/core/LiveSessionController.h) & [`src/core/LiveSessionController.cpp`](../../src/core/LiveSessionController.cpp) :
    - Ajout de `_interruptedTurnId` pour immuniser les tours successifs contre les annulations tardives.
    - Restauration contrôlée `LiveSessionState::ERROR -> CONNECTED` dans `requestStop()`.
    - Watchdog non-bloquant de 15 secondes pour `WAITING_RESPONSE`.
-2. [`src/core/ConversationController.cpp`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/ConversationController.cpp) :
+2. [`src/core/ConversationController.cpp`](../../src/core/ConversationController.cpp) :
    - Détection synchrone de retour à `CONNECTED` sans audio permettant la clôture immédiate du tour vers `READY`.
    - Watchdog non-bloquant de 20 secondes sur tour actif.
-3. [`src/core/OpenAIRealtimeClient.cpp`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/OpenAIRealtimeClient.cpp) :
+3. [`src/core/OpenAIRealtimeClient.cpp`](../../src/core/OpenAIRealtimeClient.cpp) :
    - Filtrage bienveillant de `input_audio_buffer_commit_empty` lors des appuis courts.
-4. [`src/VoxCoreVoice.cpp`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/VoxCoreVoice.cpp) :
+4. [`src/VoxCoreVoice.cpp`](../../src/VoxCoreVoice.cpp) :
    - Sécurisation de `stop()` avec invocation systématique du nettoyage de session.
-5. [`examples/OpenAIConversation/src/main.cpp`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/examples/OpenAIConversation/src/main.cpp) :
+5. [`examples/OpenAIConversation/src/main.cpp`](../../examples/OpenAIConversation/src/main.cpp) :
    - Intégration de la consigne conversationnelle concise en français (15 à 25 mots max).
    - Gestion tactile robuste avec détection d'appuis, glissements, rejets avec cause explicite et récupérations non bloquantes.
    - Télémétrie complète (`[TOUCH][PRESS]`, `[TOUCH][RELEASE]`, `[PTT][REJECT]`, `[PTT][RECOVERY]`, `[VOICE][STATE]`).
-6. [`tests/test_voicekit_all.cpp`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/tests/test_voicekit_all.cpp) :
+6. [`tests/test_voicekit_all.cpp`](../../tests/test_voicekit_all.cpp) :
    - Ajout des Suites 109, 110 et 111 (2 187 tests automatisés réussis).
-7. [`validate_v06322.py`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/validate_v06322.py) :
+7. [`validate_v06322.py`](../../tools/validation/validate_v06322.py) :
    - Script d'automatisation des bancs de tests matériels réels sur CoreS3 via liaison série.
-8. [`RAPPORT_v0.6.3.2.2.md`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/RAPPORT_v0.6.3.2.2.md) :
+8. [`RAPPORT_v0.6.3.2.2.md`](../../docs/rapports/RAPPORT_v0.6.3.2.2.md) :
    - Le présent rapport de qualification technique complet.
 
 ---

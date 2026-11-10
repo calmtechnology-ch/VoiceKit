@@ -61,17 +61,17 @@ La version **v0.6.0** fait évoluer VoiceKit d'une bibliothèque dédiée exclus
 
 ### 2.2 Composants Clés
 
-1. **`IVoiceProvider`** ([`src/core/IVoiceProvider.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/IVoiceProvider.h)) :
+1. **`IVoiceProvider`** ([`src/core/IVoiceProvider.h`](../../src/core/IVoiceProvider.h)) :
    - Interface pure C++ définissant la gestion de connexion (`connect`, `disconnect`, `isConnected`), la négociation de session (`updateSessionConfig`), l'envoi de chunks audio (`sendAudioChunk`, `commitAudio`), les requêtes textuelles (`sendTextMessage`), le contrôle conversationnel (`createResponse`, `sendInterruption`), et l'abonnement aux événements (`onAudioChunkReceived`, `onResponseDone`, `onUserTranscription`, `onAssistantTranscription`, `onClosed`, `onSessionStatusChanged`, `onError`).
-2. **`GeminiVoiceProvider`** ([`src/core/GeminiVoiceProvider.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/GeminiVoiceProvider.h)) :
+2. **`GeminiVoiceProvider`** ([`src/core/GeminiVoiceProvider.h`](../../src/core/GeminiVoiceProvider.h)) :
    - Adaptateur transparent reliant `GeminiLiveClient` à l'interface `IVoiceProvider`. Zéro régression pour les applications existantes.
-3. **`OpenAIRealtimeClient`** ([`src/core/OpenAIRealtimeClient.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/OpenAIRealtimeClient.h)) :
+3. **`OpenAIRealtimeClient`** ([`src/core/OpenAIRealtimeClient.h`](../../src/core/OpenAIRealtimeClient.h)) :
    - Client WebSocket TLS dédié pour OpenAI Realtime. Gère la machine d'état de session (`DISCONNECTED` $\to$ `CONNECTING` $\to$ `CONNECTED` $\to$ `SESSION_READY`), les messages `session.created`, `session.update`, `session.updated`, le streaming montant `input_audio_buffer.append` avec encodage Base64 direct, la validation de tour `input_audio_buffer.commit` et `response.create`, la réception streaming `response.audio.delta`, les transcriptions Whisper et l'interruption `response.cancel`.
-4. **`AudioResampler`** ([`src/core/AudioResampler.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/AudioResampler.h)) :
+4. **`AudioResampler`** ([`src/core/AudioResampler.h`](../../src/core/AudioResampler.h)) :
    - Rééchantillonneur linéaire 16 kHz $\to$ 24 kHz (ratio 2:3). Convertit 512 échantillons 16 bits en 768 échantillons en arithmétique entière rapide, sans allocation dynamique ni division flottante.
-5. **`EspWebSocketTransport`** ([`src/core/EspWebSocketTransport.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/EspWebSocketTransport.h)) :
+5. **`EspWebSocketTransport`** ([`src/core/EspWebSocketTransport.h`](../../src/core/EspWebSocketTransport.h)) :
    - Transport WebSocket ESP-IDF réutilisable supportant les en-têtes HTTP personnalisés (`Authorization: Bearer <clé>` et `OpenAI-Beta: realtime=v1`).
-6. **`OpenAIRoots.h`** ([`src/core/OpenAIRoots.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/OpenAIRoots.h)) :
+6. **`OpenAIRoots.h`** ([`src/core/OpenAIRoots.h`](../../src/core/OpenAIRoots.h)) :
    - Bundle de certificats racine officiels DigiCert Global Root G2 et DigiCert Global Root CA garantissant la sécurité de la poignée de main TLS avec `api.openai.com`.
 
 ---
@@ -80,26 +80,26 @@ La version **v0.6.0** fait évoluer VoiceKit d'une bibliothèque dédiée exclus
 
 | Fichier | Nature | Description & Justification |
 | :--- | :--- | :--- |
-| [`src/core/IVoiceProvider.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/IVoiceProvider.h) | **Création** | Contrat abstrait d'un fournisseur vocal unifié. |
-| [`src/core/GeminiVoiceProvider.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/GeminiVoiceProvider.h) / `.cpp` | **Création** | Adaptateur C++ pour Google Gemini Live enveloppant `GeminiLiveClient`. |
-| [`src/core/OpenAIRealtimeClient.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/OpenAIRealtimeClient.h) / `.cpp` | **Création** | Implémentation complète du client WebSocket TLS OpenAI Realtime. |
-| [`src/core/AudioResampler.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/AudioResampler.h) / `.cpp` | **Création** | Rééchantillonneur linéaire entier rapide 16 kHz $\to$ 24 kHz. |
-| [`src/core/OpenAIRoots.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/OpenAIRoots.h) | **Création** | Certificats racines DigiCert officiels pour OpenAI. |
-| [`src/core/ILiveTransport.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/ILiveTransport.h) | Modification | Ajout du paramètre optionnel `extraHeaders` à `connect()` pour supporter l'authentification Bearer. |
-| [`src/core/EspWebSocketTransport.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/EspWebSocketTransport.h) | **Création** | Transport WebSocket réutilisable avec support d'en-têtes HTTP personnalisés. |
-| [`src/VoiceKitConfig.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/VoiceKitConfig.h) | Modification | Ajout de l'enum `VoiceProviderType` (`GEMINI = 0`, `OPENAI = 1`) et du champ `provider`. |
-| [`src/core/VoiceHubConfig.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/VoiceHubConfig.h) | Modification | Mise à jour de `VOICEKIT_VERSION` vers `"v0.6.0"`. |
-| [`src/VoiceKit.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/VoiceKit.h) | Modification | Mise à jour de la documentation de version. |
-| [`src/VoxCoreVoice.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/VoxCoreVoice.h) / `.cpp` | Modification | Intégration de l'architecture multi-provider (`_activeProvider`, `_geminiProvider`, `_openaiClient`, `getProviderType()`, `getActiveProvider()`), préservation de `getClient()`. |
-| [`src/core/LiveSessionController.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/LiveSessionController.h) / `.cpp` | Modification | Migration vers `IVoiceProvider*` avec surcharge rétrocompatible `GeminiLiveClient*`. |
-| [`src/core/LiveAudioStreamer.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/LiveAudioStreamer.h) / `.cpp` | Modification | Migration vers `IVoiceProvider*`, intégration du rééchantillonneur 16k $\to$ 24k automatique pour OpenAI. |
-| [`src/core/ConversationController.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/src/core/ConversationController.h) / `.cpp` | Modification | Migration vers `IVoiceProvider*`, nettoyage sécurisé des callbacks au destructeur. |
-| [`library.json`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/library.json) & [`library.properties`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/library.properties) | Modification | Incrémentation de version vers `0.6.0`, mots-clés et descriptions actualisées. |
-| [`CHANGELOG.md`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/CHANGELOG.md) & [`README.md`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/README.md) | Modification | Documentation exhaustive de la v0.6.0, diagrammes d'architecture et guides d'usage. |
-| [`examples/OpenAIConversation/`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/examples/OpenAIConversation/) | **Création** | Nouvel exemple complet de conversation bidirectionnelle avec OpenAI Realtime. |
-| [`tests/native_mock/MockLiveTransport.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/tests/native_mock/MockLiveTransport.h) | Modification | Support des en-têtes et trames WebSocket simulées. |
-| [`tests/run_tests.bat`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/tests/run_tests.bat) | Modification | Compilation des nouvelles unités sources (`AudioResampler`, `GeminiVoiceProvider`, `OpenAIRealtimeClient`). |
-| [`tests/test_voicekit_all.cpp`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/tests/test_voicekit_all.cpp) | Modification | Ajout des suites 69 à 79 (validation multi-fournisseur complète). |
+| [`src/core/IVoiceProvider.h`](../../src/core/IVoiceProvider.h) | **Création** | Contrat abstrait d'un fournisseur vocal unifié. |
+| [`src/core/GeminiVoiceProvider.h`](../../src/core/GeminiVoiceProvider.h) / `.cpp` | **Création** | Adaptateur C++ pour Google Gemini Live enveloppant `GeminiLiveClient`. |
+| [`src/core/OpenAIRealtimeClient.h`](../../src/core/OpenAIRealtimeClient.h) / `.cpp` | **Création** | Implémentation complète du client WebSocket TLS OpenAI Realtime. |
+| [`src/core/AudioResampler.h`](../../src/core/AudioResampler.h) / `.cpp` | **Création** | Rééchantillonneur linéaire entier rapide 16 kHz $\to$ 24 kHz. |
+| [`src/core/OpenAIRoots.h`](../../src/core/OpenAIRoots.h) | **Création** | Certificats racines DigiCert officiels pour OpenAI. |
+| [`src/core/ILiveTransport.h`](../../src/core/ILiveTransport.h) | Modification | Ajout du paramètre optionnel `extraHeaders` à `connect()` pour supporter l'authentification Bearer. |
+| [`src/core/EspWebSocketTransport.h`](../../src/core/EspWebSocketTransport.h) | **Création** | Transport WebSocket réutilisable avec support d'en-têtes HTTP personnalisés. |
+| [`src/VoiceKitConfig.h`](../../src/VoiceKitConfig.h) | Modification | Ajout de l'enum `VoiceProviderType` (`GEMINI = 0`, `OPENAI = 1`) et du champ `provider`. |
+| [`src/core/VoiceHubConfig.h`](../../src/core/VoiceHubConfig.h) | Modification | Mise à jour de `VOICEKIT_VERSION` vers `"v0.6.0"`. |
+| [`src/VoiceKit.h`](../../src/VoiceKit.h) | Modification | Mise à jour de la documentation de version. |
+| [`src/VoxCoreVoice.h`](../../src/VoxCoreVoice.h) / `.cpp` | Modification | Intégration de l'architecture multi-provider (`_activeProvider`, `_geminiProvider`, `_openaiClient`, `getProviderType()`, `getActiveProvider()`), préservation de `getClient()`. |
+| [`src/core/LiveSessionController.h`](../../src/core/LiveSessionController.h) / `.cpp` | Modification | Migration vers `IVoiceProvider*` avec surcharge rétrocompatible `GeminiLiveClient*`. |
+| [`src/core/LiveAudioStreamer.h`](../../src/core/LiveAudioStreamer.h) / `.cpp` | Modification | Migration vers `IVoiceProvider*`, intégration du rééchantillonneur 16k $\to$ 24k automatique pour OpenAI. |
+| [`src/core/ConversationController.h`](../../src/core/ConversationController.h) / `.cpp` | Modification | Migration vers `IVoiceProvider*`, nettoyage sécurisé des callbacks au destructeur. |
+| [`library.json`](../../library.json) & [`library.properties`](../../library.properties) | Modification | Incrémentation de version vers `0.6.0`, mots-clés et descriptions actualisées. |
+| [`CHANGELOG.md`](../../CHANGELOG.md) & [`README.md`](../../README.md) | Modification | Documentation exhaustive de la v0.6.0, diagrammes d'architecture et guides d'usage. |
+| [`examples/OpenAIConversation/`](../../examples/OpenAIConversation/) | **Création** | Nouvel exemple complet de conversation bidirectionnelle avec OpenAI Realtime. |
+| [`tests/native_mock/MockLiveTransport.h`](../../tests/native_mock/MockLiveTransport.h) | Modification | Support des en-têtes et trames WebSocket simulées. |
+| [`tests/run_tests.bat`](../../tests/run_tests.bat) | Modification | Compilation des nouvelles unités sources (`AudioResampler`, `GeminiVoiceProvider`, `OpenAIRealtimeClient`). |
+| [`tests/test_voicekit_all.cpp`](../../tests/test_voicekit_all.cpp) | Modification | Ajout des suites 69 à 79 (validation multi-fournisseur complète). |
 
 ---
 
@@ -115,7 +115,7 @@ La compatibilité avec Gemini est préservée à 100% :
 
 ## 5. Résultats des Tests Automatisés
 
-Le script de test natif [`tests/run_tests.bat`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/tests/run_tests.bat) compile et exécute l'intégralité des suites sous MinGW C++17 :
+Le script de test natif [`tests/run_tests.bat`](../../tests/run_tests.bat) compile et exécute l'intégralité des suites sous MinGW C++17 :
 
 ```text
 ===========================================================
@@ -266,7 +266,7 @@ void setup() {
 ## 10. Procédure de Test sur M5Stack CoreS3 Physique
 
 1. **Préparation des secrets** :
-   - Copiez [`examples/OpenAIConversation/include/secrets.example.h`](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/examples/OpenAIConversation/include/secrets.example.h) vers `examples/OpenAIConversation/include/secrets.h`.
+   - Copiez [`examples/OpenAIConversation/include/secrets.example.h`](../../examples/OpenAIConversation/include/secrets.example.h) vers `examples/OpenAIConversation/include/secrets.h`.
    - Renseignez vos identifiants Wi-Fi et votre clé OpenAI (`sk-proj-...`).
 2. **Compilation et Téléversement** :
    ```bash

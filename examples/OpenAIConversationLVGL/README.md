@@ -165,7 +165,7 @@ VoiceKit conserve une priorité absolue sur les cycles CPU :
 
 ## 7. Rapport de Validation et Non-Régression
 
-Consulter le document dédié [RAPPORT_v0.1.0.1.md](file:///c:/Users/phall/Documents/Antigravity-5/VoiceKit/examples/OpenAIConversationLVGL/RAPPORT_v0.1.0.1.md) pour les détails complets de validation, incluant :
+Consulter le document dédié [RAPPORT_v0.1.0.1.md](RAPPORT_v0.1.0.1.md) pour les détails complets de validation, incluant :
 - 112 suites de tests logiciels réussies (2 210 assertions, 0 échec).
 - Compilation réussie sous PlatformIO CoreS3 (Flash: 94.8%, RAM: 38.6%).
 - Validation de non-régression de l'exemple M5GFX `OpenAIConversation`.

@@ -240,7 +240,7 @@ Toutes les compilations ont été réalisées avec PlatformIO Core, outil-chaîn
 3. **Jetons de confirmation en mémoire vive volatile (RAM)** :
    Les jetons de confirmation pour commandes sensibles sont stockés en RAM vive et expirent par défaut après 30 secondes. Un redémarrage du CoreS3 invalide immédiatement tout jeton en cours.
 4. **Pas de serveur MCP ni de Tool Calling IA distant dans cette version** :
-   VoiceKit v0.6.4 ne contient pas de serveur JSON-RPC 2.0 ni de négociation d'outils avec Gemini/OpenAI. Ces évolutions s'appuieront sur ce registre dans des versions ultérieures (voir [docs/architecture_tools_registry_ai_mcp.md](docs/architecture_tools_registry_ai_mcp.md)).
+   VoiceKit v0.6.4 ne contient pas de serveur JSON-RPC 2.0 ni de négociation d'outils avec Gemini/OpenAI. Ces évolutions s'appuieront sur ce registre dans des versions ultérieures (voir [docs/architecture_tools_registry_ai_mcp.md](../architecture_tools_registry_ai_mcp.md)).
 
 ---
 

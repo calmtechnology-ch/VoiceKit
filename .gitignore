@@ -33,3 +33,6 @@ include/Secrets.h
 references/
 VoxCore/
 
+# Notes personnelles locales
+a-lire.txt
+
