@@ -30,7 +30,7 @@
 // =============================================================================
 static constexpr const char* VOXCORE_VERSION = "v0.2.1";
 static constexpr const char* VOICEHUB_VERSION = VOXCORE_VERSION;
-static constexpr const char* VOICEKIT_VERSION = "v0.6.4.3";
+static constexpr const char* VOICEKIT_VERSION = "v0.6.4.3.1";
 
 // Niveaux de diagnostics centralisés
 #ifndef VOXCORE_DIAGNOSTICS_LEVEL

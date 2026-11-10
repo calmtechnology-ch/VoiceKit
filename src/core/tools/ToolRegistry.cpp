@@ -30,7 +30,9 @@ bool ToolRegistry::registerTool(const ToolDefinition& def) {
     if (!def.isValid(reason)) {
         return false;
     }
-    _tools.push_back(def);
+    ToolDefinition entry = def;
+    entry.generation = ++_toolGenerationCounter;
+    _tools.push_back(std::move(entry));
     return true;
 }
 
@@ -64,6 +66,12 @@ bool ToolRegistry::unregisterTool(const String& id) {
     for (auto it = _tools.begin(); it != _tools.end(); ++it) {
         if (it->id == id) {
             _tools.erase(it);
+            // Invalider immédiatement les confirmations en attente associées à cet outil
+            for (auto& req : _pendingConfirmations) {
+                if (req.toolId == id) {
+                    req.toolGeneration = 0;
+                }
+            }
             return true;
         }
     }
@@ -136,6 +144,7 @@ ToolResult ToolRegistry::execute(const String& id,
             pending.token = token;
             pending.requestId = reqId;
             pending.toolId = id;
+            pending.toolGeneration = def->generation;
             pending.args = args;
             pending.createdAtMs = millis();
             pending.timeoutMs = _confirmationTimeoutMs;
@@ -167,6 +176,10 @@ ToolResult ToolRegistry::execute(const String& id,
             if (target->toolId != id) {
                 emitEvent(ToolEventType::TOOL_FAILED, id, reqId, "Jeton associe a un autre outil");
                 return ToolResult::permissionDenied("Jeton de confirmation non associe a cette commande");
+            }
+            if (target->toolGeneration == 0 || target->toolGeneration != def->generation) {
+                emitEvent(ToolEventType::TOOL_FAILED, id, reqId, "Commande reenregistree ou jeton obsolete");
+                return ToolResult::permissionDenied("Jeton de confirmation invalide car la commande a ete reenregistree ou modifiee");
             }
             // Interdire l'utilisation du jeton avec des arguments différents de ceux initialement autorisés
             if (!args.empty() && !(args == target->args)) {
@@ -248,6 +261,11 @@ ToolResult ToolRegistry::confirm(const String& confirmationToken) {
     if (!def) {
         emitEvent(ToolEventType::TOOL_FAILED, target->toolId, target->requestId, "Commande introuvable");
         return ToolResult::notFound("Commande introuvable lors de la confirmation : " + target->toolId);
+    }
+
+    if (target->toolGeneration == 0 || target->toolGeneration != def->generation) {
+        emitEvent(ToolEventType::TOOL_FAILED, target->toolId, target->requestId, "Commande reenregistree ou jeton obsolete");
+        return ToolResult::permissionDenied("Jeton de confirmation invalide car la commande a ete reenregistree ou modifiee");
     }
 
     // Revalidation des autorisations lors de la confirmation

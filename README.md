@@ -1,4 +1,4 @@
-# VoiceKit v0.6.4.3 — Corrective & Stabilisation : Sécurité ToolRegistry, Fiabilisation VoiceUxLiveBridge & PTT Déterministe
+# VoiceKit v0.6.4.3.1 — Corrective Event Safety : Sécurisation Asynchrone STT, TTS, STOP & ToolRegistry
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -8,6 +8,14 @@
 Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)**, de **conversation vocale bidirectionnelle native (Mode B)**, de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** et de **registre local d'outils (Local Tool Registry)** pour **M5Stack CoreS3** (ESP32-S3).
 
 Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)** supportant à la fois **Google Gemini Live** (moteur par défaut, 100% rétrocompatible) et **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`), construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
+
+La version **v0.6.4.3.1** est une mise à jour exclusivement corrective (« Event Safety ») qui fiabilise le traitement des événements asynchrones STT, TTS, STOP et la gestion du registre d'outils sans modifier l'architecture ni introduire de rupture :
+- **Sécurisation P0 des Transcriptions STT (`VoiceUxLiveBridge`)** : Corrélation par génération unique d'écoute (`_activeTurnId`), rejet systématique des transcriptions tardives après STOP ou annulation, interdiction de création implicite de nouveau tour sur paquet final sans identifiant (`turnId == 0`), rejet des deuxièmes transcriptions finales d'un même tour et réarmement déterministe lors d'une nouvelle capture.
+- **Sécurisation P0 des Événements TTS (`VoiceUxLiveBridge`)** : Corrélation générationnelle de la restitution vocale (`_currentSpeechId`, `notifySpeechFinished(completed, speechId)`), immunité aux notifications obsolètes après STOP ou interruption, non-mémorisation stricte des réponses incomplètes ou interrompues dans `ReplyMemory`.
+- **Cohérence P1 de STOP et des Statuts d'Action (`VoiceUxLiveBridge`, `VoiceUxLiveDemo`)** : Découplage formel entre la commande STOP (terminée avec `COMPLETED`), la capture audio annulée (`CANCELLED`) et la restitution interrompue. Garantie qu'aucune action non exécutée ne produit `COMPLETED`.
+- **Sécurité P1 du Registre d'Outils (`ToolRegistry`)** : Génération interne incrémentale par définition d'outil, invalidation immédiate de tous les jetons lors d'un `unregisterTool()`, et interdiction absolue de réutiliser un ancien jeton si un outil est réenregistré sous le même identifiant (`PERMISSION_DENIED`).
+- **Cohérence P2 des Événements Applicatifs (`VoiceUxLiveDemo`)** : Rejet informatif explicite de l'action `FORWARD_AI` (`notifyActionRejected`) sans l'annoncer faussement exécutée (`COMPLETED`) en attendant l'intégration IA complète en v0.6.5.
+- **Portabilité P2 des Scripts de Validation (`tests/run_tests.bat`)** : Résolution robuste multi-compilateurs (`%CXX%`, `%GCC%`, `where g++`, PlatformIO MinGW), support des chemins avec espaces et gestion sécurisée d'ERRORLEVEL sous Windows.
 
 La version **v0.6.4.3** est une version corrective et de stabilisation majeure qui fiabilise et sécurise l'ensemble du socle applicatif sans ajouter de dépendance lourde ni réécrire le moteur audio :
 - **Sécurisation P0 du Registre d'Outils (`ToolRegistry`, `ToolExecutor`)** :

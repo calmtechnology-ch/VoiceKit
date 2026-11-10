@@ -40,6 +40,7 @@ public:
         String token;
         String requestId;
         String toolId;
+        uint32_t toolGeneration = 0;
         ToolArgs args;
         uint32_t createdAtMs = 0;
         uint32_t timeoutMs = DEFAULT_CONFIRMATION_TIMEOUT_MS;
@@ -213,5 +214,6 @@ private:
 
     uint32_t _requestCounter = 0;
     uint32_t _tokenCounter = 0;
+    uint32_t _toolGenerationCounter = 0;
 };
 

@@ -245,8 +245,9 @@ public:
     /**
      * @brief Notifie la fin d'une restitution vocale TTS.
      * @param completed true si la restitution est allée jusqu'au bout, false si interrompue.
+     * @param speechId Identifiant de génération de la restitution (0 pour ignorer la vérification de corrélation).
      */
-    void notifySpeechFinished(bool completed = true);
+    void notifySpeechFinished(bool completed = true, uint32_t speechId = 0);
 
     /**
      * @brief Notifie le refus ou l'échec de démarrage de la restitution vocale TTS (ex: say() a échoué).
@@ -328,6 +329,11 @@ public:
     uint32_t getCurrentSpeechTurnId() const;
 
     /**
+     * @brief Identifiant de génération unique de la restitution vocale active.
+     */
+    uint32_t getCurrentSpeechId() const;
+
+    /**
      * @brief Texte associé à la restitution active.
      */
     const String& getCurrentSpokenText() const;
@@ -402,6 +408,7 @@ private:
 
     uint32_t _activeTurnId;
     bool _turnInProgress;
+    bool _captureActive;
     bool _finalReceivedForTurn;
     bool _turnCancelled;
 
@@ -411,6 +418,9 @@ private:
     bool _currentSpeechIsRecall;
     bool _currentSpeechIsFeedback;
     uint32_t _currentSpeechTurnId;
+    uint32_t _speechGeneration;
+    uint32_t _currentSpeechId;
+    bool _speechActive;
     String _lastError;
 
     VoiceUxBridgeStats _stats;

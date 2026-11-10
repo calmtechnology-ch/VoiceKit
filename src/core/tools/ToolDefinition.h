@@ -399,6 +399,7 @@ public:
     ToolSecurityPolicy securityPolicy = ToolSecurityPolicy::READ_ONLY; ///< Politique d'autorisation
     std::vector<ToolParam> parameters;                             ///< Paramètres acceptés
     bool allowUnknownParams = false;                                ///< Autorise les paramètres non déclarés
+    uint32_t generation = 0;                                        ///< Génération interne pour invalidation des jetons (v0.6.4.3.1)
     ToolHandler handler;                                            ///< Fonction d'exécution
 
     ToolDefinition() = default;

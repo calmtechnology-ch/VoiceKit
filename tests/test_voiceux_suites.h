@@ -991,6 +991,342 @@ inline void test_v0643_voiceux_livebridge_stabilization_and_edge_cases() {
     }
 }
 
+// =============================================================================
+// SUITE 141 : VoiceKit v0.6.4.3.1 — Sécurité Événementielle Corrective
+//             (Scénarios A, B, C, D, E & STOP multi-états)
+// =============================================================================
+inline void test_v06431_corrective_event_safety() {
+    std::cout << "\n[TEST SUITE 141] v0.6.4.3.1 : Securite Evenementielle Corrective (Scenarios A, B, C, D, E & STOP)" << std::endl;
+
+    // -------------------------------------------------------------------------
+    // Scénario A : STOP puis transcription tardive (sans identifiant & avec identifiant)
+    // -------------------------------------------------------------------------
+    {
+        VoiceUxLiveBridge bridge;
+        bridge.begin();
+        bridge.seedTestReplies();
+
+        // A.1. Sans identifiant (turnId == 0)
+        TEST_ASSERT(bridge.onListeningStarted(), "A1.1 Demarrage ecoute");
+        bridge.onListeningFinished();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::TRANSCRIBING, "A1.2 Etat TRANSCRIBING");
+
+        bridge.triggerPriorityStop();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "A1.3 STOP remet a READY");
+
+        // Injection d'une transcription finale tardive sans turnId (turnId == 0)
+        bool lateDispatched = bridge.feedTranscription("Répète", true);
+        TEST_ASSERT(!lateDispatched, "A1.4 Transcription tardive sans turnId rejetee apres STOP");
+        TEST_ASSERT(!bridge.hasPendingAction(), "A1.5 Aucune action creee pour transcription tardive");
+        TEST_ASSERT(bridge.getBridgeStats().staleTranscriptionsIgnored >= 1, "A1.6 Compteur stale incremente");
+
+        // Nouvelle écoute autorisée et opérationnelle
+        TEST_ASSERT(bridge.onListeningStarted(), "A1.7 Nouvelle ecoute autorisee apres STOP");
+        bridge.onListeningFinished();
+        bool newDispatched = bridge.feedTranscription("Répète", true);
+        TEST_ASSERT(newDispatched, "A1.8 Nouvelle ecoute traite la transcription normalement");
+        TEST_ASSERT(bridge.hasPendingAction(), "A1.9 Action pending valide disponible");
+        bridge.consumePendingAction();
+
+        // A.2. Avec identifiant explicite de l'ancien tour
+        TEST_ASSERT(bridge.onListeningStarted(), "A2.1 Demarrage ecoute avec turnId");
+        uint32_t oldTurn = bridge.getActiveTurnId();
+        bridge.onListeningFinished();
+        bridge.triggerPriorityStop();
+
+        lateDispatched = bridge.feedTranscription("Répète", true, oldTurn);
+        TEST_ASSERT(!lateDispatched, "A2.2 Transcription tardive avec oldTurn rejetee");
+        TEST_ASSERT(!bridge.hasPendingAction(), "A2.3 Aucune action creee");
+
+        TEST_ASSERT(bridge.onListeningStarted(), "A2.4 Nouvelle capture");
+        uint32_t newTurn = bridge.getActiveTurnId();
+        TEST_ASSERT(newTurn > oldTurn, "A2.5 Nouveau turnId superieur a l'ancien");
+        bridge.onListeningFinished();
+        newDispatched = bridge.feedTranscription("Répète", true, newTurn);
+        TEST_ASSERT(newDispatched, "A2.6 Nouvelle ecoute avec newTurn acceptee");
+        bridge.consumePendingAction();
+    }
+
+    // -------------------------------------------------------------------------
+    // Scénario B : Double transcription pour un même tour
+    // -------------------------------------------------------------------------
+    {
+        VoiceUxLiveBridge bridge;
+        bridge.begin();
+        bridge.seedTestReplies();
+
+        TEST_ASSERT(bridge.onListeningStarted(), "B.1 Demarrage ecoute");
+        bridge.onListeningFinished();
+
+        bool first = bridge.feedTranscription("Répète", true);
+        TEST_ASSERT(first, "B.2 Premiere transcription finale acceptee");
+        TEST_ASSERT(bridge.hasPendingAction(), "B.3 Action en attente presente");
+
+        // Deuxième transcription finale identique reçue pour le même tour
+        bool second = bridge.feedTranscription("Répète", true);
+        TEST_ASSERT(!second, "B.4 Deuxieme transcription finale rejetee strictement");
+        TEST_ASSERT(bridge.getBridgeStats().duplicateTranscriptionsIgnored >= 1, "B.5 Compteur doublons incremente");
+
+        VoiceUxBridgeAction act = bridge.consumePendingAction();
+        TEST_ASSERT(act.type == VoiceUxBridgeActionType::TTS_SPEAK, "B.6 Action unique TTS_SPEAK");
+        TEST_ASSERT(!bridge.hasPendingAction(), "B.7 Aucune deuxieme action creee");
+    }
+
+    // -------------------------------------------------------------------------
+    // Scénario C : Ancien événement audio TTS après STOP et nouvelle restitution
+    // -------------------------------------------------------------------------
+    {
+        VoiceUxLiveBridge bridge;
+        bridge.begin();
+
+        // 1. Démarrer un premier TTS
+        bridge.feedSimulatedText("Première réponse vocale");
+        VoiceUxBridgeAction act1 = bridge.consumePendingAction();
+        bridge.notifySpeechStarted(act1.text);
+        uint32_t ttsId1 = bridge.getCurrentSpeechId();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::SPEAKING, "C.1 TTS 1 en cours");
+        TEST_ASSERT(ttsId1 > 0, "C.2 ttsId1 genere");
+
+        // 2. Interrompre avec STOP
+        bridge.triggerPriorityStop();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "C.3 READY apres STOP");
+        TEST_ASSERT(bridge.getReplyMemory().getLastReply() != "Première réponse vocale", "C.4 Reponse interrompue NON memorisee");
+
+        // 3. Démarrer une nouvelle restitution TTS
+        bridge.feedSimulatedText("Deuxième réponse vocale");
+        VoiceUxBridgeAction act2 = bridge.consumePendingAction();
+        bridge.notifySpeechStarted(act2.text);
+        uint32_t ttsId2 = bridge.getCurrentSpeechId();
+        TEST_ASSERT(ttsId2 > ttsId1, "C.5 ttsId2 distinct et superieur");
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::SPEAKING, "C.6 TTS 2 en cours");
+        TEST_ASSERT(bridge.getCurrentSpokenText() == "Deuxième réponse vocale", "C.7 Texte courant = TTS 2");
+
+        // 4. Simuler une notification tardive de fin du premier TTS
+        bridge.notifySpeechFinished(true, ttsId1);
+
+        // 5. Vérifier que la nouvelle restitution reste active
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::SPEAKING, "C.8 TTS 2 reste SPEAKING apres ancien evenement");
+        TEST_ASSERT(bridge.getCurrentSpeechId() == ttsId2, "C.9 speechId actif reste ttsId2");
+        TEST_ASSERT(bridge.getCurrentSpokenText() == "Deuxième réponse vocale", "C.10 Texte reste TTS 2");
+
+        // 6. Terminer réellement la nouvelle restitution
+        bridge.notifySpeechFinished(true, ttsId2);
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "C.11 READY apres fin reelle TTS 2");
+        TEST_ASSERT(bridge.getReplyMemory().getLastReply() == "Deuxième réponse vocale", "C.12 TTS 2 complete bien memorisee");
+    }
+
+    // -------------------------------------------------------------------------
+    // Scénario D : Commande sensible remplacée dans ToolRegistry
+    // -------------------------------------------------------------------------
+    {
+        ToolRegistry reg(16);
+        int runsOld = 0;
+        int runsNew = 0;
+
+        // 1. Enregistrer un outil sensible initial
+        reg.registerTool("door.unlock", "Deverrouiller porte ancienne", [&]() {
+            runsOld++;
+            return ToolResult::success("Ancienne porte ouverte");
+        }, ToolSecurityPolicy::SENSITIVE);
+
+        // 2. Demander une confirmation
+        ToolResult rInit = reg.execute("door.unlock");
+        TEST_ASSERT(rInit.status == ToolExecutionStatus::CONFIRMATION_REQUIRED, "D.1 Confirmation requise");
+        String oldToken = rInit.confirmationToken;
+        TEST_ASSERT(!oldToken.isEmpty(), "D.2 Jeton emis");
+
+        // 3. Supprimer cet outil
+        bool unreg = reg.unregisterTool("door.unlock");
+        TEST_ASSERT(unreg, "D.3 Outil supprime");
+
+        // Confirmation immédiate après suppression -> NOT_FOUND
+        ToolResult rUnregConf = reg.confirm(oldToken);
+        TEST_ASSERT(rUnregConf.status == ToolExecutionStatus::NOT_FOUND, "D.4 Outil supprime -> NOT_FOUND");
+
+        // 4. Réenregistrer un autre outil sous le même identifiant
+        bool reReg = reg.registerTool("door.unlock", "Nouvelle serrure securisee", [&]() {
+            runsNew++;
+            return ToolResult::success("Nouvelle serrure deverrouillee");
+        }, ToolSecurityPolicy::SENSITIVE);
+        TEST_ASSERT(reReg, "D.5 Nouvel outil reenregistre sous le meme ID");
+
+        // 5. Tenter d'utiliser l'ancien jeton sur la nouvelle définition
+        ToolResult rStale = reg.confirm(oldToken);
+
+        // 6. Vérifier le refus absolu (PERMISSION_DENIED car commande réenregistrée)
+        TEST_ASSERT(rStale.status == ToolExecutionStatus::PERMISSION_DENIED, "D.6 Ancien jeton refuse sur nouvelle definition");
+        TEST_ASSERT(runsOld == 0, "D.7 Ancien handler non execute");
+        TEST_ASSERT(runsNew == 0, "D.8 Nouveau handler non execute par l'ancien jeton");
+
+        // 7. Vérifier qu'une nouvelle confirmation fonctionne parfaitement
+        ToolResult rNewReq = reg.execute("door.unlock");
+        TEST_ASSERT(rNewReq.status == ToolExecutionStatus::CONFIRMATION_REQUIRED, "D.9 Nouvelle demande requiert confirmation");
+        String newToken = rNewReq.confirmationToken;
+        TEST_ASSERT(newToken != oldToken, "D.10 Nouveau jeton unique et different");
+
+        ToolResult rNewConf = reg.confirm(newToken);
+        TEST_ASSERT(rNewConf.isSuccess(), "D.11 Nouvelle confirmation reussie");
+        TEST_ASSERT(rNewConf.output == "Nouvelle serrure deverrouillee", "D.12 Sortie conforme du nouvel outil");
+        TEST_ASSERT(runsNew == 1, "D.13 Nouveau handler execute exactement 1 fois");
+    }
+
+    // -------------------------------------------------------------------------
+    // Scénario E : Cohérence des statuts d'action et cycle de vie STOP
+    // -------------------------------------------------------------------------
+    {
+        VoiceUxLiveBridge bridge;
+        bridge.begin();
+        bridge.seedTestReplies();
+
+        // E.1. Transition complète nominale : CREATED -> DISPATCHED -> ACCEPTED -> COMPLETED
+        {
+            std::vector<VoiceUxActionStatus> statuses;
+            bridge.onActionStatus([&](const VoiceUxBridgeAction&, VoiceUxActionStatus st) {
+                statuses.push_back(st);
+            });
+
+            bridge.feedSimulatedText("Répète");
+            TEST_ASSERT(statuses.size() == 1 && statuses[0] == VoiceUxActionStatus::CREATED, "E1.1 Status CREATED");
+
+            VoiceUxBridgeAction act = bridge.consumePendingAction();
+            TEST_ASSERT(statuses.size() == 2 && statuses[1] == VoiceUxActionStatus::DISPATCHED, "E1.2 Status DISPATCHED");
+
+            bridge.notifySpeechStarted(act.text);
+            TEST_ASSERT(statuses.size() == 3 && statuses[2] == VoiceUxActionStatus::ACCEPTED, "E1.3 Status ACCEPTED");
+
+            bridge.notifySpeechFinished(true);
+            TEST_ASSERT(statuses.size() == 4 && statuses[3] == VoiceUxActionStatus::COMPLETED, "E1.4 Status COMPLETED");
+        }
+
+        // E.2. Action refusée : CREATED -> DISPATCHED -> REJECTED
+        {
+            std::vector<VoiceUxActionStatus> statuses;
+            bridge.onActionStatus([&](const VoiceUxBridgeAction&, VoiceUxActionStatus st) {
+                statuses.push_back(st);
+            });
+
+            bridge.feedSimulatedText("Quelle est la météo ?");
+            VoiceUxBridgeAction act = bridge.consumePendingAction();
+            TEST_ASSERT(act.type == VoiceUxBridgeActionType::FORWARD_AI, "E2.1 Type FORWARD_AI");
+
+            // Dans v0.6.4.3.1, l'action non transmise à l'IA reçoit REJECTED (non COMPLETED)
+            bridge.notifyActionRejected("Transmission IA differee");
+            TEST_ASSERT(statuses.size() == 3 && statuses[2] == VoiceUxActionStatus::REJECTED, "E2.2 Status REJECTED pour action non executee");
+        }
+
+        // E.3. Action annulée par STOP : CREATED -> DISPATCHED -> CANCELLED
+        {
+            std::vector<VoiceUxActionStatus> statuses;
+            bridge.onActionStatus([&](const VoiceUxBridgeAction&, VoiceUxActionStatus st) {
+                statuses.push_back(st);
+            });
+
+            bridge.feedSimulatedText("Répète");
+            VoiceUxBridgeAction act = bridge.consumePendingAction();
+            bridge.notifySpeechStarted(act.text);
+            bridge.triggerPriorityStop(); // STOP pendant la restitution
+            TEST_ASSERT(statuses.back() == VoiceUxActionStatus::CANCELLED, "E3.1 Status CANCELLED pour restitution interrompue");
+        }
+
+        // E.4. Commande vocale STOP elle-même : Statut de succès COMPLETED garanti
+        {
+            VoiceUxLiveBridge stopBridge;
+            stopBridge.begin();
+
+            std::vector<VoiceUxActionStatus> statuses;
+            stopBridge.onActionStatus([&](const VoiceUxBridgeAction&, VoiceUxActionStatus st) {
+                statuses.push_back(st);
+            });
+
+            stopBridge.onListeningStarted();
+            stopBridge.onListeningFinished();
+            stopBridge.feedTranscription("Arrête", true);
+            TEST_ASSERT(statuses.size() == 1 && statuses[0] == VoiceUxActionStatus::CREATED, "E4.1 STOP CREATED");
+
+            VoiceUxBridgeAction act = stopBridge.consumePendingAction();
+            TEST_ASSERT(act.type == VoiceUxBridgeActionType::STOP, "E4.2 Action STOP");
+            TEST_ASSERT(statuses.size() == 2 && statuses[1] == VoiceUxActionStatus::DISPATCHED, "E4.3 STOP DISPATCHED");
+
+            // Execution de STOP par la boucle applicative (comme dans main.cpp)
+            stopBridge.triggerPriorityStop();
+            stopBridge.notifyActionCompleted();
+
+            TEST_ASSERT(statuses.back() == VoiceUxActionStatus::COMPLETED, "E4.4 Commande STOP executee avec succes = COMPLETED");
+            TEST_ASSERT(stopBridge.getState() == VoiceUxBridgeState::READY, "E4.5 Etat READY apres commande STOP");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Scénario F : STOP dans les 7 états de la machine et réarmement
+    // -------------------------------------------------------------------------
+    {
+        VoiceUxLiveBridge bridge;
+        bridge.begin();
+        bridge.seedTestReplies();
+
+        // 1. STOP pendant READY
+        bridge.triggerPriorityStop();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "F.1 READY apres STOP en READY");
+        TEST_ASSERT(bridge.canStartListening(), "F.1bis Ecoute possible");
+
+        // 2. STOP pendant LISTENING
+        bridge.onListeningStarted();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::LISTENING, "F.2 LISTENING actif");
+        bridge.triggerPriorityStop();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "F.2 READY apres STOP en LISTENING");
+        TEST_ASSERT(bridge.canStartListening(), "F.2bis Ecoute possible");
+
+        // 3. STOP pendant TRANSCRIBING
+        bridge.onListeningStarted();
+        bridge.onListeningFinished();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::TRANSCRIBING, "F.3 TRANSCRIBING actif");
+        bridge.triggerPriorityStop();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "F.3 READY apres STOP en TRANSCRIBING");
+        TEST_ASSERT(bridge.canStartListening(), "F.3bis Ecoute possible");
+
+        // 4. STOP pendant ACTION_PENDING
+        bridge.feedSimulatedText("Répète");
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::ACTION_PENDING, "F.4 ACTION_PENDING actif");
+        bridge.triggerPriorityStop();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "F.4 READY apres STOP en ACTION_PENDING");
+        TEST_ASSERT(!bridge.hasPendingAction(), "F.4 Action annulee");
+        TEST_ASSERT(bridge.canStartListening(), "F.4bis Ecoute possible");
+
+        // 5. STOP pendant SPEAKING
+        bridge.feedSimulatedText("Répète");
+        VoiceUxBridgeAction act = bridge.consumePendingAction();
+        bridge.notifySpeechStarted(act.text);
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::SPEAKING, "F.5 SPEAKING actif");
+        bridge.triggerPriorityStop();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "F.5 READY apres STOP en SPEAKING");
+        TEST_ASSERT(bridge.canStartListening(), "F.5bis Ecoute possible");
+
+        // 6. STOP pendant PAUSED
+        bridge.setPaused(true);
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::PAUSED, "F.6 PAUSED actif");
+        bridge.triggerPriorityStop();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::PAUSED, "F.6 Reste PAUSED apres STOP");
+        bridge.setPaused(false);
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "F.6 Sortie de pause");
+
+        // 7. STOP pendant une ERREUR récupérable
+        bridge.notifyError("Erreur temporaire de transport");
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::ERROR, "F.7 ERROR actif");
+        bridge.recoverFromError();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "F.7 READY apres recoverFromError()");
+        TEST_ASSERT(bridge.canStartListening(), "F.7bis Ecoute possible apres recuperation");
+
+        // Validation finale : nouvelle interaction complète après la série de STOPs
+        TEST_ASSERT(bridge.onListeningStarted(), "F.8 Nouvelle interaction post-STOP demarree");
+        bridge.onListeningFinished();
+        TEST_ASSERT(bridge.feedTranscription("Répète", true), "F.8 Transcription traitee");
+        VoiceUxBridgeAction finalAct = bridge.consumePendingAction();
+        bridge.notifySpeechStarted(finalAct.text);
+        bridge.notifySpeechFinished(true);
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "F.8 Interaction terminee avec succes");
+    }
+}
+
 inline void run_all_voiceux_tests() {
     test_v0641_textgate_validation();
     test_v0641_intent_router_recognition_and_false_positives();
@@ -1003,5 +1339,6 @@ inline void run_all_voiceux_tests() {
     test_v0642_livebridge_state_machine_tts_cycle_and_resilience();
     test_v0643_tool_registry_security_and_stabilization();
     test_v0643_voiceux_livebridge_stabilization_and_edge_cases();
+    test_v06431_corrective_event_safety();
 }
 

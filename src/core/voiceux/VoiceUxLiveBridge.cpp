@@ -6,11 +6,15 @@ VoiceUxLiveBridge::VoiceUxLiveBridge()
       _hasPendingAction(false),
       _activeTurnId(1),
       _turnInProgress(false),
+      _captureActive(false),
       _finalReceivedForTurn(false),
       _turnCancelled(false),
       _currentSpeechIsRecall(false),
       _currentSpeechIsFeedback(false),
-      _currentSpeechTurnId(0) {
+      _currentSpeechTurnId(0),
+      _speechGeneration(0),
+      _currentSpeechId(0),
+      _speechActive(false) {
 }
 
 bool VoiceUxLiveBridge::begin() {
@@ -20,6 +24,7 @@ bool VoiceUxLiveBridge::begin() {
     _activeAction = VoiceUxBridgeAction();
     _activeTurnId = 1;
     _turnInProgress = false;
+    _captureActive = false;
     _finalReceivedForTurn = false;
     _turnCancelled = false;
     _interimText = "";
@@ -28,6 +33,9 @@ bool VoiceUxLiveBridge::begin() {
     _currentSpeechIsRecall = false;
     _currentSpeechIsFeedback = false;
     _currentSpeechTurnId = 0;
+    _speechGeneration = 0;
+    _currentSpeechId = 0;
+    _speechActive = false;
     _lastError = "";
 
     resetBridgeStats();
@@ -61,6 +69,7 @@ bool VoiceUxLiveBridge::onListeningStarted() {
 
     _activeTurnId++;
     _turnInProgress = true;
+    _captureActive = true;
     _finalReceivedForTurn = false;
     _turnCancelled = false;
     _interimText = "";
@@ -79,26 +88,62 @@ void VoiceUxLiveBridge::onListeningFinished() {
 
 bool VoiceUxLiveBridge::feedTranscription(const String& text, bool isFinal, uint32_t turnId) {
     if (!isFinal) {
+        // En cas de tour annulé ou périmé, ne pas écraser ni afficher les transcriptions partielles tardives
+        if (_turnCancelled || (turnId != 0 && turnId < _activeTurnId)) {
+            return false;
+        }
         _interimText = text;
         _stats.partialTranscriptionsIgnored++;
         return false;
     }
-    if (turnId == 0) {
-        if (!_turnInProgress && !_finalReceivedForTurn) {
-            _turnCancelled = false;
-        } else if (!_turnInProgress && _finalReceivedForTurn) {
-            _activeTurnId++;
-            _finalReceivedForTurn = false;
-            _turnCancelled = false;
+
+    // Transcription finale
+    if (turnId != 0) {
+        if (turnId < _activeTurnId) {
+            _stats.staleTranscriptionsIgnored++;
+            emitDiagnostic("[BRIDGE] Transcription tardive ignoree (turnId=" + String(turnId) +
+                           " < active=" + String(_activeTurnId) + ")");
+            return false;
         }
+        if (turnId > _activeTurnId) {
+            _stats.staleTranscriptionsIgnored++;
+            emitDiagnostic("[BRIDGE] Transcription rejetee : turnId futur ou inconnu (" + String(turnId) + ")");
+            return false;
+        }
+    }
+
+    // Règle 7 & P0 : Rejeter les résultats d'une capture annulée (STOP ou erreur)
+    if (_turnCancelled) {
+        _stats.staleTranscriptionsIgnored++;
+        emitDiagnostic("[BRIDGE] Transcription rejetee car le tour a ete annule");
+        return false;
+    }
+
+    // Règle 3 & P0 : Rejeter toute deuxième transcription finale appartenant au même tour
+    if (_finalReceivedForTurn) {
+        _stats.duplicateTranscriptionsIgnored++;
+        emitDiagnostic("[BRIDGE] Transcription finale dupliquee ignoree pour ce tour");
+        return false;
+    }
+
+    // Règle 2 : Aucune restitution TTS ni traitement final si le haut-parleur est actif
+    if (_state == VoiceUxBridgeState::SPEAKING) {
+        emitDiagnostic("[BRIDGE] Transcription ignoree : haut-parleur actif");
+        return false;
+    }
+
+    if (turnId == 0) {
+        // Lier au tour actif sans jamais créer implicitement un nouveau tour ni réinitialiser une annulation
         turnId = _activeTurnId;
     }
+
     return processInternal(text, false, turnId);
 }
 
 bool VoiceUxLiveBridge::feedSimulatedText(const String& text) {
     _activeTurnId++;
     _turnInProgress = false;
+    _captureActive = false;
     _finalReceivedForTurn = false;
     _turnCancelled = false;
     return processInternal(text, true, _activeTurnId);
@@ -122,6 +167,7 @@ bool VoiceUxLiveBridge::processInternal(const String& text, bool isSimulated, ui
 
     // Règle 7 : Une action annulée ne peut pas être exécutée ultérieurement
     if (_turnCancelled) {
+        _stats.staleTranscriptionsIgnored++;
         emitDiagnostic("[BRIDGE] Transcription rejetee car le tour a ete annule");
         return false;
     }
@@ -179,6 +225,10 @@ bool VoiceUxLiveBridge::processInternal(const String& text, bool isSimulated, ui
         } else {
             // Règle PAUSE : les demandes conversationnelles ordinaires ne sont pas exécutées
             emitDiagnostic("[BRIDGE] Requete ignoree car le pont est en mode PAUSE");
+            if (!_captureActive) {
+                _finalReceivedForTurn = false;
+                _activeTurnId++;
+            }
             return false;
         }
     }
@@ -192,6 +242,10 @@ bool VoiceUxLiveBridge::processInternal(const String& text, bool isSimulated, ui
         _stats.ignoredCommands++;
         emitDiagnostic("[BRIDGE] TextGate : transcription ignoree (vide ou hesitation)");
         setState(VoiceUxBridgeState::READY);
+        if (!_captureActive) {
+            _finalReceivedForTurn = false;
+            _activeTurnId++;
+        }
         return false;
     }
 
@@ -250,6 +304,10 @@ bool VoiceUxLiveBridge::processInternal(const String& text, bool isSimulated, ui
             emitDiagnostic("[BRIDGE] Commande de diagnostic reconnue : " +
                            String(voiceUxIntentToString(result.intent)));
             setState(VoiceUxBridgeState::READY);
+            if (!_captureActive) {
+                _finalReceivedForTurn = false;
+                _activeTurnId++;
+            }
             return false;
         }
         case VoiceUxIntent::NONE:
@@ -294,6 +352,13 @@ VoiceUxBridgeAction VoiceUxLiveBridge::consumePendingAction() {
     _hasPendingAction = false;
     _pendingAction = VoiceUxBridgeAction();
 
+    // Si cette action ne provient pas d'une capture audio PTT (ex: injection directe en test unitaire),
+    // réinitialiser le verrou de final pour permettre la prochaine injection séquentielle de test.
+    if (!_captureActive) {
+        _finalReceivedForTurn = false;
+        _activeTurnId++;
+    }
+
     if (_state == VoiceUxBridgeState::ACTION_PENDING) {
         setState((_stateBeforePause == VoiceUxBridgeState::PAUSED) ? VoiceUxBridgeState::PAUSED : VoiceUxBridgeState::READY);
     }
@@ -314,7 +379,9 @@ void VoiceUxLiveBridge::cancelPendingAction() {
         _hasPendingAction = false;
         _pendingAction = VoiceUxBridgeAction();
     }
-    if (_activeAction.type != VoiceUxBridgeActionType::NONE && _state != VoiceUxBridgeState::SPEAKING) {
+    if (_activeAction.type != VoiceUxBridgeActionType::NONE &&
+        _activeAction.type != VoiceUxBridgeActionType::STOP &&
+        _state != VoiceUxBridgeState::SPEAKING) {
         if (_actionStatusCb) {
             _actionStatusCb(_activeAction, VoiceUxActionStatus::CANCELLED);
         }
@@ -329,11 +396,12 @@ void VoiceUxLiveBridge::triggerPriorityStop() {
     _stats.stopRequestsCount++;
     _turnCancelled = true;
     _turnInProgress = false;
+    _captureActive = false;
     _activeTurnId++;
     cancelPendingAction();
 
     if (_state == VoiceUxBridgeState::SPEAKING) {
-        notifySpeechFinished(false);
+        notifySpeechFinished(false, _currentSpeechId);
     } else {
         setState((_stateBeforePause == VoiceUxBridgeState::PAUSED || _state == VoiceUxBridgeState::PAUSED)
                      ? VoiceUxBridgeState::PAUSED
@@ -347,6 +415,8 @@ void VoiceUxLiveBridge::notifySpeechStarted(const String& spokenText) {
         emitDiagnostic("[BRIDGE] Avertissement : debut restitution alors que micro actif !");
     }
     _stats.ttsDispatchedCount++;
+    _currentSpeechId = ++_speechGeneration;
+    _speechActive = true;
     _currentSpokenText = (!spokenText.isEmpty()) ? spokenText : _activeAction.text;
     _currentSpeechIsRecall = _activeAction.isRecall;
     _currentSpeechIsFeedback = _activeAction.isFeedback;
@@ -357,28 +427,39 @@ void VoiceUxLiveBridge::notifySpeechStarted(const String& spokenText) {
     }
 }
 
-void VoiceUxLiveBridge::notifySpeechFinished(bool completed) {
-    if (_state == VoiceUxBridgeState::SPEAKING) {
-        if (completed) {
-            _stats.ttsCompletedCount++;
-            // Mémorisation uniquement si restitution complète valide (non recall, non feedback)
-            if (!_currentSpeechIsRecall && !_currentSpeechIsFeedback && !_currentSpokenText.isEmpty()) {
-                _controller.rememberReply(_currentSpokenText);
-            }
-            if (_actionExecutedCb && _activeAction.type != VoiceUxBridgeActionType::NONE) {
-                _actionExecutedCb(_activeAction);
-            }
-            if (_actionStatusCb && _activeAction.type != VoiceUxBridgeActionType::NONE) {
-                _actionStatusCb(_activeAction, VoiceUxActionStatus::COMPLETED);
-            }
-        } else {
-            _stats.ttsCancelledCount++;
-            if (_actionStatusCb && _activeAction.type != VoiceUxBridgeActionType::NONE) {
-                _actionStatusCb(_activeAction, VoiceUxActionStatus::CANCELLED);
-            }
+void VoiceUxLiveBridge::notifySpeechFinished(bool completed, uint32_t speechId) {
+    if (_state != VoiceUxBridgeState::SPEAKING || !_speechActive) {
+        emitDiagnostic("[BRIDGE] Notification TTS ignoree : aucun TTS actif");
+        return;
+    }
+
+    if (speechId != 0 && speechId != _currentSpeechId) {
+        emitDiagnostic("[BRIDGE] Notification TTS ignoree : speechId obsolete (" +
+                       String(speechId) + " != " + String(_currentSpeechId) + ")");
+        return;
+    }
+
+    if (completed) {
+        _stats.ttsCompletedCount++;
+        // Mémorisation uniquement si restitution complète valide (non recall, non feedback)
+        if (!_currentSpeechIsRecall && !_currentSpeechIsFeedback && !_currentSpokenText.isEmpty()) {
+            _controller.rememberReply(_currentSpokenText);
+        }
+        if (_actionExecutedCb && _activeAction.type != VoiceUxBridgeActionType::NONE) {
+            _actionExecutedCb(_activeAction);
+        }
+        if (_actionStatusCb && _activeAction.type != VoiceUxBridgeActionType::NONE) {
+            _actionStatusCb(_activeAction, VoiceUxActionStatus::COMPLETED);
+        }
+    } else {
+        _stats.ttsCancelledCount++;
+        if (_actionStatusCb && _activeAction.type != VoiceUxBridgeActionType::NONE) {
+            _actionStatusCb(_activeAction, VoiceUxActionStatus::CANCELLED);
         }
     }
 
+    _speechActive = false;
+    _currentSpeechId = 0;
     _activeAction = VoiceUxBridgeAction();
     _currentSpokenText = "";
     _currentSpeechIsRecall = false;
@@ -397,6 +478,8 @@ void VoiceUxLiveBridge::notifySpeechRefused(const String& reason) {
     if (_actionStatusCb && _activeAction.type != VoiceUxBridgeActionType::NONE) {
         _actionStatusCb(_activeAction, VoiceUxActionStatus::REJECTED);
     }
+    _speechActive = false;
+    _currentSpeechId = 0;
     _activeAction = VoiceUxBridgeAction();
     _currentSpokenText = "";
     _currentSpeechIsRecall = false;
@@ -453,6 +536,9 @@ void VoiceUxLiveBridge::recoverFromError() {
     _activeAction = VoiceUxBridgeAction();
     _turnCancelled = false;
     _turnInProgress = false;
+    _captureActive = false;
+    _speechActive = false;
+    _currentSpeechId = 0;
     setState(VoiceUxBridgeState::READY);
     emitDiagnostic("[BRIDGE] Recuperation d'erreur effectuee -> READY");
 }
@@ -506,6 +592,10 @@ bool VoiceUxLiveBridge::isCurrentSpeechFeedback() const {
 
 uint32_t VoiceUxLiveBridge::getCurrentSpeechTurnId() const {
     return _currentSpeechTurnId;
+}
+
+uint32_t VoiceUxLiveBridge::getCurrentSpeechId() const {
+    return _currentSpeechId;
 }
 
 const String& VoiceUxLiveBridge::getCurrentSpokenText() const {

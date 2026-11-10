@@ -28,6 +28,44 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.4.3.1] - 2026-11-10 (Corrective — Event Safety : Sécurisation STT, TTS, STOP & ToolRegistry)
+
+Version exclusivement corrective garantissant la robustesse événementielle asynchrone sans modifier l'architecture ni dégrader les fonctionnalités existantes.
+
+### 1. P0 — Sécurisation des Transcriptions STT (`VoiceUxLiveBridge`, `VoiceUxLiveDemo`)
+- **Génération Unique & Cycle de Capture** : Chaque session d'écoute initialise une génération de tour déterministe (`_activeTurnId`), réinitialise le statut d'annulation (`_turnCancelled = false`) et réarme la protection contre les doublons (`_finalReceivedForTurn = false`).
+- **Suppression de l'Attribution Implicite de Tour** : Dans `feedTranscription()`, une transcription sans identifiant (`turnId == 0`) ne réalloue plus arbitrairement de nouveau tour si la capture est annulée ou terminée.
+- **Rejet des Transcriptions Tardives après STOP** : Tout paquet de transcription arrivant après une annulation ou un STOP est rejeté silencieusement, protégeant l'état applicatif.
+- **Rejet Déterministe des Doublons Finals** : Toute seconde transcription finale arrivant pour un même tour est immédiatement rejetée (`_finalReceivedForTurn`), éliminant l'exécution en double d'une action.
+- **Préservation des Transcriptions Intermédiaires** : Les transcriptions partielles (`isFinal == false`) continuent d'être reçues et transmises pour l'affichage en direct.
+- **Corrélation à la Frontière Applicative** : Dans `VoiceUxLiveDemo`, `s_currentCaptureTurnId` assure la correspondance stricte entre les événements moteur et l'injection dans le pont.
+
+### 2. P0 — Sécurisation des Événements TTS (`VoiceUxLiveBridge`, `VoiceUxLiveDemo`)
+- **Corrélation Générationnelle des Restitutions Vocales** : Introduction d'un identifiant de restitution incrémental (`_currentSpeechId`) et de la signature rétrocompatible `notifySpeechFinished(bool completed = true, uint32_t speechId = 0)`.
+- **Immunité aux Terminaisons Obsolètes** : Une notification de fin appartenant à un ancien TTS interrompu ou annulé est ignorée si une nouvelle restitution est en cours (`speechId != _currentSpeechId`).
+- **Protection de l'Historique Conversationnel** : Une réponse interrompue par STOP n'est jamais marquée `COMPLETED` et n'est jamais mémorisée dans `ReplyMemory`.
+- **Rétrocompatibilité Totale** : Les appels existants à `notifySpeechFinished(bool)` sans identifiant restent valides et fonctionnels.
+
+### 3. P1 — Cohérence de STOP et des Statuts d'Action (`VoiceUxLiveBridge`, `VoiceUxLiveDemo`)
+- **Distinction Explicite des Entités lors d'un STOP** : Différenciation formelle entre l'action STOP elle-même, la capture audio interrompue (`cancelPendingAction()`), et la restitution TTS écourtée.
+- **Statut Déterministe** : La commande STOP exécutée avec succès reçoit `COMPLETED`. Les actions utilisateur interrompues par le STOP reçoivent `CANCELLED`.
+- **Règle d'Intégrité des Statuts** : Aucune action non exécutée ne peut recevoir le statut `COMPLETED`.
+
+### 4. P1 — Sécurité du Registre d'Outils (`ToolRegistry`, `ToolDefinition`)
+- **Génération Interne de Définition d'Outil** : Attribution d'un numéro de génération incrémental (`generation`) à chaque enregistrement d'outil (`_toolGenerationCounter`).
+- **Invalidation Immédiate lors de `unregisterTool()`** : Toutes les confirmations en attente pour un outil supprimé voient leur référence invalidée.
+- **Protection Anti-Réutilisation après Réenregistrement** : Toute tentative d'utiliser un jeton émis pour une ancienne définition après suppression et réenregistrement d'un outil avec le même identifiant est strictement rejetée avec `PERMISSION_DENIED`.
+- **Préservation Intégrale des Garanties v0.6.4.3** : Requête immuable, vérification stricte des arguments, protection anti-rejeu, gestion de `BUSY` et file bornée (`_maxPendingConfirmations`).
+
+### 5. P2 — Cohérence des Événements Applicatifs (`VoiceUxLiveDemo`)
+- **Régularisation du Statut `FORWARD_AI`** : Dans l'attente de l'intégration IA complète en v0.6.5, les actions `FORWARD_AI` ne sont plus notifiées comme `COMPLETED`, mais signalées comme différées/rejetées (`notifyActionRejected`) avec journalisation claire.
+
+### 6. P2 — Robustesse des Scripts Windows (`tests/run_tests.bat`)
+- **Résolution Multi-Compilateurs** : Détection dans l'ordre de `%CXX%`, `%GCC%`, `where.exe g++`, et de la chaîne d'outils MinGW de PlatformIO. Prise en charge des chemins avec espaces.
+- **Gestion Sécurisée d'ERRORLEVEL** : Élimination des pièges d'expansion retardée par l'usage systématique de `if not errorlevel 1`.
+
+---
+
 ## [0.6.4.3] - 2026-11-10 (Corrective & Stabilisation — Sécurité ToolRegistry, VoiceUxLiveBridge & PTT Déterministe)
 
 ### 1. Sécurisation P0 du Registre d'Outils (`ToolRegistry`, `ToolExecutor`)
