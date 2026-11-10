@@ -1,6 +1,6 @@
 /**
  * @file main.cpp
- * @brief Application VoiceUxLiveDemo — Démonstration du pont vocal VoiceKit v0.6.4.2
+ * @brief Application VoiceUxLiveDemo — Démonstration du pont vocal VoiceKit v0.6.4.3
  *        sur M5Stack CoreS3 (ESP32-S3).
  * 
  * Fonctionnalités :
@@ -87,7 +87,7 @@ static void drawUI() {
     M5.Display.fillRect(0, 0, dw, 24, M5.Display.color565(15, 30, 60));
     M5.Display.setTextSize(1);
     M5.Display.setTextColor(TFT_WHITE, M5.Display.color565(15, 30, 60));
-    M5.Display.drawString(dw >= 300 ? " VoiceKit v0.6.4.2 - Voice UX Live" : " VoiceKit UX Live", 4, 6);
+    M5.Display.drawString(dw >= 300 ? " VoiceKit v0.6.4.3 - Voice UX Live" : " VoiceKit UX Live", 4, 6);
 
     // Badge Wi-Fi
     bool wifiOk = (WiFi.status() == WL_CONNECTED);
@@ -258,7 +258,7 @@ static void drawUI() {
 // =============================================================================
 
 static void printHelp() {
-    Serial.println("\n--- Commandes de diagnostic VoiceKit v0.6.4.2 ---");
+    Serial.println("\n--- Commandes de diagnostic VoiceKit v0.6.4.3 ---");
     Serial.println("  P          : Demarrer la capture microphone");
     Serial.println("  R          : Terminer la capture microphone");
     Serial.println("  S          : STOP prioritaire");
@@ -279,14 +279,14 @@ static void handleSerialCommand(const String& line) {
 
     char first = cmd.charAt(0);
     if (first == 'P' || first == 'p') {
-        Serial.println("[CMD] P -> Demarrage ecoute STT");
+        Serial.println("[CMD] P -> Demande de demarrage ecoute STT");
         if (s_bridge.canStartListening() && (s_voice.isReady() || s_voice.getState() == VoiceState::READY)) {
             bool ok = s_voice.startListening();
             if (ok) {
-                s_bridge.onListeningStarted();
                 s_touchListening = true;
                 s_needsRedraw = true;
             } else {
+                s_touchListening = false;
                 Serial.println("[CMD][ERREUR] Echec startListening()");
             }
         } else {
@@ -296,10 +296,12 @@ static void handleSerialCommand(const String& line) {
                           (WiFi.status() == WL_CONNECTED) ? "CONNECTE" : "DECONNECTE");
         }
     } else if (first == 'R' || first == 'r') {
-        Serial.println("[CMD] R -> Arret ecoute STT");
+        Serial.println("[CMD] R -> Demande d'arret ecoute STT");
         if (s_voice.isListening()) {
-            s_voice.stopListening();
-            s_bridge.onListeningFinished();
+            bool ok = s_voice.stopListening();
+            if (!ok) {
+                Serial.println("[CMD][ERREUR] Echec stopListening()");
+            }
             s_touchListening = false;
             s_needsRedraw = true;
         }
@@ -364,7 +366,7 @@ void setup() {
     delay(200);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.6.4.2 — Voice UX Live Demo                ");
+    Serial.println("  VoiceKit v0.6.4.3 — Voice UX Live Demo                ");
     Serial.println("  Pont STT -> VoiceUxController -> ReplyMemory -> TTS   ");
     Serial.println("========================================================");
 
@@ -510,11 +512,17 @@ void loop() {
                 }
                 Serial.printf("[ACTION] TTS en attente : \"%s\"\n", act.text.c_str());
                 if (s_bridge.canSpeak() && (s_voice.isReady() || s_voice.getState() == VoiceState::READY)) {
-                    s_bridge.notifySpeechStarted(act.text);
-                    Serial.println("[VOICE] TTS demarre");
-                    s_voice.say(act.text);
+                    bool ok = s_voice.say(act.text);
+                    if (ok) {
+                        s_bridge.notifySpeechStarted(act.text);
+                        Serial.println("[VOICE] TTS demarre");
+                    } else {
+                        Serial.println("[ACTION][ERREUR] Echec say(), restitution refusee");
+                        s_bridge.notifySpeechRefused("say() refuse par s_voice");
+                    }
                 } else {
                     Serial.println("[ACTION][REPORTE] Moteur vocal non disponible pour TTS");
+                    s_bridge.notifySpeechRefused("Moteur vocal non disponible");
                 }
                 break;
             }
@@ -522,22 +530,24 @@ void loop() {
                 Serial.println("[ACTION] Commande STOP executee");
                 s_bridge.triggerPriorityStop();
                 s_voice.stop();
+                s_bridge.notifyActionCompleted();
                 break;
             }
             case VoiceUxBridgeActionType::PAUSE: {
                 Serial.println("[ACTION] Mise en PAUSE de la session");
                 s_bridge.setPaused(true);
+                s_bridge.notifyActionCompleted();
                 break;
             }
             case VoiceUxBridgeActionType::RESUME: {
                 Serial.println("[ACTION] Reprise de session");
                 s_bridge.setPaused(false);
+                s_bridge.notifyActionCompleted();
                 break;
             }
             case VoiceUxBridgeActionType::FORWARD_AI: {
                 Serial.printf("[ACTION] Phrase ordinaire a transmettre : \"%s\"\n", act.text.c_str());
-                // Dans cette version 0.6.4.2 sans conversation multi-tours IA,
-                // la phrase est simplement notifiée.
+                s_bridge.notifyActionCompleted();
                 break;
             }
             default:
@@ -559,12 +569,14 @@ void loop() {
     // Appui sur le bouton PARLER (Push-To-Talk)
     if (touch.wasPressed() && inTalkArea) {
         if (s_bridge.canStartListening() && (s_voice.isReady() || s_voice.getState() == VoiceState::READY)) {
-            Serial.println("[TOUCH] Appui PARLER -> Demarrage ecoute");
-            s_touchListening = true;
+            Serial.println("[TOUCH] Appui PARLER -> Demande de demarrage ecoute");
             bool ok = s_voice.startListening();
             if (ok) {
-                s_bridge.onListeningStarted();
+                s_touchListening = true;
                 s_needsRedraw = true;
+            } else {
+                s_touchListening = false;
+                Serial.println("[TOUCH][ERREUR] Demarrage ecoute refuse par s_voice");
             }
         } else {
             Serial.printf("[TOUCH][ATTENTE] Capture interdite : pont=%s, vocal=%s, wifi=%s\n",
@@ -576,11 +588,13 @@ void loop() {
 
     // Relâchement du bouton PARLER
     if (touch.wasReleased() && s_touchListening) {
-        Serial.println("[TOUCH] Relachement PARLER -> Fin de prise de parole");
+        Serial.println("[TOUCH] Relachement PARLER -> Demande d'arret ecoute");
         s_touchListening = false;
         if (s_voice.isListening()) {
-            s_voice.stopListening();
-            s_bridge.onListeningFinished();
+            bool ok = s_voice.stopListening();
+            if (!ok) {
+                Serial.println("[TOUCH][ERREUR] Arret ecoute refuse par s_voice");
+            }
             s_needsRedraw = true;
         }
     }

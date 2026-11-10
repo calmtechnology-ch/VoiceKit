@@ -620,6 +620,377 @@ inline void test_v0642_livebridge_state_machine_tts_cycle_and_resilience() {
     TEST_ASSERT(bridge.getBridgeStats().ttsDispatchedCount > 0, "Statistiques TTS enregistrees");
 }
 
+// =============================================================================
+// SUITE 139 : VoiceKit v0.6.4.3 — ToolRegistry : Sécurité, Jetons immuables & Robustesse
+// =============================================================================
+inline void test_v0643_tool_registry_security_and_stabilization() {
+    std::cout << "\n[TEST SUITE 139] v0.6.4.3 : ToolRegistry (Immuabilite, Rejeu, Auth, Busy & Capacite)" << std::endl;
+
+    // 1. Confirmation valide
+    {
+        ToolRegistry reg(16);
+        bool rebootDone = false;
+        reg.registerTool("system.reboot", "Redemarrer", [&]() {
+            rebootDone = true;
+            return ToolResult::success("Redemarrage en cours");
+        }, ToolSecurityPolicy::SENSITIVE);
+
+        ToolResult rInit = reg.execute("system.reboot");
+        TEST_ASSERT(rInit.status == ToolExecutionStatus::CONFIRMATION_REQUIRED, "Confirmation requise");
+        TEST_ASSERT(!rInit.confirmationToken.isEmpty(), "Jeton genere");
+        TEST_ASSERT(!rebootDone, "Commande non executee avant confirmation");
+
+        ToolResult rConf = reg.confirm(rInit.confirmationToken);
+        TEST_ASSERT(rConf.isSuccess(), "Confirmation reussie");
+        TEST_ASSERT(rebootDone, "Commande executee apres confirmation");
+    }
+
+    // 2. Confirmation expiree
+    {
+        ToolRegistry reg(16);
+        reg.registerTool("system.reboot", "Redemarrer", []() { return ToolResult::success(); }, ToolSecurityPolicy::SENSITIVE);
+        ToolResult rInit = reg.execute("system.reboot");
+        advanceMockMillis(35000);
+        ToolResult rExp = reg.confirm(rInit.confirmationToken);
+        TEST_ASSERT(rExp.status == ToolExecutionStatus::PERMISSION_DENIED, "Jeton expire refuse");
+        TEST_ASSERT(rExp.error.indexOf("expire") != -1, "Erreur cite expiration");
+    }
+
+    // 3. Reutilisation d'un jeton (protection anti-rejeu)
+    {
+        ToolRegistry reg(16);
+        int runs = 0;
+        reg.registerTool("system.reboot", "Redemarrer", [&]() { runs++; return ToolResult::success(); }, ToolSecurityPolicy::SENSITIVE);
+        ToolResult rInit = reg.execute("system.reboot");
+        ToolResult r1 = reg.confirm(rInit.confirmationToken);
+        TEST_ASSERT(r1.isSuccess(), "Premier confirm ok");
+        TEST_ASSERT(runs == 1, "Execute 1 fois");
+
+        ToolResult r2 = reg.confirm(rInit.confirmationToken);
+        TEST_ASSERT(r2.status == ToolExecutionStatus::PERMISSION_DENIED, "Deuxieme confirm refuse");
+        TEST_ASSERT(r2.error.indexOf("anti-rejeu") != -1 || r2.error.indexOf("utilise") != -1, "Erreur anti-rejeu");
+        TEST_ASSERT(runs == 1, "Non reexecute");
+    }
+
+    // 4. Jeton d'une autre commande
+    {
+        ToolRegistry reg(16);
+        reg.registerTool("tool.a", "Tool A", []() { return ToolResult::success(); }, ToolSecurityPolicy::SENSITIVE);
+        reg.registerTool("tool.b", "Tool B", []() { return ToolResult::success(); }, ToolSecurityPolicy::SENSITIVE);
+
+        ToolResult rA = reg.execute("tool.a");
+        ToolResult rB = reg.execute("tool.b", ToolArgs(), rA.confirmationToken);
+        TEST_ASSERT(rB.status == ToolExecutionStatus::PERMISSION_DENIED, "Jeton outil A refuse pour outil B");
+        TEST_ASSERT(rB.error.indexOf("non associe") != -1 || rB.error.indexOf("autre outil") != -1, "Message jeton non associe");
+    }
+
+    // 5. Modification des arguments apres demande de confirmation
+    {
+        ToolRegistry reg(16);
+        ToolParam p("drive", ToolParamType::STRING, true);
+        reg.registerTool("storage.format", "Formatage", [](const ToolArgs& args) {
+            return ToolResult::success("Formate " + args.getString("drive"));
+        }, {p}, ToolSecurityPolicy::SENSITIVE);
+
+        ToolArgs initialArgs;
+        initialArgs.set("drive", "SD");
+        ToolResult rInit = reg.execute("storage.format", initialArgs);
+        TEST_ASSERT(rInit.status == ToolExecutionStatus::CONFIRMATION_REQUIRED, "Formatage sensible");
+        String token = rInit.confirmationToken;
+
+        ToolArgs tamperedArgs;
+        tamperedArgs.set("drive", "FLASH_SYSTEM");
+        ToolResult rTampered = reg.execute("storage.format", tamperedArgs, token);
+        TEST_ASSERT(rTampered.status == ToolExecutionStatus::PERMISSION_DENIED, "Arguments modifies rejetes");
+        TEST_ASSERT(rTampered.error.indexOf("Arguments non conformes") != -1, "Message arguments non conformes");
+
+        // Mais confirm(token) avec les arguments initiaux preserves doit reussir !
+        ToolResult rLegit = reg.confirm(token);
+        TEST_ASSERT(rLegit.isSuccess(), "Confirmation legitime reussie");
+        TEST_ASSERT(rLegit.output == "Formate SD", "Arguments initiaux preserves executes");
+    }
+
+    // 6. Suppression d'une commande avant confirmation
+    {
+        ToolRegistry reg(16);
+        reg.registerTool("temp.tool", "Outil temporaire", []() { return ToolResult::success(); }, ToolSecurityPolicy::SENSITIVE);
+        ToolResult rInit = reg.execute("temp.tool");
+        String token = rInit.confirmationToken;
+
+        reg.unregisterTool("temp.tool");
+        ToolResult rConf = reg.confirm(token);
+        TEST_ASSERT(rConf.status == ToolExecutionStatus::NOT_FOUND, "NOT_FOUND apres unregister");
+    }
+
+    // 7. Modification des autorisations entre demande et confirmation
+    {
+        ToolRegistry reg(16);
+        bool allowAction = true;
+        reg.setAuthorizationChecker([&](const ToolDefinition&, const ToolArgs&) {
+            return allowAction;
+        });
+
+        reg.registerTool("net.reset", "Reset", []() { return ToolResult::success(); }, ToolSecurityPolicy::SENSITIVE);
+        ToolResult rInit = reg.execute("net.reset");
+        String token = rInit.confirmationToken;
+
+        // Revocation de l'autorisation
+        allowAction = false;
+        ToolResult rConf = reg.confirm(token);
+        TEST_ASSERT(rConf.status == ToolExecutionStatus::PERMISSION_DENIED, "Refus apres revocation d'autorisation");
+    }
+
+    // 8. Executeur occupe lors de la confirmation
+    {
+        class BusyMockExecutor : public IToolExecutor {
+        public:
+            bool busy = true;
+            bool cancelled = false;
+            ToolResult execute(const ToolDefinition& def, const ToolArgs& args) override {
+                return def.handler ? def.handler(args) : ToolResult::success();
+            }
+            bool isBusy() const override { return busy; }
+            void update() override {}
+            void cancelDeferred() override { cancelled = true; }
+        };
+
+        ToolRegistry reg(16);
+        auto mockExec = std::make_shared<BusyMockExecutor>();
+        reg.setExecutor(mockExec);
+
+        reg.registerTool("sys.action", "Action", []() { return ToolResult::success("Fini"); }, ToolSecurityPolicy::SENSITIVE);
+        ToolResult rInit = reg.execute("sys.action");
+        String token = rInit.confirmationToken;
+
+        // Executeur occupe -> confirmation retourne BUSY sans detruire le jeton
+        ToolResult rBusy = reg.confirm(token);
+        TEST_ASSERT(rBusy.status == ToolExecutionStatus::BUSY, "Statut BUSY remonte");
+
+        // L'executeur redevient disponible -> confirmation doit fonctionner
+        mockExec->busy = false;
+        ToolResult rRetry = reg.confirm(token);
+        TEST_ASSERT(rRetry.isSuccess(), "Confirmation reussie apres liberation de l'executeur");
+        TEST_ASSERT(rRetry.output == "Fini", "Output conforme");
+
+        // Verification de cancelDeferred sur custom executor
+        reg.cancelPending();
+        TEST_ASSERT(mockExec->cancelled, "cancelDeferred appele sur custom executor");
+    }
+
+    // 9. Confirmation repetee apres erreur d'execution
+    {
+        ToolRegistry reg(16);
+        int attempts = 0;
+        reg.registerTool("hardware.burn", "Burn", [&]() {
+            attempts++;
+            return ToolResult::executionFailed("Erreur materielle I2C");
+        }, ToolSecurityPolicy::SENSITIVE);
+
+        ToolResult rInit = reg.execute("hardware.burn");
+        String token = rInit.confirmationToken;
+
+        // Premiere execution -> retourne EXECUTION_FAILED
+        ToolResult rExec = reg.confirm(token);
+        TEST_ASSERT(rExec.status == ToolExecutionStatus::EXECUTION_FAILED, "Erreur retournee");
+        TEST_ASSERT(attempts == 1, "Handler execute 1 fois");
+
+        // Tentative de rejouer le jeton apres erreur -> DOIT ETRE REJETEE (anti-rejeu)
+        ToolResult rSecond = reg.confirm(token);
+        TEST_ASSERT(rSecond.status == ToolExecutionStatus::PERMISSION_DENIED, "Jeton consomme malgre l'erreur d'execution");
+        TEST_ASSERT(attempts == 1, "Handler NON reexecute");
+    }
+
+    // 10. File de confirmations bornee (anti-DoS RAM)
+    {
+        ToolRegistry reg(16);
+        reg.setMaxPendingConfirmations(3);
+        TEST_ASSERT(reg.getMaxPendingConfirmations() == 3, "Capacite confirmee");
+        reg.registerTool("cmd.s", "S", []() { return ToolResult::success(); }, ToolSecurityPolicy::SENSITIVE);
+
+        ToolResult r1 = reg.execute("cmd.s");
+        ToolResult r2 = reg.execute("cmd.s");
+        ToolResult r3 = reg.execute("cmd.s");
+        TEST_ASSERT(r1.status == ToolExecutionStatus::CONFIRMATION_REQUIRED, "Req 1 ok");
+        TEST_ASSERT(r2.status == ToolExecutionStatus::CONFIRMATION_REQUIRED, "Req 2 ok");
+        TEST_ASSERT(r3.status == ToolExecutionStatus::CONFIRMATION_REQUIRED, "Req 3 ok");
+
+        // 4eme confirmation alors que max = 3 -> BUSY
+        ToolResult r4 = reg.execute("cmd.s");
+        TEST_ASSERT(r4.status == ToolExecutionStatus::BUSY, "File saturee rejetee avec BUSY");
+        TEST_ASSERT(r4.error.indexOf("saturee") != -1 || r4.error.indexOf("Trop de confirmations") != -1, "Message d'erreur saturation");
+    }
+}
+
+// =============================================================================
+// SUITE 140 : VoiceKit v0.6.4.3 — VoiceUxLiveBridge : Cycle TTS, Métadonnées, États & Statuts
+// =============================================================================
+inline void test_v0643_voiceux_livebridge_stabilization_and_edge_cases() {
+    std::cout << "\n[TEST SUITE 140] v0.6.4.3 : VoiceUxLiveBridge (Metadonnees TTS, Deduplication, Refus, STOP & Statuts)" << std::endl;
+
+    VoiceUxLiveBridge bridge;
+    bridge.begin();
+
+    // 1. Sequence 1 & 2 : STT -> REPEAT -> TTS -> READY & Reponse repetee non re-enregistree
+    {
+        bridge.clearMemory();
+        bridge.seedTestReplies();
+        TEST_ASSERT(bridge.getReplyMemory().getCount() == 2, "2 reponses pre-chargees");
+        String initialR0 = bridge.getReplyMemory().getLastReply();
+
+        TEST_ASSERT(bridge.onListeningStarted(), "Demarrage ecoute");
+        bridge.onListeningFinished();
+
+        bool ok = bridge.feedTranscription("Répète", true);
+        TEST_ASSERT(ok, "Transcription REPEAT dispatchee");
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::ACTION_PENDING, "ACTION_PENDING");
+
+        VoiceUxBridgeAction act = bridge.consumePendingAction();
+        TEST_ASSERT(act.type == VoiceUxBridgeActionType::TTS_SPEAK, "Type TTS_SPEAK");
+        TEST_ASSERT(act.isRecall == true, "Action marquee isRecall");
+        TEST_ASSERT(act.text == initialR0, "Texte conforme");
+
+        // Verification des metadonnees actives dans le pont
+        TEST_ASSERT(bridge.getActiveAction().isRecall == true, "getActiveAction().isRecall preserve");
+
+        bridge.notifySpeechStarted(act.text);
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::SPEAKING, "SPEAKING");
+        TEST_ASSERT(bridge.isCurrentSpeechRecall() == true, "isCurrentSpeechRecall preserve pendant la restitution");
+        TEST_ASSERT(bridge.getCurrentSpokenText() == initialR0, "getCurrentSpokenText preserve");
+
+        bridge.notifySpeechFinished(true);
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "Retour a READY");
+
+        // GARANTIE P1 : La memoire conversationnelle N'A PAS ete polluee par la repetition !
+        TEST_ASSERT(bridge.getReplyMemory().getCount() == 2, "Compte ReplyMemory inchange (2)");
+        TEST_ASSERT(bridge.getReplyMemory().getLastReply() == initialR0, "Derniere reponse inchangee");
+    }
+
+    // 2. Sequence 3 : Feedback systeme sans pollution de l'historique
+    {
+        bridge.clearMemory();
+        TEST_ASSERT(bridge.getReplyMemory().isEmpty(), "Memoire vide");
+
+        bridge.feedSimulatedText("Répète");
+        VoiceUxBridgeAction act = bridge.consumePendingAction();
+        TEST_ASSERT(act.isFeedback == true, "Action marquee isFeedback");
+        TEST_ASSERT(act.text == "Aucune réponse à répéter.", "Message de feedback");
+
+        bridge.notifySpeechStarted(act.text);
+        TEST_ASSERT(bridge.isCurrentSpeechFeedback() == true, "isCurrentSpeechFeedback actif");
+
+        bridge.notifySpeechFinished(true);
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "READY apres feedback");
+        TEST_ASSERT(bridge.getReplyMemory().isEmpty(), "Memoire toujours vide apres feedback systeme");
+    }
+
+    // 3. Sequence 4 : STOP a chaque etape sans blocage
+    {
+        // STOP pendant LISTENING
+        bridge.onListeningStarted();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::LISTENING, "LISTENING");
+        bridge.triggerPriorityStop();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "READY apres STOP en LISTENING");
+        TEST_ASSERT(bridge.canStartListening(), "Peut ecouter");
+
+        // STOP pendant TRANSCRIBING
+        bridge.onListeningStarted();
+        bridge.onListeningFinished();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::TRANSCRIBING, "TRANSCRIBING");
+        bridge.triggerPriorityStop();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "READY apres STOP en TRANSCRIBING");
+        TEST_ASSERT(bridge.canStartListening(), "Peut ecouter");
+
+        // STOP pendant ACTION_PENDING
+        bridge.feedSimulatedText("Quelle heure est-il ?");
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::ACTION_PENDING, "ACTION_PENDING");
+        bridge.triggerPriorityStop();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "READY apres STOP en ACTION_PENDING");
+        TEST_ASSERT(!bridge.hasPendingAction(), "Action annulee");
+    }
+
+    // 4. Sequence 5 & 10 : STT -> Erreur reseau -> Recuperation & Nouvelle ecoute
+    {
+        bridge.onListeningStarted();
+        bridge.notifyError("Connexion WebSocket terminee inattendue (1006)");
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::ERROR, "ERROR");
+        TEST_ASSERT(!bridge.canStartListening(), "Ecoute interdite en ERROR");
+
+        bridge.recoverFromError();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "READY apres recuperation");
+        TEST_ASSERT(bridge.canStartListening(), "Ecoute re-autorisee");
+
+        // Nouvelle ecoute immediate sans residu d'erreur
+        TEST_ASSERT(bridge.onListeningStarted(), "Nouvelle ecoute reussie");
+        bridge.onListeningFinished();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::TRANSCRIBING, "TRANSCRIBING");
+        bridge.triggerPriorityStop();
+    }
+
+    // 5. Sequence 6 : TTS refuse (say() echoue) -> Recuperation deterministe
+    {
+        bridge.feedSimulatedText("Bonjour");
+        VoiceUxBridgeAction act = bridge.consumePendingAction();
+
+        // Simulation refus du moteur vocal
+        bridge.notifySpeechRefused("say() refuse : buffer DAC plein");
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "Retour a READY apres refus TTS");
+        TEST_ASSERT(bridge.canStartListening(), "Microphone accessible apres refus TTS");
+    }
+
+    // 6. Sequence 7 : STOP pendant restitution TTS
+    {
+        bridge.clearMemory();
+        bridge.notifySpeechStarted("Reponse longue qui sera interrompue par l'utilisateur.");
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::SPEAKING, "SPEAKING");
+
+        bridge.triggerPriorityStop();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "READY apres STOP pendant SPEAKING");
+        TEST_ASSERT(bridge.getReplyMemory().getLastReply() != "Reponse longue qui sera interrompue par l'utilisateur.", "Interrompue non memorisee");
+        TEST_ASSERT(bridge.canStartListening(), "Micro disponible");
+    }
+
+    // 7. Sequence 8 : Deux transcriptions finales identiques pour un meme tour
+    {
+        bridge.onListeningStarted();
+        uint32_t tid = bridge.getActiveTurnId();
+        bridge.onListeningFinished();
+
+        TEST_ASSERT(bridge.feedTranscription("Répète", true, tid), "Premiere transcription acceptee");
+        TEST_ASSERT(!bridge.feedTranscription("Répète", true, tid), "Deuxieme transcription finale dupliquee rejetee");
+        bridge.consumePendingAction();
+    }
+
+    // 8. Sequence 9 : Ancienne transcription recue apres annulation
+    {
+        bridge.onListeningStarted();
+        uint32_t tCancelled = bridge.getActiveTurnId();
+        bridge.triggerPriorityStop();
+
+        // Transcription arrivant avec l'ancien turnId annule
+        TEST_ASSERT(!bridge.feedTranscription("Répète", true, tCancelled), "Transcription tardive de tour annule rejetee");
+    }
+
+    // 9. Sequence 11 : Suivi fin des statuts de l'action
+    {
+        std::vector<VoiceUxActionStatus> statuses;
+        bridge.onActionStatus([&](const VoiceUxBridgeAction&, VoiceUxActionStatus st) {
+            statuses.push_back(st);
+        });
+
+        bridge.feedSimulatedText("Répète");
+        TEST_ASSERT(!statuses.empty() && statuses.back() == VoiceUxActionStatus::CREATED, "Status CREATED");
+
+        VoiceUxBridgeAction act = bridge.consumePendingAction();
+        TEST_ASSERT(statuses.back() == VoiceUxActionStatus::DISPATCHED, "Status DISPATCHED");
+
+        bridge.notifySpeechStarted(act.text);
+        TEST_ASSERT(statuses.back() == VoiceUxActionStatus::ACCEPTED, "Status ACCEPTED");
+
+        bridge.notifySpeechFinished(true);
+        TEST_ASSERT(statuses.back() == VoiceUxActionStatus::COMPLETED, "Status COMPLETED");
+    }
+}
+
 inline void run_all_voiceux_tests() {
     test_v0641_textgate_validation();
     test_v0641_intent_router_recognition_and_false_positives();
@@ -630,5 +1001,7 @@ inline void run_all_voiceux_tests() {
     test_v0642_livebridge_pause_resume();
     test_v0642_livebridge_concurrency_and_turn_safety();
     test_v0642_livebridge_state_machine_tts_cycle_and_resilience();
+    test_v0643_tool_registry_security_and_stabilization();
+    test_v0643_voiceux_livebridge_stabilization_and_edge_cases();
 }
 

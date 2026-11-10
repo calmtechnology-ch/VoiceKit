@@ -31,6 +31,7 @@
 class ToolRegistry {
 public:
     static constexpr size_t DEFAULT_MAX_CAPACITY = 16;
+    static constexpr size_t DEFAULT_MAX_PENDING_CONFIRMATIONS = 8;
     static constexpr uint32_t DEFAULT_CONFIRMATION_TIMEOUT_MS = 30000;
 
     using AuthorizationChecker = std::function<bool(const ToolDefinition& def, const ToolArgs& args)>;
@@ -155,6 +156,14 @@ public:
         return _confirmationTimeoutMs;
     }
 
+    size_t getMaxPendingConfirmations() const {
+        return _maxPendingConfirmations;
+    }
+
+    void setMaxPendingConfirmations(size_t maxPending) {
+        _maxPendingConfirmations = maxPending;
+    }
+
     size_t pendingConfirmationCount() const {
         return _pendingConfirmations.size();
     }
@@ -190,6 +199,7 @@ private:
     void purgeExpiredConfirmations();
 
     size_t _maxCapacity;
+    size_t _maxPendingConfirmations;
     uint32_t _confirmationTimeoutMs;
     std::vector<ToolDefinition> _tools;
     std::vector<PendingConfirmation> _pendingConfirmations;

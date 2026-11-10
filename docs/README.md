@@ -14,6 +14,7 @@ Classés de la version la plus récente à la plus ancienne. L'historique détai
 
 | Version | Rapport | Thème |
 |---|---|---|
+| v0.6.4.3 | [RAPPORT_CORRECTIVE_v0.6.4.3.md](rapports/RAPPORT_CORRECTIVE_v0.6.4.3.md) | Correctifs ToolRegistry, VoiceUxLiveBridge, PTT & Stabilisation |
 | v0.6.4.2 | [RAPPORT_v0.6.4.2.md](rapports/RAPPORT_v0.6.4.2.md) | Voice UX Live Bridge (pont STT → UX → TTS) |
 | v0.6.4.1 | [RAPPORT_v0.6.4.1.md](rapports/RAPPORT_v0.6.4.1.md) | Voice UX Foundation (TextGate, IntentRouter, ReplyMemory) |
 | v0.6.4 | [RAPPORT_v0.6.4.md](rapports/RAPPORT_v0.6.4.md) | Registre Local d'Outils (ToolRegistry) |

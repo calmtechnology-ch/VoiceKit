@@ -1,10 +1,10 @@
 /**
  * @file main.cpp
- * @brief Projet de validation externe pour VoiceKit v0.2.1
+ * @brief Projet de validation externe pour VoiceKit v0.6.4.3
  * 
- * Ce projet valide l'installation de la bibliotheque VoiceKit
- * directement depuis GitHub via PlatformIO (lib_deps),
- * sans aucune copie locale ni chemin d'inclusion manuel (-I).
+ * Ce projet valide l'installation et l'intégration de la bibliothèque VoiceKit
+ * directement en tant que consommateur externe via PlatformIO (lib_deps),
+ * sans aucune copie locale manuelle ni chemin d'inclusion forcé (-I).
  */
 
 #include <Arduino.h>
@@ -22,7 +22,7 @@ void setup() {
     delay(500);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.2.1 — External Consumer Test Project");
+    Serial.println("  VoiceKit v0.6.4.3 — External Consumer Test Project    ");
     Serial.println("========================================================");
 
     VoiceKitConfig config;

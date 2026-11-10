@@ -108,11 +108,32 @@ static MockSerial Serial;
 
 inline uint32_t esp_get_free_heap_size() { return 150000; }
 
-#if defined(_MSC_VER)
+#if defined(_WIN32)
+#ifndef localtime_r
+inline struct tm* localtime_r(const time_t* t, struct tm* tm_out) {
+#if defined(__MINGW32__) || defined(_MSC_VER)
+    if (localtime_s(tm_out, t) == 0) return tm_out;
+    return nullptr;
+#else
+    struct tm* p = localtime(t);
+    if (p) { *tm_out = *p; return tm_out; }
+    return nullptr;
+#endif
+}
+#endif
+
+#ifndef gmtime_r
 inline struct tm* gmtime_r(const time_t* t, struct tm* tm_out) {
+#if defined(__MINGW32__) || defined(_MSC_VER)
     if (gmtime_s(tm_out, t) == 0) return tm_out;
     return nullptr;
+#else
+    struct tm* p = gmtime(t);
+    if (p) { *tm_out = *p; return tm_out; }
+    return nullptr;
+#endif
 }
+#endif
 #endif
 
 class MockESP {

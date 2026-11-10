@@ -263,6 +263,20 @@ public:
     void clear() { _entries.clear(); }
     const std::vector<Entry>& entries() const { return _entries; }
 
+    bool operator==(const ToolArgs& other) const {
+        if (_entries.size() != other._entries.size()) return false;
+        for (const auto& e : _entries) {
+            if (!other.has(e.key) || other.getString(e.key) != e.value) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool operator!=(const ToolArgs& other) const {
+        return !(*this == other);
+    }
+
     std::vector<String> keys() const {
         std::vector<String> res;
         res.reserve(_entries.size());

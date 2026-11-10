@@ -9,13 +9,15 @@ VoiceUxLiveBridge::VoiceUxLiveBridge()
       _finalReceivedForTurn(false),
       _turnCancelled(false),
       _currentSpeechIsRecall(false),
-      _currentSpeechIsFeedback(false) {
+      _currentSpeechIsFeedback(false),
+      _currentSpeechTurnId(0) {
 }
 
 bool VoiceUxLiveBridge::begin() {
     _state = VoiceUxBridgeState::READY;
     _stateBeforePause = VoiceUxBridgeState::READY;
     _hasPendingAction = false;
+    _activeAction = VoiceUxBridgeAction();
     _activeTurnId = 1;
     _turnInProgress = false;
     _finalReceivedForTurn = false;
@@ -25,6 +27,7 @@ bool VoiceUxLiveBridge::begin() {
     _currentSpokenText = "";
     _currentSpeechIsRecall = false;
     _currentSpeechIsFeedback = false;
+    _currentSpeechTurnId = 0;
     _lastError = "";
 
     resetBridgeStats();
@@ -264,6 +267,9 @@ bool VoiceUxLiveBridge::processInternal(const String& text, bool isSimulated, ui
         if (_actionPendingCb) {
             _actionPendingCb(act);
         }
+        if (_actionStatusCb) {
+            _actionStatusCb(act, VoiceUxActionStatus::CREATED);
+        }
         return true;
     }
 
@@ -284,20 +290,36 @@ VoiceUxBridgeAction VoiceUxLiveBridge::consumePendingAction() {
         return VoiceUxBridgeAction();
     }
     VoiceUxBridgeAction act = _pendingAction;
+    _activeAction = act;
     _hasPendingAction = false;
     _pendingAction = VoiceUxBridgeAction();
+
     if (_state == VoiceUxBridgeState::ACTION_PENDING) {
         setState((_stateBeforePause == VoiceUxBridgeState::PAUSED) ? VoiceUxBridgeState::PAUSED : VoiceUxBridgeState::READY);
     }
-    if (_actionExecutedCb) {
-        _actionExecutedCb(act);
+
+    if (_actionStatusCb) {
+        _actionStatusCb(act, VoiceUxActionStatus::DISPATCHED);
     }
+    // NOTA : _actionExecutedCb n'est intentionnellement PLUS appelé ici.
+    // L'exécution n'est déclarée terminée qu'après achèvement effectif (notifySpeechFinished ou notifyActionCompleted).
     return act;
 }
 
 void VoiceUxLiveBridge::cancelPendingAction() {
-    _hasPendingAction = false;
-    _pendingAction = VoiceUxBridgeAction();
+    if (_hasPendingAction) {
+        if (_actionStatusCb) {
+            _actionStatusCb(_pendingAction, VoiceUxActionStatus::CANCELLED);
+        }
+        _hasPendingAction = false;
+        _pendingAction = VoiceUxBridgeAction();
+    }
+    if (_activeAction.type != VoiceUxBridgeActionType::NONE && _state != VoiceUxBridgeState::SPEAKING) {
+        if (_actionStatusCb) {
+            _actionStatusCb(_activeAction, VoiceUxActionStatus::CANCELLED);
+        }
+        _activeAction = VoiceUxBridgeAction();
+    }
     if (_state == VoiceUxBridgeState::ACTION_PENDING) {
         setState((_stateBeforePause == VoiceUxBridgeState::PAUSED) ? VoiceUxBridgeState::PAUSED : VoiceUxBridgeState::READY);
     }
@@ -306,13 +328,16 @@ void VoiceUxLiveBridge::cancelPendingAction() {
 void VoiceUxLiveBridge::triggerPriorityStop() {
     _stats.stopRequestsCount++;
     _turnCancelled = true;
+    _turnInProgress = false;
     _activeTurnId++;
     cancelPendingAction();
 
     if (_state == VoiceUxBridgeState::SPEAKING) {
         notifySpeechFinished(false);
     } else {
-        setState((_state == VoiceUxBridgeState::PAUSED) ? VoiceUxBridgeState::PAUSED : VoiceUxBridgeState::READY);
+        setState((_stateBeforePause == VoiceUxBridgeState::PAUSED || _state == VoiceUxBridgeState::PAUSED)
+                     ? VoiceUxBridgeState::PAUSED
+                     : VoiceUxBridgeState::READY);
     }
     emitDiagnostic("[BRIDGE] STOP prioritaire execute");
 }
@@ -322,10 +347,14 @@ void VoiceUxLiveBridge::notifySpeechStarted(const String& spokenText) {
         emitDiagnostic("[BRIDGE] Avertissement : debut restitution alors que micro actif !");
     }
     _stats.ttsDispatchedCount++;
-    _currentSpokenText = spokenText;
-    _currentSpeechIsRecall = _pendingAction.isRecall;
-    _currentSpeechIsFeedback = _pendingAction.isFeedback;
+    _currentSpokenText = (!spokenText.isEmpty()) ? spokenText : _activeAction.text;
+    _currentSpeechIsRecall = _activeAction.isRecall;
+    _currentSpeechIsFeedback = _activeAction.isFeedback;
+    _currentSpeechTurnId = _activeAction.turnId;
     setState(VoiceUxBridgeState::SPEAKING);
+    if (_actionStatusCb && _activeAction.type != VoiceUxBridgeActionType::NONE) {
+        _actionStatusCb(_activeAction, VoiceUxActionStatus::ACCEPTED);
+    }
 }
 
 void VoiceUxLiveBridge::notifySpeechFinished(bool completed) {
@@ -336,15 +365,25 @@ void VoiceUxLiveBridge::notifySpeechFinished(bool completed) {
             if (!_currentSpeechIsRecall && !_currentSpeechIsFeedback && !_currentSpokenText.isEmpty()) {
                 _controller.rememberReply(_currentSpokenText);
             }
+            if (_actionExecutedCb && _activeAction.type != VoiceUxBridgeActionType::NONE) {
+                _actionExecutedCb(_activeAction);
+            }
+            if (_actionStatusCb && _activeAction.type != VoiceUxBridgeActionType::NONE) {
+                _actionStatusCb(_activeAction, VoiceUxActionStatus::COMPLETED);
+            }
         } else {
             _stats.ttsCancelledCount++;
-            // Règle 7 : Ne pas mémoriser les réponses annulées avant leur fin
+            if (_actionStatusCb && _activeAction.type != VoiceUxBridgeActionType::NONE) {
+                _actionStatusCb(_activeAction, VoiceUxActionStatus::CANCELLED);
+            }
         }
     }
 
+    _activeAction = VoiceUxBridgeAction();
     _currentSpokenText = "";
     _currentSpeechIsRecall = false;
     _currentSpeechIsFeedback = false;
+    _currentSpeechTurnId = 0;
 
     if (_stateBeforePause == VoiceUxBridgeState::PAUSED) {
         setState(VoiceUxBridgeState::PAUSED);
@@ -353,10 +392,55 @@ void VoiceUxLiveBridge::notifySpeechFinished(bool completed) {
     }
 }
 
+void VoiceUxLiveBridge::notifySpeechRefused(const String& reason) {
+    emitDiagnostic("[BRIDGE] Restitution TTS refusee : " + reason);
+    if (_actionStatusCb && _activeAction.type != VoiceUxBridgeActionType::NONE) {
+        _actionStatusCb(_activeAction, VoiceUxActionStatus::REJECTED);
+    }
+    _activeAction = VoiceUxBridgeAction();
+    _currentSpokenText = "";
+    _currentSpeechIsRecall = false;
+    _currentSpeechIsFeedback = false;
+    _currentSpeechTurnId = 0;
+
+    if (_stateBeforePause == VoiceUxBridgeState::PAUSED) {
+        setState(VoiceUxBridgeState::PAUSED);
+    } else {
+        setState(VoiceUxBridgeState::READY);
+    }
+}
+
+void VoiceUxLiveBridge::notifyActionCompleted() {
+    if (_activeAction.type != VoiceUxBridgeActionType::NONE) {
+        if (_actionExecutedCb) {
+            _actionExecutedCb(_activeAction);
+        }
+        if (_actionStatusCb) {
+            _actionStatusCb(_activeAction, VoiceUxActionStatus::COMPLETED);
+        }
+        _activeAction = VoiceUxBridgeAction();
+    }
+    if (_state == VoiceUxBridgeState::ACTION_PENDING) {
+        setState((_stateBeforePause == VoiceUxBridgeState::PAUSED) ? VoiceUxBridgeState::PAUSED : VoiceUxBridgeState::READY);
+    }
+}
+
+void VoiceUxLiveBridge::notifyActionRejected(const String& reason) {
+    emitDiagnostic("[BRIDGE] Action refusee : " + reason);
+    if (_actionStatusCb && _activeAction.type != VoiceUxBridgeActionType::NONE) {
+        _actionStatusCb(_activeAction, VoiceUxActionStatus::REJECTED);
+    }
+    _activeAction = VoiceUxBridgeAction();
+    if (_state == VoiceUxBridgeState::ACTION_PENDING) {
+        setState((_stateBeforePause == VoiceUxBridgeState::PAUSED) ? VoiceUxBridgeState::PAUSED : VoiceUxBridgeState::READY);
+    }
+}
+
 void VoiceUxLiveBridge::notifyError(const String& errorMsg) {
     _stats.errorsCount++;
     _lastError = errorMsg;
     _turnCancelled = true;
+    _turnInProgress = false;
     _activeTurnId++;
     cancelPendingAction();
     setState(VoiceUxBridgeState::ERROR);
@@ -366,7 +450,9 @@ void VoiceUxLiveBridge::notifyError(const String& errorMsg) {
 void VoiceUxLiveBridge::recoverFromError() {
     _lastError = "";
     _hasPendingAction = false;
+    _activeAction = VoiceUxBridgeAction();
     _turnCancelled = false;
+    _turnInProgress = false;
     setState(VoiceUxBridgeState::READY);
     emitDiagnostic("[BRIDGE] Recuperation d'erreur effectuee -> READY");
 }
@@ -404,6 +490,26 @@ VoiceUxBridgeState VoiceUxLiveBridge::getState() const {
 
 uint32_t VoiceUxLiveBridge::getActiveTurnId() const {
     return _activeTurnId;
+}
+
+const VoiceUxBridgeAction& VoiceUxLiveBridge::getActiveAction() const {
+    return _activeAction;
+}
+
+bool VoiceUxLiveBridge::isCurrentSpeechRecall() const {
+    return _currentSpeechIsRecall;
+}
+
+bool VoiceUxLiveBridge::isCurrentSpeechFeedback() const {
+    return _currentSpeechIsFeedback;
+}
+
+uint32_t VoiceUxLiveBridge::getCurrentSpeechTurnId() const {
+    return _currentSpeechTurnId;
+}
+
+const String& VoiceUxLiveBridge::getCurrentSpokenText() const {
+    return _currentSpokenText;
 }
 
 const String& VoiceUxLiveBridge::getInterimText() const {
@@ -460,6 +566,10 @@ void VoiceUxLiveBridge::onActionPending(ActionPendingCallback cb) {
 
 void VoiceUxLiveBridge::onActionExecuted(ActionExecutedCallback cb) {
     _actionExecutedCb = cb;
+}
+
+void VoiceUxLiveBridge::onActionStatus(ActionStatusCallback cb) {
+    _actionStatusCb = cb;
 }
 
 void VoiceUxLiveBridge::onDiagnostic(DiagnosticCallback cb) {

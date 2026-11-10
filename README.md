@@ -1,4 +1,4 @@
-# VoiceKit v0.6.4.2 — Voice UX Live Bridge, Voice UX Foundation, Local Tool Registry & Architecture Multi-Fournisseurs (Gemini Live & OpenAI Realtime)
+# VoiceKit v0.6.4.3 — Corrective & Stabilisation : Sécurité ToolRegistry, Fiabilisation VoiceUxLiveBridge & PTT Déterministe
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -8,6 +8,26 @@
 Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)**, de **conversation vocale bidirectionnelle native (Mode B)**, de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** et de **registre local d'outils (Local Tool Registry)** pour **M5Stack CoreS3** (ESP32-S3).
 
 Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)** supportant à la fois **Google Gemini Live** (moteur par défaut, 100% rétrocompatible) et **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`), construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
+
+La version **v0.6.4.3** est une version corrective et de stabilisation majeure qui fiabilise et sécurise l'ensemble du socle applicatif sans ajouter de dépendance lourde ni réécrire le moteur audio :
+- **Sécurisation P0 du Registre d'Outils (`ToolRegistry`, `ToolExecutor`)** :
+  - **Requête Immuable & Vérification Stricte des Arguments** : Chaque confirmation sensible est liée à une requête conservée et immuable. Toute tentative d'utiliser un jeton de confirmation avec des arguments modifiés ou pour une autre commande est immédiatement rejetée avec `PERMISSION_DENIED`.
+  - **Revalidation Systématique des Autorisations** : Recontrôle la politique d'autorisation (`AuthorizationChecker`) et l'existence de la commande au moment précis de la confirmation.
+  - **Consommation Unique & Protection Anti-Rejeu Étendue** : Le jeton est consommé dès l'engagement de l'exécution et ne peut plus jamais être rejoué, même si l'exécution matérielle de la commande échoue.
+  - **Gestion de la Concurrence (`BUSY`) & File Bornée** : Si l'exécuteur est temporairement occupé, la confirmation retourne `BUSY` sans invalider le jeton, permettant une confirmation ultérieure. La file de confirmations en attente est bornée (`DEFAULT_MAX_PENDING_CONFIRMATIONS = 8`), prévenant tout risque d'épuisement mémoire en RAM.
+  - **Annulation Propre des Tâches Différées** : L'interface `IToolExecutor` expose `cancelDeferred()`, garantissant l'annulation complète des tâches différées lors de `cancelPending()` ou `clear()`, y compris lorsqu'un exécuteur personnalisé est configuré.
+- **Fiabilisation P1 de `VoiceUxLiveBridge` & Cycle de Vie des Restitutions** :
+  - **Conservation Intégrale des Métadonnées TTS** : Les informations `isRecall`, `isFeedback`, `turnId` et le texte associé restent disponibles tout au long de la restitution active.
+  - **Protection de l'Historique Conversationnel** : Une réponse répétée (`REPEAT`) n'est plus enregistrée comme une nouvelle entrée dans `ReplyMemory`. Les réponses système et de feedback ne polluent plus la mémoire, et une restitution interrompue par STOP n'est jamais mémorisée.
+  - **Machine à États Robuste & Absence de Blocage** : Audit et fiabilisation des transitions d'état. Récupération déterministe lors d'un STOP (pendant écoute, transcription, action ou restitution), d'un refus de démarrage TTS (`notifySpeechRefused`), d'une erreur réseau (`recoverFromError`) ou d'une transcription finale tardive/dupliquée.
+  - **Statuts Fins d'Exécution d'Action** : Introduction de `VoiceUxActionStatus` (`CREATED`, `DISPATCHED`, `ACCEPTED`, `COMPLETED`, `REJECTED`, `CANCELLED`) et suppression de l'émission prématurée de succès lors du simple dépilage de l'action.
+- **PTT Déterministe & Source Unique de Vérité (`examples/VoiceUxLiveDemo`)** :
+  - **Source Unique de Vérité des Transitions Microphone** : Les notifications d'écoute du pont (`onListeningStarted`, `onListeningFinished`) sont déclenchées exclusivement par les callbacks confirmés du moteur vocal (`s_voice.onListeningStarted()`, `s_voice.onListeningFinished()`), éliminant tout doublon d'événement issu de l'interface tactile ou série.
+  - **Vérification Systématique des Retours** : Contrôle des valeurs de retour de `startListening()`, `stopListening()` et `say()`. `s_touchListening` ne bascule à `true` qu'après acceptation effective de l'opération par le moteur.
+  - **Protection Contre le Gel en `SPEAKING`** : Un refus de `say()` déclenche un retour immédiat et propre à l'état `READY` via `notifySpeechRefused()`.
+- **Reproductibilité & Maintenance des Tests** :
+  - Détection dynamique et portable du compilateur C++ (`tests/run_tests.bat`) sans aucun chemin absolu vers le profil d'un développeur.
+  - Projet de validation `tests/external-consumer` actualisé pour référencer la version courante de VoiceKit via symlink PlatformIO.
 
 La version **v0.6.4.2** introduit le pont applicatif **Voice UX Live Bridge (`VoiceUxLiveBridge`)**, reliant pour la première fois la reconnaissance vocale STT du microphone du M5Stack CoreS3, l'arbitrage d'intentions locales `VoiceUxController`, la mémoire de réponses `ReplyMemory` et la restitution sonore TTS haute fluidité :
 - **Pont Applicatif `VoiceUxLiveBridge` (`src/core/voiceux/VoiceUxLiveBridge.h/.cpp`)** :

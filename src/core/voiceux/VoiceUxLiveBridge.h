@@ -70,6 +70,35 @@ inline const char* voiceUxBridgeActionTypeToString(VoiceUxBridgeActionType actio
 }
 
 /**
+ * @enum VoiceUxActionStatus
+ * @brief Statut du cycle de vie d'une action dans le pont vocal.
+ *        VoiceKit v0.6.4.3
+ */
+enum class VoiceUxActionStatus : uint8_t {
+    CREATED = 0,     ///< Action créée et insérée en file d'attente
+    DISPATCHED,      ///< Action extraite de la file (prise en charge par l'application)
+    ACCEPTED,        ///< Exécution acceptée par le moteur (ex: say() accepté)
+    COMPLETED,       ///< Exécution terminée avec succès (ex: TTS fini)
+    REJECTED,        ///< Exécution refusée ou échouée
+    CANCELLED        ///< Exécution annulée (STOP ou abandon)
+};
+
+/**
+ * @brief Convertit le statut de l'action en chaîne lisible.
+ */
+inline const char* voiceUxActionStatusToString(VoiceUxActionStatus status) {
+    switch (status) {
+        case VoiceUxActionStatus::CREATED:    return "CREATED";
+        case VoiceUxActionStatus::DISPATCHED: return "DISPATCHED";
+        case VoiceUxActionStatus::ACCEPTED:   return "ACCEPTED";
+        case VoiceUxActionStatus::COMPLETED:  return "COMPLETED";
+        case VoiceUxActionStatus::REJECTED:   return "REJECTED";
+        case VoiceUxActionStatus::CANCELLED:  return "CANCELLED";
+        default:                              return "UNKNOWN";
+    }
+}
+
+/**
  * @struct VoiceUxBridgeAction
  * @brief Requête d'action structurée émise par VoiceUxLiveBridge.
  */
@@ -124,6 +153,7 @@ public:
     using StateChangeCallback = std::function<void(VoiceUxBridgeState oldState, VoiceUxBridgeState newState)>;
     using ActionPendingCallback = std::function<void(const VoiceUxBridgeAction& action)>;
     using ActionExecutedCallback = std::function<void(const VoiceUxBridgeAction& action)>;
+    using ActionStatusCallback = std::function<void(const VoiceUxBridgeAction& action, VoiceUxActionStatus status)>;
     using DiagnosticCallback = std::function<void(const String& message)>;
 
     VoiceUxLiveBridge();
@@ -219,6 +249,24 @@ public:
     void notifySpeechFinished(bool completed = true);
 
     /**
+     * @brief Notifie le refus ou l'échec de démarrage de la restitution vocale TTS (ex: say() a échoué).
+     *        Permet un retour déterministe à l'état READY (ou PAUSED) sans bloquer le pont.
+     * @param reason Motif du refus.
+     */
+    void notifySpeechRefused(const String& reason = "");
+
+    /**
+     * @brief Notifie l'achèvement d'une action locale non-TTS (STOP, PAUSE, RESUME, FORWARD_AI).
+     */
+    void notifyActionCompleted();
+
+    /**
+     * @brief Notifie le refus ou l'échec d'une action.
+     * @param reason Motif du refus.
+     */
+    void notifyActionRejected(const String& reason = "");
+
+    /**
      * @brief Notifie une erreur technique (réseau, audio, timeout).
      * @param errorMsg Message descriptif.
      */
@@ -258,6 +306,31 @@ public:
      * @brief Récupère l'identifiant du tour actif courant.
      */
     uint32_t getActiveTurnId() const;
+
+    /**
+     * @brief Récupère l'action actuellement prise en charge / active.
+     */
+    const VoiceUxBridgeAction& getActiveAction() const;
+
+    /**
+     * @brief Indique si la restitution vocale active est un rappel mémoire (REPEAT/PREVIOUS).
+     */
+    bool isCurrentSpeechRecall() const;
+
+    /**
+     * @brief Indique si la restitution vocale active est un message système (ex: mémoire vide).
+     */
+    bool isCurrentSpeechFeedback() const;
+
+    /**
+     * @brief Identifiant de tour associé à la restitution active.
+     */
+    uint32_t getCurrentSpeechTurnId() const;
+
+    /**
+     * @brief Texte associé à la restitution active.
+     */
+    const String& getCurrentSpokenText() const;
 
     /**
      * @brief Récupère le dernier texte partiel (intérim).
@@ -312,6 +385,7 @@ public:
     void onStateChanged(StateChangeCallback cb);
     void onActionPending(ActionPendingCallback cb);
     void onActionExecuted(ActionExecutedCallback cb);
+    void onActionStatus(ActionStatusCallback cb);
     void onDiagnostic(DiagnosticCallback cb);
 
 private:
@@ -323,6 +397,7 @@ private:
     VoiceUxBridgeState _stateBeforePause;
     VoiceUxController _controller;
     VoiceUxBridgeAction _pendingAction;
+    VoiceUxBridgeAction _activeAction;
     bool _hasPendingAction;
 
     uint32_t _activeTurnId;
@@ -335,6 +410,7 @@ private:
     String _currentSpokenText;
     bool _currentSpeechIsRecall;
     bool _currentSpeechIsFeedback;
+    uint32_t _currentSpeechTurnId;
     String _lastError;
 
     VoiceUxBridgeStats _stats;
@@ -342,5 +418,6 @@ private:
     StateChangeCallback _stateCb;
     ActionPendingCallback _actionPendingCb;
     ActionExecutedCallback _actionExecutedCb;
+    ActionStatusCallback _actionStatusCb;
     DiagnosticCallback _diagCb;
 };

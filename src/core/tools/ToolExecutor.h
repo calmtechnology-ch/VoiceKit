@@ -33,12 +33,24 @@ public:
      * @brief Traitement régulier non bloquant pour les tâches différées.
      */
     virtual void update() = 0;
+
+    /**
+     * @brief Annule toutes les tâches différées en attente sur cet exécuteur.
+     */
+    virtual void cancelDeferred() {}
 };
 
 /**
  * @class ToolExecutor
  * @brief Implémentation par défaut de IToolExecutor avec protection anti-réentrance,
  * gestion des échecs d'exécution et ordonnancement de tâches différées non bloquantes.
+ * 
+ * NOTE D'ARCHITECTURE (VoiceKit v0.6.4.3 — Option A) :
+ * Les tâches différées enfilées via enqueueDeferred() sont exécutées de façon synchrone
+ * et séquentielle lors des appels périodiques à update() (dans la boucle loop()).
+ * Afin de préserver la réactivité du système audio et éviter tout blocage de la boucle
+ * principale sur ESP32-S3, les handlers différés doivent être courts et coopératifs
+ * (durée recommandée < 10 à 20 ms).
  */
 class ToolExecutor : public IToolExecutor {
 public:
@@ -142,7 +154,7 @@ public:
     /**
      * @brief Annule et vide les tâches différées en attente.
      */
-    void cancelDeferred() {
+    void cancelDeferred() override {
         _deferredQueue.clear();
     }
 

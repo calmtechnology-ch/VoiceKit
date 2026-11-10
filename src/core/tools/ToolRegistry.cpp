@@ -3,6 +3,7 @@
 
 ToolRegistry::ToolRegistry(size_t maxCapacity)
     : _maxCapacity(maxCapacity),
+      _maxPendingConfirmations(DEFAULT_MAX_PENDING_CONFIRMATIONS),
       _confirmationTimeoutMs(DEFAULT_CONFIRMATION_TIMEOUT_MS) {
     _tools.reserve(_maxCapacity);
 }
@@ -72,7 +73,7 @@ bool ToolRegistry::unregisterTool(const String& id) {
 void ToolRegistry::clear() {
     _tools.clear();
     _pendingConfirmations.clear();
-    _defaultExecutor.cancelDeferred();
+    getExecutor().cancelDeferred();
 }
 
 size_t ToolRegistry::getToolCount() const {
@@ -124,6 +125,12 @@ ToolResult ToolRegistry::execute(const String& id,
 
     if (def->securityPolicy == ToolSecurityPolicy::SENSITIVE) {
         if (confirmationToken.isEmpty()) {
+            purgeExpiredConfirmations();
+            if (_pendingConfirmations.size() >= _maxPendingConfirmations) {
+                emitEvent(ToolEventType::TOOL_FAILED, id, reqId, "File de confirmations saturee");
+                return ToolResult::busy("File de confirmations en attente saturee");
+            }
+
             String token = generateConfirmationToken();
             PendingConfirmation pending;
             pending.token = token;
@@ -161,7 +168,37 @@ ToolResult ToolRegistry::execute(const String& id,
                 emitEvent(ToolEventType::TOOL_FAILED, id, reqId, "Jeton associe a un autre outil");
                 return ToolResult::permissionDenied("Jeton de confirmation non associe a cette commande");
             }
+            // Interdire l'utilisation du jeton avec des arguments différents de ceux initialement autorisés
+            if (!args.empty() && !(args == target->args)) {
+                emitEvent(ToolEventType::TOOL_FAILED, id, reqId, "Arguments non conformes a la confirmation");
+                return ToolResult::permissionDenied("Arguments non conformes a ceux autorises lors de la demande de confirmation");
+            }
+
+            // Revalidation des autorisations lors de la confirmation
+            if (_authChecker && !_authChecker(*def, target->args)) {
+                emitEvent(ToolEventType::TOOL_FAILED, id, reqId, "Refus par la politique d'autorisation");
+                return ToolResult::permissionDenied("Action refusee par la politique d'autorisation lors de la confirmation : " + id);
+            }
+
+            IToolExecutor& exec = getExecutor();
+            if (exec.isBusy()) {
+                emitEvent(ToolEventType::TOOL_FAILED, id, reqId, "Executeur occupe");
+                return ToolResult::busy("Executeur occupe : une commande est deja en cours");
+            }
+
+            // Consommation unique du jeton : marquée dès l'engagement de l'exécution
             target->used = true;
+
+            emitEvent(ToolEventType::TOOL_STARTED, id, reqId, "Demarrage de l'execution apres confirmation");
+            ToolResult res = exec.execute(*def, target->args);
+
+            if (res.isSuccess()) {
+                emitEvent(ToolEventType::TOOL_COMPLETED, id, reqId, res.output);
+            } else {
+                emitEvent(ToolEventType::TOOL_FAILED, id, reqId, res.error);
+            }
+
+            return res;
         }
     }
 
@@ -207,12 +244,16 @@ ToolResult ToolRegistry::confirm(const String& confirmationToken) {
         return ToolResult::permissionDenied("Jeton de confirmation expire");
     }
 
-    target->used = true;
-
     const ToolDefinition* def = findTool(target->toolId);
     if (!def) {
         emitEvent(ToolEventType::TOOL_FAILED, target->toolId, target->requestId, "Commande introuvable");
         return ToolResult::notFound("Commande introuvable lors de la confirmation : " + target->toolId);
+    }
+
+    // Revalidation des autorisations lors de la confirmation
+    if (_authChecker && !_authChecker(*def, target->args)) {
+        emitEvent(ToolEventType::TOOL_FAILED, target->toolId, target->requestId, "Refus par la politique d'autorisation");
+        return ToolResult::permissionDenied("Action refusee par la politique d'autorisation lors de la confirmation : " + target->toolId);
     }
 
     IToolExecutor& exec = getExecutor();
@@ -220,6 +261,9 @@ ToolResult ToolRegistry::confirm(const String& confirmationToken) {
         emitEvent(ToolEventType::TOOL_FAILED, target->toolId, target->requestId, "Executeur occupe");
         return ToolResult::busy("Executeur occupe lors de la confirmation");
     }
+
+    // Consommation unique du jeton : marquée dès l'engagement de l'exécution
+    target->used = true;
 
     emitEvent(ToolEventType::TOOL_STARTED, target->toolId, target->requestId, "Demarrage apres confirmation");
     ToolResult res = exec.execute(*def, target->args);
@@ -235,7 +279,7 @@ ToolResult ToolRegistry::confirm(const String& confirmationToken) {
 
 void ToolRegistry::cancelPending() {
     _pendingConfirmations.clear();
-    _defaultExecutor.cancelDeferred();
+    getExecutor().cancelDeferred();
 }
 
 bool ToolRegistry::isBusy() const {

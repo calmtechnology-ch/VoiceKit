@@ -28,7 +28,67 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
-## [0.6.4.2] - 2026-11-07 (Voice UX Live Bridge — Pont STT/TTS Réel, Machine à États & CoreS3 Demo)
+## [0.6.4.3] - 2026-11-10 (Corrective & Stabilisation — Sécurité ToolRegistry, VoiceUxLiveBridge & PTT Déterministe)
+
+### 1. Sécurisation P0 du Registre d'Outils (`ToolRegistry`, `ToolExecutor`)
+- **Requête Immuable & Protection Contre l'Altération des Paramètres** :
+  - Chaque demande de confirmation sensible conserve une copie immuable de l'identifiant et des arguments d'origine (`PendingConfirmation::args`).
+  - L'utilisation d'un jeton avec des arguments différents est strictement interdite dans `execute(id, args, token)` et retourne immédiatement `PERMISSION_DENIED`.
+  - L'exécution confirmée via `confirm(token)` ou `execute(id, args, token)` utilise prioritairement la requête conservée et validée lors de la demande.
+- **Revalidation Systématique des Autorisations & Cycle de Vie** :
+  - `confirm()` revalide systématiquement l'existence de l'outil (`findTool`) et réapplique la politique d'autorisation (`AuthorizationChecker`) avec les arguments conservés.
+  - Rejet déterministe avec `NOT_FOUND` si la commande a été désenregistrée avant sa confirmation.
+  - Rejet avec `PERMISSION_DENIED` si les autorisations ont été révoquées entre la demande et la confirmation.
+- **Consommation Unique et Protection Anti-Rejeu Étendue** :
+  - Le jeton est marqué comme consommé (`used = true`) dès que l'exécuteur accepte la commande.
+  - Garantit qu'une confirmation ne déclenche jamais deux exécutions, y compris en cas d'erreur de la fonction d'exécution (`EXECUTION_FAILED`).
+- **Gestion Déterministe de la Concurrence (`BUSY`) & File Bornée** :
+  - Si l'exécuteur est occupé (`isBusy()`), `confirm()` et `execute()` retournent `BUSY` sans consommer le jeton, permettant une confirmation ultérieure dès libération.
+  - Limitation de la file de confirmations en attente via `_maxPendingConfirmations` (défaut : 8) pour empêcher l'épuisement de la RAM sur ESP32-S3.
+  - Nettoyage des confirmations expirées lors des nouvelles demandes.
+- **Annulation des Tâches Différées sur Exécuteur Personnalisé** :
+  - Ajout de `virtual void cancelDeferred() {}` dans `IToolExecutor` et implémentation dans `ToolExecutor`.
+  - `ToolRegistry::cancelPending()` et `ToolRegistry::clear()` délèguent l'annulation à l'exécuteur actif via `getExecutor().cancelDeferred()`.
+  - Documentation claire de l'exécution différée synchrone dans `update()` (Option A) imposant des handlers courts (< 10-20 ms).
+
+### 2. Fiabilisation P1 de `VoiceUxLiveBridge`
+- **Cycle de Vie des Métadonnées TTS (Défaut A)** :
+  - Conservation des métadonnées actives dans `_activeAction` (`isRecall`, `isFeedback`, `turnId`, texte) lors de `consumePendingAction()`.
+  - `notifySpeechStarted()` consulte ces attributs préservés et initialise fidèlement `_currentSpeechIsRecall` et `_currentSpeechIsFeedback`.
+  - Une réponse répétée (`REPEAT`) n'est plus ré-enregistrée comme une nouvelle réponse dans `ReplyMemory`.
+  - Les réponses système et de feedback (« Aucune réponse à répéter. », « Aucune réponse précédente disponible. ») ne polluent plus la mémoire conversationnelle.
+  - Une restitution vocale interrompue par STOP n'est jamais enregistrée comme terminée.
+- **Machine à États Robuste (Défaut B)** :
+  - Audit et sécurisation des transitions `READY → LISTENING → TRANSCRIBING → ACTION_PENDING → SPEAKING → READY`.
+  - Transitions fiabilisées lors d'un STOP pendant LISTENING, TRANSCRIBING, ACTION_PENDING ou SPEAKING.
+  - Gestion déterministe d'un refus de démarrage TTS via `notifySpeechRefused(reason)` rétablissant immédiatement l'état `READY`.
+  - Récupération déterministe après erreur réseau via `recoverFromError()`.
+  - Dédoublonnage strict des transcriptions finales et rejet des transcriptions d'un tour annulé ou antérieur.
+- **Statuts Fins d'Exécution d'Action (Défaut C)** :
+  - Distinction explicite des étapes via `VoiceUxActionStatus` : `CREATED`, `DISPATCHED`, `ACCEPTED`, `COMPLETED`, `REJECTED`, `CANCELLED`.
+  - `_actionExecutedCb` n'est plus émis prématurément lors du dépilage de l'action, mais uniquement lors de son achèvement effectif (`notifySpeechFinished(true)` ou `notifyActionCompleted()`).
+  - Ajout du callback d'observation de statut `onActionStatus()`.
+
+### 3. PTT Déterministe & Source Unique de Vérité (`examples/VoiceUxLiveDemo`)
+- **Source Unique de Vérité pour les Transitions d'Écoute** :
+  - `s_bridge.onListeningStarted()` et `s_bridge.onListeningFinished()` sont désormais notifiés exclusivement depuis les callbacks confirmés du moteur vocal (`s_voice.onListeningStarted()`, `s_voice.onListeningFinished()`).
+  - Suppression des notifications directes redondantes depuis les gestionnaires tactiles ou la console série.
+- **Sécurisation des Variables d'Interface** :
+  - `s_touchListening` ne bascule à `true` que si `s_voice.startListening()` retourne `true`.
+  - Contrôle systématique des valeurs de retour de `startListening()`, `stopListening()` et `say()`.
+  - Si `s_voice.say()` échoue ou est refusé, appel immédiat de `s_bridge.notifySpeechRefused()`, empêchant tout blocage en état `SPEAKING`.
+
+### 4. Tests & Distribution
+- **Nouvelles Suites de Non-Régression** :
+  - `TEST SUITE 139` : Validation complète de la sécurité de `ToolRegistry` (immuabilité des arguments, rejeu, expiration, réutilisation après erreur, exécuteur occupé, file bornée, annulation custom executor).
+  - `TEST SUITE 140` : Validation complète de `VoiceUxLiveBridge` (cycle TTS avec métadonnées, non-pollution de mémoire sur REPEAT/feedback/interruption, transitions STOP, refus TTS, dédoublonnage, échecs réseau, statuts d'action).
+  - Total : **140 suites de tests automatiques réussies (2662 assertions, 0 échec)**.
+- **Compilateur Portable & Validation Externe** :
+  - `tests/run_tests.bat` : Résolution dynamique du compilateur C++ (`%CXX%`, `%GCC%`, `PATH`, puis `.platformio`) éliminant le chemin absolu utilisateur.
+  - `tests/external-consumer` : Actualisation vers la version courante de VoiceKit via symlink PlatformIO, éliminant la dépendance au tag obsolète v0.3.0.
+  - Validation réussie de compilation PlatformIO pour M5Stack CoreS3 (`VoiceUxLiveDemo`, `LocalToolRegistryDemo`, `external-consumer`).
+
+---
 
 ### 1. Pont Applicatif Voice UX Live Bridge (`VoiceUxLiveBridge.h/.cpp`)
 - **Adaptateur Découplé Indépendant (`src/core/voiceux/VoiceUxLiveBridge.h/.cpp`)** :
