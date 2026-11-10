@@ -32,3 +32,4 @@ Classés de la version la plus récente à la plus ancienne. L'historique détai
 ## Outils de validation
 
 Les scripts Python de validation matérielle sur port série sont regroupés dans [`tools/validation/`](../tools/validation/README.md).
+

@@ -17,3 +17,4 @@ python tools/validation/validate_v06322.py
 
 - Le port série est défini par la constante `PORT` en tête de chaque script (`COM4` par défaut) : adaptez-la à votre poste.
 - Les journaux `*.log` sont écrits dans le répertoire courant et sont ignorés par Git.
+

@@ -21,6 +21,10 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ### Retiré
 - `a-lire.txt` (notes personnelles) retiré du suivi Git et ajouté au `.gitignore` (le fichier reste disponible localement).
+- Dossier racine `include/` supprimé (85 en-têtes relais redondants avec `src/`, dont 4 copies de `VoiceUxLiveBridge.h`). Aucun fichier du dépôt n'en dépendait : tous les en-têtes publics « à plat » restent disponibles dans `src/` (`#include <VoiceKit.h>`, `<ToolRegistry.h>`, `<VoiceUxLiveBridge.h>`, …), qui est le seul emplacement pris en compte par Arduino IDE.
+  - Ajout de `src/GeminiLiveClient.h` et `src/LiveSessionController.h` pour conserver les deux seuls noms qui n'existaient que dans `include/`.
+  - ⚠️ Les chemins d'alias non standard `include/core/*.h`, `include/core/tools/*.h`, `include/voiceux/*.h` et `include/hal/*.h` ne sont plus fournis : utiliser les noms à plat (`#include <ToolRegistry.h>`) ou les chemins réels (`#include <core/tools/ToolRegistry.h>`, `#include <core/voiceux/VoiceUxLiveBridge.h>`).
+- `tests/run_tests.bat` : retrait de l'option `-Iinclude` devenue inutile.
 
 ---
 

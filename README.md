@@ -204,6 +204,7 @@ VoiceKit/
 │   └── validation/              # Scripts Python de validation matérielle (port série)
 ├── tutorials/                   # Parcours d'apprentissage progressif (leçons 00 à 03)
 ├── src/                         # Sources et en-têtes (Standard Arduino 1.5)
+│   ├── *.h (relais)             # En-têtes publics « à plat » redirigeant vers core/, core/tools/, core/voiceux/ et hal/
 │   ├── VoiceKit.h               # Façade simplifiée unifiée (TTS, STT, Continuous, Conversation, WakeWord)
 │   ├── VoiceKit.cpp             # Implémentation de la façade simplifiée
 │   ├── VoxCoreVoice.h           # En-tête public historique préservé
