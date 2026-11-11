@@ -143,7 +143,9 @@ static void drawUI() {
     if (dispUser.length() > 90) {
         dispUser = dispUser.substring(0, 87) + "...";
     }
+    M5.Display.setFont(&fonts::efontJA_12);
     M5.Display.drawString(dispUser, 16, 54);
+    M5.Display.setFont(&fonts::Font0);
 
     // 4. Cadre de réponse de l'assistant (Gemini)
     M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
@@ -157,7 +159,9 @@ static void drawUI() {
     if (dispGemini.length() > 95) {
         dispGemini = dispGemini.substring(0, 92) + "...";
     }
+    M5.Display.setFont(&fonts::efontJA_12);
     M5.Display.drawString(dispGemini, 16, 120);
+    M5.Display.setFont(&fonts::Font0);
 
     // 5. Bouton tactile principal
     uint16_t btnColor = TFT_BLUE;
@@ -167,7 +171,7 @@ static void drawUI() {
     if (s_uiState == ConvUIState::LISTENING) {
         btnColor = TFT_RED;
         btnLabel = "ENREGISTREMENT...";
-        btnSub = "Relâcher pour envoyer à Gemini";
+        btnSub = "Relacher pour envoyer a Gemini";
     } else if (s_uiState == ConvUIState::PROCESSING || s_uiState == ConvUIState::SPEAKING) {
         btnColor = 0xC800; // Rouge orangé vif pour STOP
         btnLabel = "STOP";

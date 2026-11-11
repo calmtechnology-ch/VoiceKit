@@ -174,21 +174,27 @@ static void drawUI() {
     int maxChars = (dw >= 300) ? 40 : 28;
 
     if (st == VoiceUxBridgeState::LISTENING) {
+        M5.Display.setFont(&fonts::Font0);
         M5.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
         M5.Display.drawString("Microphone actif : dictez...", 14, boxY + 6);
         const String& interim = s_bridge.getInterimText();
         M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
         String disp = interim.isEmpty() ? "(En attente de voix...)" : interim;
         if ((int)disp.length() > maxChars) disp = disp.substring(0, maxChars - 3) + "...";
-        M5.Display.drawString(disp, 14, boxY + 24);
+        M5.Display.setFont(&fonts::efontJA_12);
+        M5.Display.drawString(disp, 14, boxY + 22);
+        M5.Display.setFont(&fonts::Font0);
     } else {
         const String& finalTxt = s_bridge.getLastFinalText();
+        M5.Display.setFont(&fonts::Font0);
         M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
         M5.Display.drawString("Derniere transcription :", 14, boxY + 6);
         M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
         String disp = finalTxt.isEmpty() ? "(Aucune prise de parole)" : finalTxt;
         if ((int)disp.length() > maxChars) disp = disp.substring(0, maxChars - 3) + "...";
+        M5.Display.setFont(&fonts::efontJA_12);
         M5.Display.drawString(disp, 14, boxY + 22);
+        M5.Display.setFont(&fonts::Font0);
 
         // Décision & intention
         const VoiceUxResult& res = s_bridge.getController().getLastResult();
@@ -212,6 +218,7 @@ static void drawUI() {
     int memH = (dw >= 300) ? 48 : 56;
     M5.Display.drawRoundRect(8, memY, dw - 16, memH, 4, M5.Display.color565(50, 60, 80));
     const ReplyMemory& mem = s_bridge.getReplyMemory();
+    M5.Display.setFont(&fonts::Font0);
     M5.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
     M5.Display.drawString("Memoire (" + String(mem.getCount()) + "/" + String(mem.getCapacity()) + ") :", 14, memY + 6);
 
@@ -219,8 +226,10 @@ static void drawUI() {
     if (lastReply.isEmpty()) lastReply = "(Memoire vide)";
     int memChars = (dw >= 300) ? 42 : 30;
     if ((int)lastReply.length() > memChars) lastReply = lastReply.substring(0, memChars - 3) + "...";
+    M5.Display.setFont(&fonts::efontJA_12);
     M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5.Display.drawString(lastReply, 14, memY + 24);
+    M5.Display.drawString(lastReply, 14, memY + 22);
+    M5.Display.setFont(&fonts::Font0);
 
     // 5. Bouton tactile PARLER (Push-To-Talk)
     uint16_t talkBg;
@@ -547,8 +556,23 @@ void loop() {
                 break;
             }
             case VoiceUxBridgeActionType::FORWARD_AI: {
-                Serial.printf("[ACTION][EXPERIMENTALE] Phrase ordinaire non transmise (IA reservee v0.6.5) : \"%s\"\n", act.text.c_str());
-                s_bridge.notifyActionRejected("Transmission IA non implementee (v0.6.4.3.1 experimental)");
+                Serial.printf("[ACTION] Phrase utilisateur recue : \"%s\"\n", act.text.c_str());
+                String reply = "J'ai compris : " + act.text;
+                s_bridge.rememberReply(reply);
+                if (s_bridge.canSpeak() && (s_voice.isReady() || s_voice.getState() == VoiceState::READY)) {
+                    bool ok = s_voice.say(reply);
+                    if (ok) {
+                        uint32_t speechId = s_voice.getActiveSpeechId();
+                        s_bridge.notifySpeechStarted(reply, speechId);
+                        Serial.printf("[VOICE] TTS demarre (speechId=%u) : \"%s\"\n", (unsigned)speechId, reply.c_str());
+                    } else {
+                        Serial.println("[ACTION][ERREUR] Echec say(), restitution refusee");
+                        s_bridge.notifySpeechRefused("say() refuse par s_voice");
+                    }
+                } else {
+                    Serial.println("[ACTION][REPORTE] Moteur vocal non disponible pour TTS");
+                    s_bridge.notifySpeechRefused("Moteur vocal non disponible");
+                }
                 break;
             }
             default:
