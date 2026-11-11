@@ -882,6 +882,9 @@ void LiveAudioPlayer::tick() {
                     _durationTurnCompleteToFinishMs = (_turnCompleteTimeMs > 0) ? (millis() - _turnCompleteTimeMs) : 0;
                     printDiagnosticSummary();
                     Serial.println("[LivePlayer] Restitution audio completee");
+                    uint32_t finishedPlaybackId = _activePlaybackId;
+                    _activePlaybackId = 0;
+                    if (_onPlaybackFinishedWithId) _onPlaybackFinishedWithId(finishedPlaybackId);
                     if (_onPlaybackFinished) _onPlaybackFinished();
                 }
             }
@@ -960,6 +963,9 @@ void LiveAudioPlayer::tick() {
                     _samplesRemainingAtFinish = 0;
                     _durationTurnCompleteToFinishMs = (_turnCompleteTimeMs > 0) ? (millis() - _turnCompleteTimeMs) : 0;
                     printDiagnosticSummary();
+                    uint32_t finishedPlaybackId = _activePlaybackId;
+                    _activePlaybackId = 0;
+                    if (_onPlaybackFinishedWithId) _onPlaybackFinishedWithId(finishedPlaybackId);
                     if (_onPlaybackFinished) _onPlaybackFinished();
                 }
             }
@@ -990,6 +996,7 @@ bool LiveAudioPlayer::mockPlayRaw(const int16_t* data, size_t length) {
 #endif
 
 void LiveAudioPlayer::stop(AudioStopReason reason) {
+    _activePlaybackId = 0;
     _turnGeneration.fetch_add(1, std::memory_order_relaxed);
     _hardwareError = false;
     _hardwareDrainStartTimeMs = 0;

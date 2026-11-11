@@ -65,8 +65,12 @@ public:
     unsigned getVolume() const { return _volume; }
 
     // Callbacks
+    using PlaybackFinishedWithIdCallback = std::function<void(uint32_t speechId)>;
     void setOnFirstAudio(Callback cb) { _onFirstAudio = std::move(cb); }
     void setOnPlaybackFinished(Callback cb) { _onPlaybackFinished = std::move(cb); }
+    void setOnPlaybackFinishedWithId(PlaybackFinishedWithIdCallback cb) { _onPlaybackFinishedWithId = std::move(cb); }
+    void setPlaybackId(uint32_t id) { _activePlaybackId = id; }
+    uint32_t getPlaybackId() const { return _activePlaybackId; }
 
     // États & Métriques de diagnostic (v0.4.1.3, v0.1.0.2 & v0.1.0.3)
     bool isPlaying() const { return _isPlaying; }
@@ -359,4 +363,6 @@ private:
 
     Callback _onFirstAudio;
     Callback _onPlaybackFinished;
+    PlaybackFinishedWithIdCallback _onPlaybackFinishedWithId;
+    uint32_t _activePlaybackId = 0;
 };

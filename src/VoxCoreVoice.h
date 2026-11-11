@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <functional>
 #include <queue>
+#include <vector>
 #include <memory>
 #include "VoiceKitConfig.h"
 #include "hal/IAudioOutput.h"
@@ -277,6 +278,7 @@ public:
      * @brief Retourne le dernier identifiant de tour STT attribué.
      */
     uint32_t getLastCaptureTurnId() const { return _sttTurnId; }
+    const String& getLastFinalText() const { return _lastFinalText; }
 
     /**
      * @brief Retourne le niveau RMS instantané du dernier bloc micro PCM 16 kHz capturé.

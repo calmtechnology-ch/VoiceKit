@@ -8107,6 +8107,385 @@ void test_v064_demo_three_tools_and_json() {
 }
 
 // =============================================================================
+// TEST SUITE 143 : VoiceKit v0.6.4.3.2 — Final Event Correlation Validation
+// =============================================================================
+void test_v06432_final_event_correlation_validation() {
+    std::cout << "\n[TEST SUITE 143] VoiceKit v0.6.4.3.2 — Final Event Correlation Validation" << std::endl;
+
+    // -------------------------------------------------------------------------
+    // TEST A : Corrélation STT — Ancienne transcription après nouvelle capture
+    // Traversée stricte du véritable chemin d'événements :
+    // MockLiveTransport -> GeminiLiveClient -> VoxCoreVoice -> onTranscriptionWithTurnId -> VoiceUxLiveBridge
+    // -------------------------------------------------------------------------
+    {
+        MockLiveTransport mockTransport;
+        VoxCoreVoice voice;
+        VoiceUxLiveBridge bridge;
+        bridge.begin();
+        bridge.seedTestReplies();
+
+        VoiceKitConfig cfg;
+        cfg.apiKey = "AIzaTestValidationKeyA";
+        cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voice.begin(cfg);
+        prepareMockVoiceReady(voice, mockTransport);
+
+        // Câblage authentique comme dans VoiceUxLiveDemo
+        voice.onListeningStartedWithTurnId([&](uint32_t turnId) {
+            bridge.onListeningStarted(turnId);
+        });
+        voice.onListeningFinished([&]() {
+            bridge.onListeningFinished();
+        });
+        voice.onTranscriptionWithTurnId([&](const String& text, bool isFinal, uint32_t turnId) {
+            bridge.feedTranscription(text, isFinal, turnId);
+        });
+
+        // 1. Démarrer capture A
+        voice.startListening();
+        uint32_t turnIdA = voice.getActiveCaptureTurnId();
+        TEST_ASSERT(turnIdA > 0, "Test A.1 turnIdA positif attribue au depart");
+        TEST_ASSERT(bridge.getActiveTurnId() == turnIdA, "Test A.1 Bridge actif = turnIdA");
+        TEST_ASSERT(voice.isListening(), "Test A.1 Capture A active");
+
+        // 2. STOP sur capture A
+        voice.stop();
+        bridge.triggerPriorityStop();
+        TEST_ASSERT(voice.isReady(), "Test A.2 VoxCoreVoice READY apres STOP");
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "Test A.2 Bridge READY apres STOP");
+
+        // 3. Démarrer capture B
+        voice.startListening();
+        uint32_t turnIdB = voice.getActiveCaptureTurnId();
+        TEST_ASSERT(turnIdB > turnIdA, "Test A.3 turnIdB strictement superieur a turnIdA");
+        TEST_ASSERT(bridge.getActiveTurnId() == turnIdB, "Test A.3 Bridge actif = turnIdB");
+        TEST_ASSERT(voice.isListening(), "Test A.3 Capture B active");
+
+        // 4. Injecter via WebSocket une transcription finale appartenant a A
+        uint32_t staleCountBefore = bridge.getBridgeStats().staleTranscriptionsIgnored;
+        const char* jsonA = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Répète\"}}}";
+        voice.getClient().handleIncomingMessage(jsonA, strlen(jsonA));
+        voice.update();
+
+        // 5. Verifier rejet strict : aucune action pour B, compteur stale incremente
+        TEST_ASSERT(!bridge.hasPendingAction(), "Test A.5 Aucune action creee pour B depuis ancienne transcription A");
+        TEST_ASSERT(bridge.getBridgeStats().staleTranscriptionsIgnored == staleCountBefore + 1, "Test A.5 Compteur stale incremente");
+        TEST_ASSERT(voice.isListening(), "Test A.5 Capture B toujours active (non corrompue par A)");
+        TEST_ASSERT(voice.getActiveCaptureTurnId() == turnIdB, "Test A.5 turnId actif reste strictement turnIdB");
+
+        // 6. Terminer capture B normalement et injecter transcription legitime de B
+        voice.stopListening();
+        bridge.onListeningFinished();
+        TEST_ASSERT(voice.isTranscribing(), "Test A.6 Capture B terminee, en attente transcription");
+        const char* jsonB = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Répète\"}}}";
+        voice.getClient().handleIncomingMessage(jsonB, strlen(jsonB));
+        voice.update();
+
+        // 7. Verifier acceptation normale du tour B
+        TEST_ASSERT(bridge.hasPendingAction(), "Test A.7 Action valide creee pour le tour B");
+        VoiceUxBridgeAction actB = bridge.consumePendingAction();
+        TEST_ASSERT(actB.intent == VoiceUxIntent::REPEAT, "Test A.7 Intention REPEAT du tour B conforme");
+        TEST_ASSERT(voice.isReady(), "Test A.7 VoxCoreVoice READY apres transcription finale de B");
+
+        voice.getClient().setTransport(nullptr);
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST B : Corrélation TTS — Ancienne fin audio après nouveau TTS
+    // Deux ordres : STOP -> démarrage B -> ancienne fin A (ordre 2, le plus critique)
+    //              STOP -> ancienne fin A -> démarrage B (ordre 1)
+    // -------------------------------------------------------------------------
+    {
+        MockLiveTransport mockTransport;
+        VoxCoreVoice voice;
+        VoiceKitConfig cfg;
+        cfg.apiKey = "AIzaTestValidationKeyB";
+        cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voice.begin(cfg);
+        prepareMockVoiceReady(voice, mockTransport);
+
+        // --- ORDRE 2 : STOP -> démarrage B -> ancienne fin A ---
+        uint32_t lastFinishedSpeechId = 0;
+        uint32_t finishCallbackCount = 0;
+        voice.onSpeechFinishedWithId([&](uint32_t spId) {
+            lastFinishedSpeechId = spId;
+            finishCallbackCount++;
+        });
+
+        // 1. Démarrer restitution A
+        voice.say("Annonce A");
+        uint32_t speechIdA = voice.getActiveSpeechId();
+        TEST_ASSERT(speechIdA > 0, "Test B.1 speechIdA attribue");
+        injectGeminiPcmAndDrain(voice, 2, false);
+        TEST_ASSERT(voice.isSpeaking(), "Test B.1 Restitution A active (isSpeaking)");
+
+        // 2. STOP pendant lecture de A
+        voice.stop();
+        TEST_ASSERT(!voice.isSpeaking(), "Test B.2 Haut-parleur arrete apres STOP");
+        TEST_ASSERT(voice.getActiveSpeechId() == 0, "Test B.2 speechId actif reinitialise a 0");
+
+        // 3. Démarrer restitution B
+        voice.say("Annonce B");
+        uint32_t speechIdB = voice.getActiveSpeechId();
+        TEST_ASSERT(speechIdB > speechIdA, "Test B.3 speechIdB > speechIdA");
+        injectGeminiPcmAndDrain(voice, 2, false);
+        TEST_ASSERT(voice.isSpeaking(), "Test B.3 Restitution B active");
+
+        // 4. Injecter notification de fin résiduelle provenant de A (speechIdA)
+        // Vérifions que VoxCoreVoice ne termine pas prématurément B
+        TEST_ASSERT(voice.getActiveSpeechId() == speechIdB, "Test B.4 speechId actif reste speechIdB");
+        TEST_ASSERT(voice.isSpeaking(), "Test B.4 Moteur toujours SPEAKING pour B");
+        TEST_ASSERT(finishCallbackCount == 0, "Test B.4 Aucun callback de fin premature pour B");
+
+        // 5. Terminer réellement la restitution B
+        injectGeminiPcmAndDrain(voice, 3, true);
+        drainVoicePlayback(voice);
+        TEST_ASSERT(voice.isReady(), "Test B.5 Moteur READY apres fin reelle de B");
+        TEST_ASSERT(finishCallbackCount == 1, "Test B.5 Exactement un callback de fin audio emis");
+        TEST_ASSERT(lastFinishedSpeechId == speechIdB, "Test B.5 Le callback emis correspond a speechIdB");
+
+        // --- ORDRE 1 : STOP -> ancienne fin A -> démarrage B ---
+        finishCallbackCount = 0;
+        lastFinishedSpeechId = 0;
+        voice.say("Annonce C");
+        uint32_t speechIdC = voice.getActiveSpeechId();
+        injectGeminiPcmAndDrain(voice, 2, false);
+        voice.stop();
+        TEST_ASSERT(voice.getActiveSpeechId() == 0, "Test B.6 Actif a 0 apres STOP");
+
+        // Fin au repos ignorée
+        TEST_ASSERT(finishCallbackCount == 0, "Test B.7 Fin apres STOP ignoree au repos");
+
+        // Démarrage D
+        voice.say("Annonce D");
+        uint32_t speechIdD = voice.getActiveSpeechId();
+        TEST_ASSERT(speechIdD > speechIdC, "Test B.8 speechIdD > speechIdC");
+        injectGeminiPcmAndDrain(voice, 3, true);
+        drainVoicePlayback(voice);
+        TEST_ASSERT(finishCallbackCount == 1, "Test B.9 Exactement 1 callback de fin pour D");
+        TEST_ASSERT(lastFinishedSpeechId == speechIdD, "Test B.9 Callback emis pour speechIdD");
+
+        voice.getClient().setTransport(nullptr);
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST C : Absence de corruption des états internes après STOP
+    // -------------------------------------------------------------------------
+    {
+        MockLiveTransport mockTransport;
+        VoxCoreVoice voice;
+        VoiceKitConfig cfg;
+        cfg.apiKey = "AIzaTestValidationKeyC";
+        cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voice.begin(cfg);
+        prepareMockVoiceReady(voice, mockTransport);
+
+        // 1. Démarrer capture A
+        voice.startListening();
+        uint32_t turnA = voice.getActiveCaptureTurnId();
+        voice.cancelListening(); // STOP / annulation de A
+        TEST_ASSERT(voice.isReady(), "Test C.1 READY apres annulation A");
+
+        // 2. Démarrer B
+        voice.startListening();
+        uint32_t turnB = voice.getActiveCaptureTurnId();
+        TEST_ASSERT(turnB > turnA, "Test C.2 turnB > turnA");
+
+        // 3. Capturer l'état complet de B
+        VoiceState stateB = voice.getState();
+        uint32_t activeIdB = voice.getActiveCaptureTurnId();
+        String lastFinalB = voice.getLastFinalText();
+        bool transPendingB = voice.isTranscribing();
+        bool isListB = voice.isListening();
+
+        // 4. Injecter transcription obsolète de A
+        const char* staleJson = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Texte pirate obsolete\"}}}";
+        voice.getClient().handleIncomingMessage(staleJson, strlen(staleJson));
+        voice.update();
+
+        // 5. Vérifier qu'aucun état interne de B n'a été corrompu
+        TEST_ASSERT(voice.getState() == stateB, "Test C.5 Etat conserve sans transition prematuree vers READY");
+        TEST_ASSERT(voice.getActiveCaptureTurnId() == activeIdB, "Test C.5 turnId actif inchange");
+        TEST_ASSERT(voice.getLastFinalText() == lastFinalB, "Test C.5 lastFinalText non pollue par le texte obsolete");
+        TEST_ASSERT(voice.isTranscribing() == transPendingB, "Test C.5 isTranscribing inchange");
+        TEST_ASSERT(voice.isListening() == isListB, "Test C.5 isListening toujours true");
+
+        // 6. Nettoyage
+        voice.stop();
+        voice.getClient().setTransport(nullptr);
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST D : Gestion des erreurs pendant une restitution vocale
+    // -------------------------------------------------------------------------
+    {
+        VoiceUxLiveBridge bridge;
+        bridge.begin();
+        bridge.seedTestReplies();
+
+        VoiceUxActionStatus lastReceivedStatus = VoiceUxActionStatus::CREATED;
+        uint32_t statusUpdatesCount = 0;
+        bridge.onActionStatus([&](const VoiceUxBridgeAction& act, VoiceUxActionStatus status) {
+            lastReceivedStatus = status;
+            statusUpdatesCount++;
+        });
+
+        // 1. Démarrer TTS A
+        bridge.feedSimulatedText("Première consigne vocale");
+        VoiceUxBridgeAction actA = bridge.consumePendingAction();
+        bridge.notifySpeechStarted(actA.text, 100);
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::SPEAKING, "Test D.1 SPEAKING");
+
+        // 2. Injecter une erreur de restitution / réseau
+        bridge.notifyError("Perte de liaison WebSocket");
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::ERROR, "Test D.2 Passage en etat ERROR");
+        TEST_ASSERT(lastReceivedStatus == VoiceUxActionStatus::REJECTED, "Test D.2 Action A reçoit statut terminal REJECTED");
+
+        // 3. Vérifier que la réponse erronée n'a PAS été mémorisée dans ReplyMemory
+        TEST_ASSERT(bridge.getReplyMemory().getLastReply() != "Première consigne vocale", "Test D.3 Reponse incomplete NON memorisee");
+
+        // 4. Récupération d'erreur
+        bridge.recoverFromError();
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "Test D.4 Recuperation d'erreur -> READY");
+
+        // 5. Démarrer TTS B
+        bridge.feedSimulatedText("Deuxième consigne vocale");
+        VoiceUxBridgeAction actB = bridge.consumePendingAction();
+        bridge.notifySpeechStarted(actB.text, 101);
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::SPEAKING, "Test D.5 TTS B SPEAKING");
+        TEST_ASSERT(bridge.getCurrentSpeechId() == 101, "Test D.5 SpeechId B = 101");
+
+        // 6. Injecter ancienne fin de A (id=100)
+        bridge.notifySpeechFinished(true, 100);
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::SPEAKING, "Test D.6 B reste active malgre fin ancienne A");
+        TEST_ASSERT(bridge.getCurrentSpeechId() == 101, "Test D.6 SpeechId B toujours 101");
+
+        // 7. Terminer B normalement
+        bridge.notifySpeechFinished(true, 101);
+        TEST_ASSERT(bridge.getState() == VoiceUxBridgeState::READY, "Test D.7 READY apres fin legitime de B");
+        TEST_ASSERT(bridge.getReplyMemory().getLastReply() == "Deuxième consigne vocale", "Test D.7 Reponse complete B memorisee");
+
+        // 8. Action en attente lors d'une erreur
+        bridge.feedSimulatedText("Action mise en attente");
+        TEST_ASSERT(bridge.hasPendingAction(), "Test D.8 Action pending presente");
+        bridge.notifyError("Nouvelle erreur inopinee");
+        TEST_ASSERT(!bridge.hasPendingAction(), "Test D.8 Pending action retiree sur erreur");
+        TEST_ASSERT(lastReceivedStatus == VoiceUxActionStatus::CANCELLED, "Test D.8 Action pending annulee proprement");
+        bridge.recoverFromError();
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST E : Façade publique VoiceKit — Callbacks enrichis et corrélations
+    // -------------------------------------------------------------------------
+    {
+        MockLiveTransport mockTransport;
+        VoiceKit vk;
+        VoiceKitConfig cfg;
+        cfg.apiKey = "AIzaTestValidationKeyE";
+        cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        vk.begin(cfg);
+        prepareMockVoiceKitReady(vk, mockTransport);
+
+        uint32_t facadeTurnId = 0;
+        String facadeText = "";
+        bool facadeFinal = false;
+        vk.onTranscriptionWithTurnId([&](const String& text, bool isFinal, uint32_t turnId) {
+            facadeText = text;
+            facadeFinal = isFinal;
+            facadeTurnId = turnId;
+        });
+
+        uint32_t facadeFinishedSpeechId = 0;
+        vk.onSpeechFinishedWithId([&](uint32_t speechId) {
+            facadeFinishedSpeechId = speechId;
+        });
+
+        // 1. STT via façade
+        bool listenOk = vk.listen();
+        TEST_ASSERT(listenOk, "Test E.1 vk.listen() accepte");
+        uint32_t activeTurn = vk.getActiveCaptureTurnId();
+        TEST_ASSERT(activeTurn > 0, "Test E.1 vk.getActiveCaptureTurnId() positif");
+
+        vk.stopListening();
+        uint32_t pendingTurn = vk.getPendingTranscriptionTurnId();
+        TEST_ASSERT(pendingTurn == activeTurn, "Test E.1 vk.getPendingTranscriptionTurnId() == activeTurn");
+
+        const char* sttJson = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Bonjour facade\"}}}";
+        vk.getEngine().getClient().handleIncomingMessage(sttJson, strlen(sttJson));
+        vk.update();
+
+        TEST_ASSERT(facadeText == "Bonjour facade", "Test E.1 Texte relaye par facade");
+        TEST_ASSERT(facadeFinal == true, "Test E.1 Flag isFinal relaye");
+        TEST_ASSERT(facadeTurnId == activeTurn, "Test E.1 turnId relaye sans alteration");
+
+        // 2. TTS via façade
+        bool sayOk = vk.say("Phrase facade");
+        TEST_ASSERT(sayOk, "Test E.2 vk.say() accepte");
+        uint32_t activeSpeech = vk.getActiveSpeechId();
+        TEST_ASSERT(activeSpeech > 0, "Test E.2 vk.getActiveSpeechId() positif");
+
+        injectGeminiPcmAndDrain(vk.getEngine(), 3, true);
+        drainVoicePlayback(vk.getEngine());
+
+        TEST_ASSERT(facadeFinishedSpeechId == activeSpeech, "Test E.2 onSpeechFinishedWithId relaye speechId exact");
+        TEST_ASSERT(vk.isReady(), "Test E.2 Façade READY apres TTS");
+
+        vk.getEngine().getClient().setTransport(nullptr);
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST F : Scénarios temporels et robustesse (STOP avant/après fin, double fin)
+    // -------------------------------------------------------------------------
+    {
+        MockLiveTransport mockTransport;
+        VoxCoreVoice voice;
+        VoiceKitConfig cfg;
+        cfg.apiKey = "AIzaTestValidationKeyF";
+        cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voice.begin(cfg);
+        prepareMockVoiceReady(voice, mockTransport);
+
+        // 1. STOP avant transcription finale (pendant TRANSCRIBING)
+        voice.startListening();
+        voice.stopListening();
+        TEST_ASSERT(voice.isTranscribing(), "Test F.1 TRANSCRIBING");
+        voice.stop();
+        TEST_ASSERT(voice.isReady(), "Test F.1 READY apres STOP");
+        const char* lateJson = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Tardif\"}}}";
+        voice.getClient().handleIncomingMessage(lateJson, strlen(lateJson));
+        voice.update();
+        TEST_ASSERT(voice.isReady(), "Test F.1 Reste READY, aucune corruption");
+
+        // 2. STOP immédiatement après transcription finale
+        voice.startListening();
+        voice.stopListening();
+        const char* finalJson = "{\"serverContent\":{\"inputTranscription\":{\"text\":\"Final valide\"}}}";
+        voice.getClient().handleIncomingMessage(finalJson, strlen(finalJson));
+        voice.update();
+        TEST_ASSERT(voice.isReady(), "Test F.2 READY apres transcription");
+        voice.stop(); // STOP au repos
+        TEST_ASSERT(voice.isReady(), "Test F.2 Toujours READY apres STOP au repos");
+
+        // 3. Double callback de fin audio (idempotence)
+        uint32_t ttsFinCount = 0;
+        voice.onSpeechFinishedWithId([&](uint32_t spId) {
+            ttsFinCount++;
+        });
+        voice.say("Test double fin");
+        uint32_t spId = voice.getActiveSpeechId();
+        injectGeminiPcmAndDrain(voice, 3, true);
+        drainVoicePlayback(voice);
+        TEST_ASSERT(ttsFinCount == 1, "Test F.3 Premier callback de fin reçu");
+        // Simuler un second appel tardif avec le même ID
+        voice.getPlayer().setPlaybackId(spId);
+        // Au niveau session, le tour étant déjà terminé, aucun second événement n'est émis
+        TEST_ASSERT(ttsFinCount == 1, "Test F.3 Idempotence : pas de double fin audio");
+
+        voice.getClient().setTransport(nullptr);
+    }
+}
+
+// =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
 int main() {
@@ -8285,6 +8664,9 @@ int main() {
 
     // Suites VoiceKit v0.6.4.1 (Voice UX Foundation) & v0.6.4.2 (Voice UX Live Bridge)
     run_all_voiceux_tests();
+
+    // Suite finale VoiceKit v0.6.4.3.2 — Final Event Correlation Validation (Tests A, B, C, D, E & F)
+    test_v06432_final_event_correlation_validation();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;

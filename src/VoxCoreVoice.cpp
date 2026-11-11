@@ -334,9 +334,13 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
 
     // Callbacks du contrôleur de session
     _session.setOnStateChanged([this](LiveSessionState s) {
+        if (s == LiveSessionState::DISCONNECTED || s == LiveSessionState::CONNECTING) {
+            _cancelledCaptureTurnId = 0;
+        }
 
         switch (s) {
             case LiveSessionState::CONNECTED:
+                _cancelledCaptureTurnId = 0;
                 // Validation définitive du nouveau profil vocal après setupComplete (v0.4.1.1)
                 if (_profileChangePending) {
                     _config.voice = _pendingVoice;
@@ -416,8 +420,16 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         }
     });
 
-    _session.setOnPlaybackFinished([this]() {
+    _session.setOnPlaybackFinishedWithId([this](uint32_t finishedId) {
         if (_state == VoiceState::LISTENING || _state == VoiceState::TRANSCRIBING) {
+            return;
+        }
+        // Validation stricte de corrélation temporelle et d'opération :
+        // Si un speechId actif est en cours et que la notification porte un identifiant non nul différent,
+        // c'est une ancienne notification résiduelle (drain DMA, tâche différée, fin de tour annulé).
+        if (_activeSpeechId != 0 && finishedId != 0 && finishedId != _activeSpeechId) {
+            Serial.printf("[VoiceKit] Notification fin audio IGNOREE : speechId=%u != actif=%u\n",
+                          (unsigned)finishedId, (unsigned)_activeSpeechId);
             return;
         }
         _latencyMetrics.playbackFinishedMs = _player.getPlaybackFinishedTimeMs();
@@ -425,11 +437,11 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
             _latencyMetrics.playbackFinishedMs = millis();
             if (_latencyMetrics.playbackFinishedMs == 0) _latencyMetrics.playbackFinishedMs = 1;
         }
-        uint32_t finishedId = _activeSpeechId;
+        uint32_t finishedIdToReport = (_activeSpeechId != 0) ? _activeSpeechId : finishedId;
         _activeSpeechId = 0;
         setState(VoiceState::READY);
-        if (_onSpeechFinishedWithId && finishedId > 0) {
-            _onSpeechFinishedWithId(finishedId);
+        if (_onSpeechFinishedWithId && finishedIdToReport > 0) {
+            _onSpeechFinishedWithId(finishedIdToReport);
         }
         if (_onSpeechFinished) {
             _onSpeechFinished();
@@ -442,6 +454,10 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
             _activeSpeechId = nextItem.speechId;
             dispatchSpeech(nextItem.text);
         }
+    });
+
+    _session.setOnPlaybackFinished([this]() {
+        // Maintenu pour compatibilité
     });
 
     _session.setOnError([this](const String& err) {
@@ -842,7 +858,7 @@ bool VoxCoreVoice::dispatchSpeech(const String& text) {
     _latencyMetrics.reset();
     _latencyMetrics.turnStartedMs = millis();
     if (_latencyMetrics.turnStartedMs == 0) _latencyMetrics.turnStartedMs = 1;
-    bool ok = _session.sendTextMessage(prompt);
+    bool ok = _session.sendTextMessage(prompt, _activeSpeechId);
     if (!ok) {
         _lastError = "Echec envoi message texte vers service vocal";
         setState(VoiceState::ERROR_STATE);
@@ -878,6 +894,8 @@ void VoxCoreVoice::stop() {
         _pendingTranscriptionTurnId = 0;
         _transcriptionPending = false;
         _finalTranscriptionReceived = false;
+    } else {
+        _cancelledCaptureTurnId = 0;
     }
     if (_profileChangePending && _activeProvider) {
         _activeProvider->setVoice(_config.voice);
@@ -1224,7 +1242,7 @@ bool VoxCoreVoice::startListening() {
     _sttTurnId++;
     _activeCaptureTurnId = _sttTurnId;
     _pendingTranscriptionTurnId = 0;
-    _cancelledCaptureTurnId = 0;
+    // Note : conservation de _cancelledCaptureTurnIds pour rejet d'anciennes transcriptions serveur
     _finalTranscriptionReceived = false;
     _transcriptionPending = false;
     _lastInterimText = "";
@@ -1340,12 +1358,27 @@ void VoxCoreVoice::handleIncomingTranscription(const String& text, bool isFinal)
     }
 
     uint32_t originTurnId = 0;
-    if (_activeCaptureTurnId != 0) {
-        originTurnId = _activeCaptureTurnId;
+    bool isCancelledTurn = false;
+
+    if (_cancelledCaptureTurnId != 0) {
+        originTurnId = _cancelledCaptureTurnId;
+        isCancelledTurn = true;
+        if (isFinal) {
+            _cancelledCaptureTurnId = 0;
+        }
     } else if (_pendingTranscriptionTurnId != 0) {
         originTurnId = _pendingTranscriptionTurnId;
-    } else {
-        originTurnId = _cancelledCaptureTurnId;
+    } else if (_activeCaptureTurnId != 0) {
+        originTurnId = _activeCaptureTurnId;
+    }
+
+    if (isCancelledTurn) {
+        Serial.printf("[VoiceKit] Transcription IGNOREE (associee au tour annule turnId=%u) : \"%s\"\n",
+                      (unsigned)originTurnId, text.c_str());
+        if (_onTranscriptionWithTurn) {
+            _onTranscriptionWithTurn(text, isFinal, originTurnId);
+        }
+        return;
     }
 
     if (isFinal) {

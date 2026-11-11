@@ -30,15 +30,21 @@ bool VoiceKit::begin(const VoiceKitConfig& config) {
         }
     });
 
-    _voice.onSpeechFinished([this]() {
+    _voice.onSpeechFinished([this](uint32_t speechId) {
+        if (_onSpeechFinishedWithId && speechId > 0) {
+            _onSpeechFinishedWithId(speechId);
+        }
         if (_onSpeechFinished) {
             _onSpeechFinished();
         }
     });
 
-    _voice.onTranscription([this](const String& text, bool isFinal) {
+    _voice.onTranscription([this](const String& text, bool isFinal, uint32_t turnId) {
         if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING) {
             _continuousController.handleTranscription(text, isFinal);
+        }
+        if (_onTranscriptionWithTurn) {
+            _onTranscriptionWithTurn(text, isFinal, turnId);
         }
         if (_onTranscription) {
             _onTranscription(text, isFinal);
@@ -67,7 +73,10 @@ bool VoiceKit::begin(const VoiceKitConfig& config) {
         }
     });
 
-    _voice.onListeningStarted([this]() {
+    _voice.onListeningStarted([this](uint32_t turnId) {
+        if (_onListeningStartedWithTurn) {
+            _onListeningStartedWithTurn(turnId);
+        }
         if (_onListeningStarted) {
             _onListeningStarted();
         }

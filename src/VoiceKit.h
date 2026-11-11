@@ -61,6 +61,9 @@ public:
     using WakeWordDetectedCallback = WakeWordManager::WakeWordDetectedCallback;
     using WakeWordEventCallback = WakeWordManager::WakeWordEventCallback;
     using WakeWordStateCallback = WakeWordManager::WakeWordStateCallback;
+    using SpeechFinishedCallback = VoxCoreVoice::SpeechFinishedCallback;
+    using TranscriptionWithTurnCallback = VoxCoreVoice::TranscriptionWithTurnCallback;
+    using ListeningTurnCallback = VoxCoreVoice::ListeningTurnCallback;
 
     VoiceKit();
     ~VoiceKit();
@@ -531,6 +534,8 @@ public:
      *        Contexte : Tâche principale (loop / update).
      */
     void onSpeechFinished(VoidCallback cb) { _onSpeechFinished = std::move(cb); }
+    void onSpeechFinished(SpeechFinishedCallback cb) { _onSpeechFinishedWithId = std::move(cb); }
+    void onSpeechFinishedWithId(SpeechFinishedCallback cb) { _onSpeechFinishedWithId = std::move(cb); }
 
     /**
      * @brief Callback de réception des transcriptions (partielles et finales).
@@ -538,6 +543,8 @@ public:
      *        Contexte : Tâche principale (loop / update).
      */
     void onTranscription(TranscriptionCallback cb) { _onTranscription = std::move(cb); }
+    void onTranscription(TranscriptionWithTurnCallback cb) { _onTranscriptionWithTurn = std::move(cb); }
+    void onTranscriptionWithTurnId(TranscriptionWithTurnCallback cb) { _onTranscriptionWithTurn = std::move(cb); }
 
     /**
      * @brief Callback déclenché à la fin complète d'un tour de conversation (réponse audio terminée).
@@ -550,9 +557,20 @@ public:
     void onUserText(TranscriptionCallback cb) { _onUserText = std::move(cb); }
     void onAssistantText(AssistantTextCallback cb) { _onAssistantText = std::move(cb); }
     void onListeningStarted(VoidCallback cb) { _onListeningStarted = std::move(cb); }
+    void onListeningStarted(ListeningTurnCallback cb) { _onListeningStartedWithTurn = std::move(cb); }
+    void onListeningStartedWithTurnId(ListeningTurnCallback cb) { _onListeningStartedWithTurn = std::move(cb); }
     void onListeningFinished(VoidCallback cb) { _onListeningFinished = std::move(cb); }
     void onStateChanged(StateCallback cb) { _onStateChanged = std::move(cb); }
     void onConversationTurnMetrics(TurnFinishedCallback cb) { _onConversationTurnMetrics = std::move(cb); }
+
+    /**
+     * @brief Identifiants de corrélation STT / TTS exposés par la façade (v0.6.4.3.2)
+     */
+    uint32_t getActiveSpeechId() const { return _voice.getActiveSpeechId(); }
+    uint32_t getActiveCaptureTurnId() const { return _voice.getActiveCaptureTurnId(); }
+    uint32_t getPendingTranscriptionTurnId() const { return _voice.getPendingTranscriptionTurnId(); }
+    uint32_t getLastCaptureTurnId() const { return _voice.getLastCaptureTurnId(); }
+    const String& getLastFinalText() const { return _voice.getLastFinalText(); }
 
     /**
      * @brief Callback sur blocs audio PCM 16 kHz acquis (32 ms).
@@ -585,11 +603,14 @@ private:
     ErrorCallback _onError;
     VoidCallback _onSpeechStarted;
     VoidCallback _onSpeechFinished;
+    SpeechFinishedCallback _onSpeechFinishedWithId;
     TranscriptionCallback _onTranscription;
+    TranscriptionWithTurnCallback _onTranscriptionWithTurn;
     VoidCallback _onConversationFinished;
     TranscriptionCallback _onUserText;
     AssistantTextCallback _onAssistantText;
     VoidCallback _onListeningStarted;
+    ListeningTurnCallback _onListeningStartedWithTurn;
     VoidCallback _onListeningFinished;
     StateCallback _onStateChanged;
     TurnFinishedCallback _onConversationTurnMetrics;

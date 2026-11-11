@@ -78,7 +78,7 @@ public:
     }
 
     // Envoi d'un message texte (mode TTS)
-    bool sendTextMessage(const String& text);
+    bool sendTextMessage(const String& text, uint32_t speechId = 0);
 
     // Gestion des tours audio en mode conversationnel (v0.4.0)
     bool beginAudioTurn();
@@ -125,6 +125,7 @@ public:
     void setOnTurnFinished(TurnCallback cb) { _onTurnFinished = std::move(cb); }
     void setOnFirstAudio(VoidCallback cb) { _onFirstAudio = std::move(cb); }
     void setOnPlaybackFinished(VoidCallback cb) { _onPlaybackFinished = std::move(cb); }
+    void setOnPlaybackFinishedWithId(std::function<void(uint32_t)> cb) { _onPlaybackFinishedWithId = std::move(cb); }
     void setOnError(ErrorCallback cb) { _onError = std::move(cb); }
     void setOnOutputTranscription(TranscriptionCallback cb) { _onOutputTranscription = std::move(cb); }
     void setNetworkCheck(NetworkCheckCallback cb) { _networkCheck = std::move(cb); }
@@ -191,6 +192,7 @@ private:
     TurnCallback _onTurnFinished;
     VoidCallback _onFirstAudio;
     VoidCallback _onPlaybackFinished;
+    std::function<void(uint32_t)> _onPlaybackFinishedWithId;
     ErrorCallback _onError;
     TranscriptionCallback _onOutputTranscription;
     NetworkCheckCallback _networkCheck;

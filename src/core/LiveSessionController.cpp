@@ -366,7 +366,7 @@ bool LiveSessionController::begin(IVoiceProvider* provider, void*, LiveAudioPlay
         }
     });
 
-    _player->setOnPlaybackFinished([this]() {
+    _player->setOnPlaybackFinishedWithId([this](uint32_t playbackId) {
         _lastActivityMs = millis();
         AudioTraceLog::record(AudioTraceEventType::PLAYBACK_FINISHED);
         finishTurn();
@@ -374,8 +374,13 @@ bool LiveSessionController::begin(IVoiceProvider* provider, void*, LiveAudioPlay
             AudioTraceLog::record(AudioTraceEventType::SESSION_CONNECTED);
             transitionTo(LiveSessionState::CONNECTED, "Fin lecture audio");
         }
-        if (_onPlaybackFinished) {
-            _onPlaybackFinished();
+        if (!_turnCancelled.load(std::memory_order_acquire)) {
+            if (_onPlaybackFinishedWithId) {
+                _onPlaybackFinishedWithId(playbackId);
+            }
+            if (_onPlaybackFinished) {
+                _onPlaybackFinished();
+            }
         }
     });
 
@@ -532,14 +537,18 @@ void LiveSessionController::tick() {
     recordTickDurationUs(micros() - t0Us);
 }
 
-bool LiveSessionController::sendTextMessage(const String& text) {
+bool LiveSessionController::sendTextMessage(const String& text, uint32_t speechId) {
     if (!_provider || !_provider->isConnected() || !_provider->isSetupComplete()) {
         return false;
     }
 
     _turnActive.store(true, std::memory_order_release);
     _turnCancelled.store(false, std::memory_order_release);
-    _currentTurnId++;
+    if (speechId != 0) {
+        _currentTurnId = speechId;
+    } else {
+        _currentTurnId++;
+    }
     _turnCompleteReceived = false;
     _turnCompletedLogged = false;
     _audioStartedForTurn = false;
@@ -554,6 +563,7 @@ bool LiveSessionController::sendTextMessage(const String& text) {
 
     if (_player) {
         _player->reset();
+        _player->setPlaybackId(speechId != 0 ? speechId : (uint32_t)_currentTurnId);
         if (_player->getAudioOutput()) {
             _player->getAudioOutput()->resetTurnMetrics();
         }
