@@ -28,6 +28,37 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.5] - 2026-11-11 (Integrated Voice Pipeline)
+
+Mise à niveau majeure introduisant l'orchestrateur centralisé `IntegratedVoicePipeline`, permettant de construire des applications vocales complètes sans devoir programmer manuellement la coordination entre STT, TTS, Voice UX, ToolRegistry et les fournisseurs d'IA (Gemini Live / OpenAI Realtime).
+
+### 1. Nouveau Module `IntegratedVoicePipeline`
+- **Orchestration Centralisée de Tour Vocal** : Machine à états finis séquentielle à 12 états (`IDLE`, `READY`, `LISTENING`, `TRANSCRIBING`, `ROUTING`, `LOCAL_PROCESSING`, `TOOL_EXECUTING`, `WAITING_CONFIRMATION`, `AI_PROCESSING`, `SPEAKING`, `STOPPING`, `ERROR`).
+- **Règle A (Un Seul Moteur Audio)** : Réutilisation directe de `VoxCoreVoice` sans duplication de microphone, player, tâche FreeRTOS ou buffer PCM.
+- **Règle B & C (Un Seul Tour Actif & Zéro Double Exécution)** : Corrélation monotone de bout en bout (`turnId` et `speechId`), rejet des notifications tardives et résiduelles.
+- **Support des Intentions Voice UX Locales** : Intégration transparente de `TextGate`, `VoiceIntentRouter` et `ReplyMemory` (commandes conversationnelles `STOP`, `REPEAT`, `PREVIOUS`, `PAUSE`, `RESUME`).
+- **En-têtes Publiques** : `#include <IntegratedVoicePipeline.h>` et `#include <core/pipeline/IntegratedVoicePipeline.h>`.
+
+### 2. Nouveau Module `VoiceCommandDispatcher`
+- **Liaison Déterministe Parole -> Commandes Locales** : Normalisation UTF-8 en français (minuscules, suppression accents, ponctuation, espaces multiples, suppression formules de politesse).
+- **Extraction Typée des Paramètres** : Extraction automatique des arguments entiers et flottants à partir des formulations vocales.
+- **Validation Sécuritaire ToolRegistry** : Respect strict des politiques `READ_ONLY`, `WRITE` et `SENSITIVE`.
+
+### 3. Routage Vocal vers l'IA (`askAi`)
+- **Méthode `askAi(question)` dans `VoxCoreVoice` & `VoiceKit`** : Permet de soumettre une question conversationnelle à l'IA sans préfixe directif de répétition TTS (`promptPrefix`).
+- **Mémorisation dans `ReplyMemory`** : La réponse de l'assistant IA est enregistrée dans l'historique conversationnel local uniquement après restitution vocale complète.
+
+### 4. Gestion Robuste des Actions Sensibles (`SENSITIVE`)
+- **Cycle de Confirmation Sécurisé** : Jeton cryptographique à usage unique, expiration configurable (`confirmationTimeoutMs`), protection anti-rejeu.
+- **Interface Utilisateur CoreS3 & Annonce Vocale** : Événement explicite `onConfirmationRequired()` permettant d'afficher une boîte de dialogue modale sur l'écran tactile sans bloquer la boucle coopérative.
+
+### 5. Exemple de Référence et Validation
+- **Exemple `examples/IntegratedVoiceDemo`** : Application complète pour M5Stack CoreS3 avec LVGL 9 (320x240 LCD tactile), 3 outils locaux + 1 outil sensible avec confirmation à l'écran, PTT et STOP.
+- **Suite de Tests 144** : 10 tests obligatoires (A à J) validant l'ensemble des scénarios nominaux, limites, erreurs, concurrence et anti-rejeu.
+- **Bilan Global** : 2945 tests automatisés réussis sur 2945 (100% de succès), zéro régression.
+
+---
+
 ## [0.6.4.3.2] - 2026-11-11 (Corrective — Event Correlation : Corrélation Asynchrone STT, TTS, STOP & Statuts Terminaux)
 
 Version corrective de stabilisation garantissant l'origine réelle et la propagation de bout en bout des identifiants d'opérations asynchrones STT et TTS, éliminant définitivement la lecture de variables globales actives dans l'application, et verrouillant le cycle de vie des actions.

@@ -404,6 +404,9 @@ struct VoiceKitConfig {
     // Prefixe de consigne pour reproduction mot a mot (TTS)
     String promptPrefix = "Prononce exactement et uniquement ce texte : ";
 
+    // Prefixe de consigne pour requete IA (v0.6.5)
+    String aiPromptPrefix = "Reponds brievement et directement en francais en une ou deux phrases : ";
+
     // Mode Wi-Fi
     WiFiMode wifiMode = WiFiMode::EXTERNAL_WIFI;
     String wifiSSID = "";

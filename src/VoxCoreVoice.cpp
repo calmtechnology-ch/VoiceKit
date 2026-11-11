@@ -283,10 +283,12 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         }
     });
 
-    // Écouteur de transcription de sortie (Mode conversation)
+    // Écouteur de transcription de sortie (Mode conversation et requetes IA v0.6.5)
     _session.setOnOutputTranscription([this](const String& text) {
         if (_conversationEnabled) {
             _conversationController.handleAssistantTranscription(text);
+        } else if (_onAssistantText) {
+            _onAssistantText(text);
         }
     });
 
@@ -447,12 +449,16 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
             _onSpeechFinished();
         }
 
-        // Dépilement de la requête TTS suivante en file FIFO
+        // Dépilement de la requête TTS / IA suivante en file FIFO
         if (!_textQueue.empty()) {
             SpeechQueueItem nextItem = _textQueue.front();
             _textQueue.pop();
             _activeSpeechId = nextItem.speechId;
-            dispatchSpeech(nextItem.text);
+            if (nextItem.isAiQuestion) {
+                dispatchAiQuestion(nextItem.text);
+            } else {
+                dispatchSpeech(nextItem.text);
+            }
         }
     });
 
@@ -686,14 +692,19 @@ void VoxCoreVoice::update() {
         }
     }
 
-    // 5. Traitement des requêtes TTS en attente
+    // 5. Traitement des requêtes TTS / IA en attente
     if (!_pendingText.isEmpty()) {
         if (_session.getState() == LiveSessionState::CONNECTED && !isListening() && !isTranscribing()) {
             String textToSay = _pendingText;
+            bool isAi = _pendingSpeech.isAiQuestion;
             _activeSpeechId = _pendingSpeech.speechId;
             _pendingSpeech = SpeechQueueItem();
             _pendingText = "";
-            dispatchSpeech(textToSay);
+            if (isAi) {
+                dispatchAiQuestion(textToSay);
+            } else {
+                dispatchSpeech(textToSay);
+            }
         }
     }
 
@@ -855,6 +866,125 @@ bool VoxCoreVoice::say(const String& text) {
 bool VoxCoreVoice::dispatchSpeech(const String& text) {
     String prompt = _config.promptPrefix + text;
     Serial.printf("[VoiceKit] Prononciation : \"%s\"\n", text.c_str());
+    _latencyMetrics.reset();
+    _latencyMetrics.turnStartedMs = millis();
+    if (_latencyMetrics.turnStartedMs == 0) _latencyMetrics.turnStartedMs = 1;
+    bool ok = _session.sendTextMessage(prompt, _activeSpeechId);
+    if (!ok) {
+        _lastError = "Echec envoi message texte vers service vocal";
+        setState(VoiceState::ERROR_STATE);
+        if (_onError) _onError(_lastError);
+        return false;
+    }
+    _latencyMetrics.activityEndSentMs = _activeProvider ? _activeProvider->getActivityEndSentMs() : 0;
+    if (_latencyMetrics.activityEndSentMs == 0) {
+        _latencyMetrics.activityEndSentMs = millis();
+        if (_latencyMetrics.activityEndSentMs == 0) _latencyMetrics.activityEndSentMs = 1;
+    }
+    return true;
+}
+
+bool VoxCoreVoice::askAi(const String& question) {
+    if (question.isEmpty()) {
+        _lastError = "Question vide";
+        return false;
+    }
+
+    _lastError = "";
+    uint32_t speechId = ++_speechGeneration;
+
+    // Si le moteur est occupe
+    if (isBusy()) {
+        switch (_config.queuePolicy) {
+            case QueuePolicy::REJECT_IF_BUSY:
+            case QueuePolicy::QUEUE_FIFO:
+                _lastError = "Moteur vocal occupe";
+                Serial.println("[VoiceKit] askAi() refuse : moteur actuellement occupe");
+                return false;
+
+            case QueuePolicy::INTERRUPT_CURRENT:
+                Serial.println("[VoiceKit] askAi() interruption demandee de l'activite en cours");
+                stop();
+                break;
+        }
+    }
+
+    // Verification des prerequis reseau
+    if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
+        if (!_wifi.isConnected()) {
+            _lastError = "Wi-Fi non connecte";
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+        if (!_wifi.isTimeSynced()) {
+            _lastError = "Horloge NTP non synchronisee (requise pour TLS)";
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+    } else {
+        if (WiFi.status() != WL_CONNECTED) {
+            _lastError = "Wi-Fi hote non connecte";
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+        if (!isSystemTimeValid()) {
+            _lastError = "Heure systeme non synchronisee (requise pour TLS)";
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+    }
+
+    // Rearmer la restitution haut-parleur (et suspendre Wake Word pour eviter conflit I2S / larsen)
+    if (_wakeWordManager.isEnabled() &&
+        (_wakeWordManager.getState() == WakeWordState::ARMED ||
+         _wakeWordManager.getState() == WakeWordState::DETECTED ||
+         _streamer.isLocalCapture())) {
+        _wakeWordManager.notifyVoiceActivity(true, true);
+        if (_wakeWordManager.isError()) {
+            _lastError = _wakeWordManager.getLastError();
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+    } else if (_streamer.isLocalCapture()) {
+        if (!_streamer.stopLocalCapture()) {
+            _lastError = _streamer.getLastError();
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+    }
+    _player.setPlaybackAllowed(true);
+
+    // Si la session est prete, envoi direct
+    if (_session.getState() == LiveSessionState::CONNECTED) {
+        _activeSpeechId = speechId;
+        return dispatchAiQuestion(question);
+    }
+
+    // Si la session est en cours de connexion ou de reconnexion
+    if (_session.getState() == LiveSessionState::CONNECTING || _state == VoiceState::CONNECTING_SERVICE) {
+        Serial.printf("[VoiceKit] Connexion en cours -> requete IA mise en attente (speechId=%u)\n", (unsigned)speechId);
+        _pendingSpeech = {question, speechId, true};
+        _pendingText = question;
+        return true;
+    }
+
+    // Session deconnectee ou en erreur : tentative d'activation
+    Serial.printf("[VoiceKit] Session deconnectee -> Activation de session pour IA... (speechId=%u)\n", (unsigned)speechId);
+    _pendingSpeech = {question, speechId, true};
+    _pendingText = question;
+    _connectingStartTimeMs = millis();
+    setState(VoiceState::CONNECTING_SERVICE);
+    return _session.activate();
+}
+
+bool VoxCoreVoice::dispatchAiQuestion(const String& question) {
+    String prompt = question;
+    if (!_conversationEnabled && _config.aiPromptPrefix.length() > 0) {
+        prompt = _config.aiPromptPrefix + question;
+    }
+    Serial.printf("[VoiceKit] Requete IA transmise : \"%s\"\n", question.c_str());
     _latencyMetrics.reset();
     _latencyMetrics.turnStartedMs = millis();
     if (_latencyMetrics.turnStartedMs == 0) _latencyMetrics.turnStartedMs = 1;

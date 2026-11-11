@@ -1,7 +1,7 @@
 {
   "name": "VoiceKit",
-  "version": "0.6.4.3.2",
-  "description": "Bibliotheque C++/Arduino multi-fournisseurs (Gemini Live & OpenAI Realtime) avec Pont Vocal Temps Reel fiabilise (Voice UX Live Bridge v0.6.4.3.2 Corrective Event Correlation), Fondation Voice UX locale (Voice UX Foundation v0.6.4.1), Registre Local d'Outils securise (Local Tool Registry v0.6.4.3.1), synthese vocale (TTS), reconnaissance vocale (STT), dictee continue (ContinuousSTT), conversation bidirectionnelle native, fondation locale de detection de mot de reveil (Wake Word Foundation hors ligne stabilisee), conversation mains libres declenchee par « Bonjour ESP » (WakeWordConversationController, WakeNet configurable) et moteur VoxCore stabilise pour M5Stack CoreS3 — v0.6.4.3.2",
+  "version": "0.6.5",
+  "description": "Bibliotheque C++/Arduino multi-fournisseurs (Gemini Live & OpenAI Realtime) avec Pipeline Vocal Integre (Integrated Voice Pipeline v0.6.5), Routeur de Commandes Locales (VoiceCommandDispatcher), Fondation Voice UX locale (Voice UX Foundation v0.6.4.1), Registre Local d'Outils securise (Local Tool Registry v0.6.4.3.1), synthese vocale (TTS), reconnaissance vocale (STT), dictee continue (ContinuousSTT), conversation bidirectionnelle native, fondation locale de detection de mot de reveil (Wake Word Foundation hors ligne stabilisee), conversation mains libres declenchee par « Bonjour ESP » et moteur VoxCore stabilise pour M5Stack CoreS3 — v0.6.5",
   "keywords": [
     "voicekit",
     "voxcore",

@@ -158,6 +158,13 @@ public:
     bool say(const String& text);
 
     /**
+     * @brief Transmet une question ou une consigne conversationnelle à l'IA (v0.6.5).
+     * @param question Question à transmettre au fournisseur IA (Gemini / OpenAI).
+     * @return true si acceptée, false si rejetée.
+     */
+    bool askAi(const String& question) { return _voice.askAi(question); }
+
+    /**
      * @brief Indique si le haut-parleur est en cours de restitution sonore.
      */
     bool isSpeaking() const;
@@ -571,6 +578,7 @@ public:
     uint32_t getPendingTranscriptionTurnId() const { return _voice.getPendingTranscriptionTurnId(); }
     uint32_t getLastCaptureTurnId() const { return _voice.getLastCaptureTurnId(); }
     const String& getLastFinalText() const { return _voice.getLastFinalText(); }
+    const String& getLastAssistantText() const { return _voice.getLastAssistantText(); }
 
     /**
      * @brief Callback sur blocs audio PCM 16 kHz acquis (32 ms).

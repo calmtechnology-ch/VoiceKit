@@ -1,13 +1,45 @@
-# VoiceKit v0.6.4.3.2 — Corrective Event Correlation : Corrélation Asynchrone STT, TTS, STOP & Statuts Terminaux
+# VoiceKit v0.6.5 — Integrated Voice Pipeline
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
 [![ESP32-S3](https://img.shields.io/badge/Target-M5Stack%20CoreS3%20(ESP32--S3)-blue.svg)](https://docs.m5stack.com/en/core/CoreS3)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)**, de **conversation vocale bidirectionnelle native (Mode B)**, de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** et de **registre local d'outils (Local Tool Registry)** pour **M5Stack CoreS3** (ESP32-S3).
+Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **pipeline vocal intégré autonome (`IntegratedVoicePipeline`)**, de **dictée vocale continue mains libres (ContinuousSTT)**, de **conversation vocale bidirectionnelle native (Mode B)**, de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** et de **registre local d'outils (Local Tool Registry)** pour **M5Stack CoreS3** (ESP32-S3).
 
 Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)** supportant à la fois **Google Gemini Live** (moteur par défaut, 100% rétrocompatible) et **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`), construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
+
+---
+
+### Nouveautés majeures de la v0.6.5 (Integrated Voice Pipeline)
+
+La version **v0.6.5** transforme VoiceKit en une bibliothèque de haut niveau permettant de construire des applications vocales complètes sans devoir programmer manuellement la coordination entre STT, TTS, Voice UX, ToolRegistry et les fournisseurs d'IA :
+
+1. **Orchestrateur Centralisé `IntegratedVoicePipeline` (`src/core/pipeline/IntegratedVoicePipeline.h`)** :
+   - Prise en charge intégrale du cycle de vie du tour vocal en mode séquentiel strict (Règle B : un seul tour actif à la fois).
+   - Machine à états déterministe à 12 états : `IDLE`, `READY`, `LISTENING`, `TRANSCRIBING`, `ROUTING`, `LOCAL_PROCESSING`, `TOOL_EXECUTING`, `WAITING_CONFIRMATION`, `AI_PROCESSING`, `SPEAKING`, `STOPPING`, `ERROR`.
+   - Règle A (Un seul moteur audio) : réutilisation directe de `VoxCoreVoice` sans instancier un second gestionnaire de micro, ni second lecteur ou tâche audio FreeRTOS.
+   - Règle C (Zéro double exécution) : corrélation monotone stricte (`turnId` et `speechId`), rejet sans appel des transcriptions tardives ou résiduelles.
+
+2. **Liaison Déterministe Parole $\to$ Outils `VoiceCommandDispatcher` (`src/core/pipeline/VoiceCommandDispatcher.h`)** :
+   - Normalisation avancée du français parlé (casse, accents, ponctuation, espaces multiples, retrait automatique des formules de politesse « s'il te plaît », « merci », etc.).
+   - Extraction automatique des paramètres typés (entiers, flottants) à partir de la voix.
+   - Respect strict des politiques de sécurité `ToolRegistry` (`READ_ONLY`, `WRITE`, `SENSITIVE`).
+
+3. **Transmission Conversationnelle à l'IA (`askAi`)** :
+   - Routage automatique des questions générales sans commande locale vers Gemini Live ou OpenAI Realtime.
+   - Méthode `askAi(question)` évitant l'écueil de `say()` qui forçait la répétition littérale du texte utilisateur via `promptPrefix`.
+   - Mémorisation de la réponse dans `ReplyMemory` après restitution vocale complète.
+
+4. **Sécurité et Confirmation Visuelle sur M5Stack CoreS3** :
+   - Boîte de dialogue modale LVGL 9 pour les commandes `SENSITIVE` déclenchée par l'événement `onConfirmationRequired()`.
+   - Protection anti-rejeu par jeton unique et expiration temporelle (`confirmationTimeoutMs`).
+
+5. **Exemple Complet `IntegratedVoiceDemo` et Tests à 100%** :
+   - Exemple de référence `examples/IntegratedVoiceDemo` avec LVGL 9 sur CoreS3 (3 outils locaux, 1 outil sensible, PTT, STOP).
+   - Suite 144 validant 10 tests obligatoires de bout en bout (A à J). Bilan global : **2945 tests réussis sur 2945 (100% de succès)**.
+
+---
 
 La version **v0.6.4.3.2** est une mise à jour exclusivement corrective (« Event Correlation ») qui fiabilise l'origine réelle et la propagation des identifiants d'opérations asynchrones STT et TTS, élimine définitivement les variables globales actives côté application et verrouille le cycle de vie des statuts terminaux :
 - **Corrélation Réelle STT & TTS de Bout en Bout (`VoxCoreVoice`, `VoiceUxLiveBridge`, `VoiceUxLiveDemo`)** :

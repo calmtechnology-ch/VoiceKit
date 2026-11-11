@@ -73,6 +73,14 @@ public:
     bool say(const String& text);
 
     /**
+     * @brief Transmet une question ou requête conversationnelle à l'IA (v0.6.5).
+     *        Contrairement à say(), la requête n'est pas préfixée par la consigne de répétition TTS mot à mot.
+     * @param question Question ou consigne destinée au fournisseur d'IA (Gemini / OpenAI).
+     * @return true si la requête a été acceptée / transmise, false si rejetée.
+     */
+    bool askAi(const String& question);
+
+    /**
      * @brief Traitement périodique obligatoire. À appeler régulièrement dans loop().
      */
     void update();
@@ -279,6 +287,12 @@ public:
      */
     uint32_t getLastCaptureTurnId() const { return _sttTurnId; }
     const String& getLastFinalText() const { return _lastFinalText; }
+    const String& getLastAssistantText() const { return _session.getLastAssistantText(); }
+
+    /**
+     * @brief Injecte ou simule une transcription entrante (partielle ou finale).
+     */
+    void handleIncomingTranscription(const String& text, bool isFinal);
 
     /**
      * @brief Retourne le niveau RMS instantané du dernier bloc micro PCM 16 kHz capturé.
@@ -503,7 +517,7 @@ private:
     void updateConnectionMetrics();
     void setState(VoiceState newState);
     bool dispatchSpeech(const String& text);
-    void handleIncomingTranscription(const String& text, bool isFinal);
+    bool dispatchAiQuestion(const String& question);
 
     VoiceKitConfig _config;
     VoiceState _state = VoiceState::UNINITIALIZED;
@@ -537,6 +551,7 @@ private:
     struct SpeechQueueItem {
         String text;
         uint32_t speechId = 0;
+        bool isAiQuestion = false;
     };
     std::queue<SpeechQueueItem> _textQueue;
     SpeechQueueItem _pendingSpeech;

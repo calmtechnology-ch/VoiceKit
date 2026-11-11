@@ -3789,8 +3789,8 @@ void test_v0531_facade_modes_transitions_and_resilience() {
     cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
     vk.begin(cfg);
 
-    // 1. Constante de version alignée sur v0.6.4.3.2
-    TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.4.3.2") == 0, "VOICEKIT_VERSION est strictement v0.6.4.3.2");
+    // 1. Constante de version alignée sur v0.6.5
+    TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.5") == 0, "VOICEKIT_VERSION est strictement v0.6.5");
 
     // 2. Mode par défaut IDLE
     TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode initial = IDLE");
@@ -8485,6 +8485,8 @@ void test_v06432_final_event_correlation_validation() {
     }
 }
 
+#include "test_pipeline_suites.h"
+
 // =============================================================================
 // MAIN TEST RUNNER
 // =============================================================================
@@ -8667,6 +8669,9 @@ int main() {
 
     // Suite finale VoiceKit v0.6.4.3.2 — Final Event Correlation Validation (Tests A, B, C, D, E & F)
     test_v06432_final_event_correlation_validation();
+
+    // Suite VoiceKit v0.6.5 — Integrated Voice Pipeline (Tests A, B, C, D, E, F, G, H, I & J)
+    run_pipeline_v065_tests();
 
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;
