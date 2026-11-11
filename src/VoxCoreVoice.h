@@ -40,6 +40,9 @@ public:
     using ErrorCallback = std::function<void(const String& error)>;
     using StateCallback = std::function<void(VoiceState state)>;
     using TranscriptionCallback = std::function<void(const String& text, bool isFinal)>;
+    using TranscriptionWithTurnCallback = std::function<void(const String& text, bool isFinal, uint32_t turnId)>;
+    using SpeechFinishedCallback = std::function<void(uint32_t speechId)>;
+    using ListeningTurnCallback = std::function<void(uint32_t turnId)>;
     using AssistantTextCallback = std::function<void(const String& text)>;
     using TurnFinishedCallback = std::function<void(const ConversationMetrics& metrics)>;
     using WakeWordCallback = WakeWordManager::WakeWordDetectedCallback;
@@ -118,8 +121,15 @@ public:
     void onReady(VoidCallback cb) { _onReady = std::move(cb); }
     void onSpeechStarted(VoidCallback cb) { _onSpeechStarted = std::move(cb); }
     void onSpeechFinished(VoidCallback cb) { _onSpeechFinished = std::move(cb); }
+    void onSpeechFinished(SpeechFinishedCallback cb) { _onSpeechFinishedWithId = std::move(cb); }
+    void onSpeechFinishedWithId(SpeechFinishedCallback cb) { _onSpeechFinishedWithId = std::move(cb); }
     void onError(ErrorCallback cb) { _onError = std::move(cb); }
     void onStateChanged(StateCallback cb) { _onStateChanged = std::move(cb); }
+
+    /**
+     * @brief Retourne l'identifiant de la restitution TTS actuellement active (0 si aucune).
+     */
+    uint32_t getActiveSpeechId() const { return _activeSpeechId; }
 
     // =========================================================================
     // API Configuration Vocale & Profils (v0.4.1 / v0.4.1.1)
@@ -238,16 +248,35 @@ public:
      * @param cb Callback recevant le texte transcrit et le flag isFinal.
      */
     void onTranscription(TranscriptionCallback cb) { _onTranscription = std::move(cb); }
+    void onTranscription(TranscriptionWithTurnCallback cb) { _onTranscriptionWithTurn = std::move(cb); }
+    void onTranscriptionWithTurnId(TranscriptionWithTurnCallback cb) { _onTranscriptionWithTurn = std::move(cb); }
 
     /**
      * @brief Callback déclenché au début effectif de l'écoute microphone.
      */
     void onListeningStarted(VoidCallback cb) { _onListeningStarted = std::move(cb); }
+    void onListeningStarted(ListeningTurnCallback cb) { _onListeningStartedWithTurn = std::move(cb); }
+    void onListeningStartedWithTurnId(ListeningTurnCallback cb) { _onListeningStartedWithTurn = std::move(cb); }
 
     /**
      * @brief Callback déclenché à la fin de l'acquisition microphone (relâchement bouton).
      */
     void onListeningFinished(VoidCallback cb) { _onListeningFinished = std::move(cb); }
+
+    /**
+     * @brief Retourne l'identifiant du tour de capture STT en cours d'enregistrement (0 si inactif).
+     */
+    uint32_t getActiveCaptureTurnId() const { return _activeCaptureTurnId; }
+
+    /**
+     * @brief Retourne l'identifiant du tour de capture en attente de transcription finale (0 si inactif).
+     */
+    uint32_t getPendingTranscriptionTurnId() const { return _pendingTranscriptionTurnId; }
+
+    /**
+     * @brief Retourne le dernier identifiant de tour STT attribué.
+     */
+    uint32_t getLastCaptureTurnId() const { return _sttTurnId; }
 
     /**
      * @brief Retourne le niveau RMS instantané du dernier bloc micro PCM 16 kHz capturé.
@@ -503,13 +532,27 @@ private:
     WakeWordConversationController _wakeWordConversationController;
     bool _conversationEnabled = false;
 
-    std::queue<String> _textQueue;
+    struct SpeechQueueItem {
+        String text;
+        uint32_t speechId = 0;
+    };
+    std::queue<SpeechQueueItem> _textQueue;
+    SpeechQueueItem _pendingSpeech;
     String _pendingText = "";
 
     uint32_t _connectingStartTimeMs = 0;
     uint32_t _waitingStartTimeMs = 0;
 
-    // États STT internes
+    // États STT internes et corrélations d'opérations (v0.6.4.3.2)
+    uint32_t _sttTurnId = 0;
+    uint32_t _activeCaptureTurnId = 0;
+    uint32_t _pendingTranscriptionTurnId = 0;
+    uint32_t _cancelledCaptureTurnId = 0;
+
+    // États TTS internes et corrélations d'opérations (v0.6.4.3.2)
+    uint32_t _speechGeneration = 0;
+    uint32_t _activeSpeechId = 0;
+
     bool _transcriptionPending = false;
     bool _finalTranscriptionReceived = false;
     uint32_t _stopListeningTimeMs = 0;
@@ -532,10 +575,13 @@ private:
     VoidCallback _onReady;
     VoidCallback _onSpeechStarted;
     VoidCallback _onSpeechFinished;
+    SpeechFinishedCallback _onSpeechFinishedWithId;
     ErrorCallback _onError;
     StateCallback _onStateChanged;
     TranscriptionCallback _onTranscription;
+    TranscriptionWithTurnCallback _onTranscriptionWithTurn;
     VoidCallback _onListeningStarted;
+    ListeningTurnCallback _onListeningStartedWithTurn;
     VoidCallback _onListeningFinished;
     TranscriptionCallback _onUserText;
     AssistantTextCallback _onAssistantText;

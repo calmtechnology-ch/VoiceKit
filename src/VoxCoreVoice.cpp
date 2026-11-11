@@ -32,8 +32,11 @@ VoxCoreVoice::~VoxCoreVoice() {
     _onError = nullptr;
     _onSpeechStarted = nullptr;
     _onSpeechFinished = nullptr;
+    _onSpeechFinishedWithId = nullptr;
     _onTranscription = nullptr;
+    _onTranscriptionWithTurn = nullptr;
     _onListeningStarted = nullptr;
+    _onListeningStartedWithTurn = nullptr;
     _onListeningFinished = nullptr;
     _onUserText = nullptr;
     _onAssistantText = nullptr;
@@ -422,16 +425,22 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
             _latencyMetrics.playbackFinishedMs = millis();
             if (_latencyMetrics.playbackFinishedMs == 0) _latencyMetrics.playbackFinishedMs = 1;
         }
+        uint32_t finishedId = _activeSpeechId;
+        _activeSpeechId = 0;
         setState(VoiceState::READY);
+        if (_onSpeechFinishedWithId && finishedId > 0) {
+            _onSpeechFinishedWithId(finishedId);
+        }
         if (_onSpeechFinished) {
             _onSpeechFinished();
         }
 
         // Dépilement de la requête TTS suivante en file FIFO
         if (!_textQueue.empty()) {
-            String nextText = _textQueue.front();
+            SpeechQueueItem nextItem = _textQueue.front();
             _textQueue.pop();
-            dispatchSpeech(nextText);
+            _activeSpeechId = nextItem.speechId;
+            dispatchSpeech(nextItem.text);
         }
     });
 
@@ -665,6 +674,8 @@ void VoxCoreVoice::update() {
     if (!_pendingText.isEmpty()) {
         if (_session.getState() == LiveSessionState::CONNECTED && !isListening() && !isTranscribing()) {
             String textToSay = _pendingText;
+            _activeSpeechId = _pendingSpeech.speechId;
+            _pendingSpeech = SpeechQueueItem();
             _pendingText = "";
             dispatchSpeech(textToSay);
         }
@@ -727,6 +738,7 @@ bool VoxCoreVoice::say(const String& text) {
     }
 
     _lastError = "";
+    uint32_t speechId = ++_speechGeneration;
 
     // Si le moteur est occupé
     if (isBusy()) {
@@ -747,8 +759,9 @@ bool VoxCoreVoice::say(const String& text) {
                     Serial.println("[VoiceKit] say() refuse : file d'attente saturee");
                     return false;
                 }
-                _textQueue.push(text);
-                Serial.printf("[VoiceKit] say() mis en file d'attente (position %u)\n", (unsigned)_textQueue.size());
+                _textQueue.push({text, speechId});
+                Serial.printf("[VoiceKit] say() mis en file d'attente (position %u, speechId=%u)\n",
+                              (unsigned)_textQueue.size(), (unsigned)speechId);
                 return true;
         }
     }
@@ -802,18 +815,21 @@ bool VoxCoreVoice::say(const String& text) {
 
     // Si la session est prête, envoi direct
     if (_session.getState() == LiveSessionState::CONNECTED) {
+        _activeSpeechId = speechId;
         return dispatchSpeech(text);
     }
 
     // Si la session est en cours de connexion ou de reconnexion
     if (_session.getState() == LiveSessionState::CONNECTING || _state == VoiceState::CONNECTING_SERVICE) {
-        Serial.println("[VoiceKit] Connexion en cours -> requete mise en attente");
+        Serial.printf("[VoiceKit] Connexion en cours -> requete mise en attente (speechId=%u)\n", (unsigned)speechId);
+        _pendingSpeech = {text, speechId};
         _pendingText = text;
         return true;
     }
 
     // Session déconnectée ou en erreur : tentative d'activation
-    Serial.println("[VoiceKit] Session deconnectee -> Activation de session...");
+    Serial.printf("[VoiceKit] Session deconnectee -> Activation de session... (speechId=%u)\n", (unsigned)speechId);
+    _pendingSpeech = {text, speechId};
     _pendingText = text;
     _connectingStartTimeMs = millis();
     setState(VoiceState::CONNECTING_SERVICE);
@@ -850,11 +866,16 @@ void VoxCoreVoice::stop() {
         _conversationController.requestStop();
     }
     _pendingText = "";
+    _pendingSpeech = SpeechQueueItem();
+    _activeSpeechId = 0;
     while (!_textQueue.empty()) {
         _textQueue.pop();
     }
     if (isListening() || isTranscribing()) {
         _streamer.cancel();
+        _cancelledCaptureTurnId = (_activeCaptureTurnId != 0) ? _activeCaptureTurnId : _pendingTranscriptionTurnId;
+        _activeCaptureTurnId = 0;
+        _pendingTranscriptionTurnId = 0;
         _transcriptionPending = false;
         _finalTranscriptionReceived = false;
     }
@@ -1200,6 +1221,10 @@ bool VoxCoreVoice::startListening() {
     }
 
     // 4. Réinitialisation des états de transcription pour ce tour
+    _sttTurnId++;
+    _activeCaptureTurnId = _sttTurnId;
+    _pendingTranscriptionTurnId = 0;
+    _cancelledCaptureTurnId = 0;
     _finalTranscriptionReceived = false;
     _transcriptionPending = false;
     _lastInterimText = "";
@@ -1214,6 +1239,7 @@ bool VoxCoreVoice::startListening() {
     if (!_streamer.start(_activeProvider)) {
         _lastError = _streamer.getLastError();
         Serial.printf("[VoiceKit] ERREUR startListening() : %s\n", _lastError.c_str());
+        _activeCaptureTurnId = 0;
         _player.setPlaybackAllowed(true);
         setState(VoiceState::ERROR_STATE);
         if (_onError) _onError(_lastError);
@@ -1221,10 +1247,14 @@ bool VoxCoreVoice::startListening() {
     }
 
     setState(VoiceState::LISTENING);
+    if (_onListeningStartedWithTurn) {
+        _onListeningStartedWithTurn(_activeCaptureTurnId);
+    }
     if (_onListeningStarted) {
         _onListeningStarted();
     }
-    Serial.println("[VoiceKit] startListening() : Acquisition microphone et streaming actifs");
+    Serial.printf("[VoiceKit] startListening() : Acquisition microphone et streaming actifs (turnId=%u)\n",
+                  (unsigned)_activeCaptureTurnId);
     return true;
 }
 
@@ -1237,8 +1267,11 @@ bool VoxCoreVoice::stopListening() {
         return false;
     }
 
-    Serial.println("[VoiceKit] stopListening() : Arret capture micro et envoi de activityEnd...");
+    Serial.printf("[VoiceKit] stopListening() : Arret capture micro et envoi de activityEnd (turnId=%u)...\n",
+                  (unsigned)_activeCaptureTurnId);
     bool stopped = _streamer.stop();
+    _pendingTranscriptionTurnId = _activeCaptureTurnId;
+    _activeCaptureTurnId = 0;
     _transcriptionPending = true;
     _stopListeningTimeMs = millis();
     if (_stopListeningTimeMs == 0) _stopListeningTimeMs = 1;
@@ -1270,6 +1303,9 @@ void VoxCoreVoice::cancelListening() {
 
     Serial.println("[VoiceKit] cancelListening() : Annulation ecoute sans transcription");
     _streamer.cancel();
+    _cancelledCaptureTurnId = (_activeCaptureTurnId != 0) ? _activeCaptureTurnId : _pendingTranscriptionTurnId;
+    _activeCaptureTurnId = 0;
+    _pendingTranscriptionTurnId = 0;
     _transcriptionPending = false;
     _finalTranscriptionReceived = false;
     _lastInterimText = "";
@@ -1302,10 +1338,22 @@ void VoxCoreVoice::handleIncomingTranscription(const String& text, bool isFinal)
             if (_latencyMetrics.firstResponseReceivedMs == 0) _latencyMetrics.firstResponseReceivedMs = 1;
         }
     }
+
+    uint32_t originTurnId = 0;
+    if (_activeCaptureTurnId != 0) {
+        originTurnId = _activeCaptureTurnId;
+    } else if (_pendingTranscriptionTurnId != 0) {
+        originTurnId = _pendingTranscriptionTurnId;
+    } else {
+        originTurnId = _cancelledCaptureTurnId;
+    }
+
     if (isFinal) {
+        _pendingTranscriptionTurnId = 0;
         _latencyMetrics.playbackFinishedMs = millis();
         if (_latencyMetrics.playbackFinishedMs == 0) _latencyMetrics.playbackFinishedMs = 1;
-        Serial.printf("[VoiceKit] Transcription FINALE recue : \"%s\"\n", text.c_str());
+        Serial.printf("[VoiceKit] Transcription FINALE recue (turnId=%u) : \"%s\"\n",
+                      (unsigned)originTurnId, text.c_str());
         _finalTranscriptionReceived = true;
         _transcriptionPending = false;
         _lastFinalText = text;
@@ -1316,14 +1364,20 @@ void VoxCoreVoice::handleIncomingTranscription(const String& text, bool isFinal)
                 setState(VoiceState::READY);
             }
             bool busyForWake = isBusy() || isSpeaking() || _wakeWordConversationController.isSessionInProgress();
-        _wakeWordManager.notifyVoiceActivity(busyForWake, isSpeaking());
+            _wakeWordManager.notifyVoiceActivity(busyForWake, isSpeaking());
         }
 
+        if (_onTranscriptionWithTurn) {
+            _onTranscriptionWithTurn(text, true, originTurnId);
+        }
         if (_onTranscription) {
             _onTranscription(text, true);
         }
     } else {
         _lastInterimText = text;
+        if (_onTranscriptionWithTurn) {
+            _onTranscriptionWithTurn(text, false, originTurnId);
+        }
         if (_onTranscription) {
             _onTranscription(text, false);
         }

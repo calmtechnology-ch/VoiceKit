@@ -1,4 +1,4 @@
-# VoiceKit v0.6.4.3.1 — Corrective Event Safety : Sécurisation Asynchrone STT, TTS, STOP & ToolRegistry
+# VoiceKit v0.6.4.3.2 — Corrective Event Correlation : Corrélation Asynchrone STT, TTS, STOP & Statuts Terminaux
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -8,6 +8,21 @@
 Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **dictée vocale continue mains libres (ContinuousSTT)**, de **conversation vocale bidirectionnelle native (Mode B)**, de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** et de **registre local d'outils (Local Tool Registry)** pour **M5Stack CoreS3** (ESP32-S3).
 
 Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)** supportant à la fois **Google Gemini Live** (moteur par défaut, 100% rétrocompatible) et **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`), construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
+
+La version **v0.6.4.3.2** est une mise à jour exclusivement corrective (« Event Correlation ») qui fiabilise l'origine réelle et la propagation des identifiants d'opérations asynchrones STT et TTS, élimine définitivement les variables globales actives côté application et verrouille le cycle de vie des statuts terminaux :
+- **Corrélation Réelle STT & TTS de Bout en Bout (`VoxCoreVoice`, `VoiceUxLiveBridge`, `VoiceUxLiveDemo`)** :
+  - **Élimination des Variables Globales Fragiles** : Disparition de `s_currentCaptureTurnId` et `s_currentSpeechId` de l'application. Les identifiants sont maintenant émis par le moteur `VoxCoreVoice` et acheminés directement à travers les signatures étendues (`onListeningStartedWithTurnId`, `onTranscriptionWithTurnId`, `onSpeechFinishedWithId`).
+  - **Attribution Monotone Moteur** : `startListening()` attribue un `turnId` monotone associé au tour réel d'écoute. `say()` génère un `speechId` monotone transmis jusqu'à la fin de la lecture audio par `LiveAudioPlayer`.
+  - **Invalidation par STOP** : L'appel à `stop()` réinitialise immédiatement les identifiants actifs et en attente, consignant `_cancelledCaptureTurnId` pour rejeter tout événement différé.
+- **Validation Stricte du Cycle de Vie STT (`VoiceUxLiveBridge`)** :
+  - Introduction explicite de `VoiceUxSttPhase` (`IDLE`, `LISTENING`, `TRANSCRIBING`, `COMPLETED`, `CANCELLED`).
+  - Rejet absolu de toute transcription reçue en phase `IDLE` sans capture préalable (`staleTranscriptionsIgnored`).
+  - Détection prioritaire des tours obsolètes (`turnId < _activeTurnId`) avant toute vérification de doublon.
+- **Statut Terminal Unique & Erreurs Audio (`VoiceUxLiveBridge`)** :
+  - Garantie absolue qu'une action ne reçoit qu'un seul statut terminal parmi `COMPLETED`, `REJECTED` ou `CANCELLED` (`_activeActionTerminated`).
+  - `notifyError()` termine les actions TTS actives avec `REJECTED` et les actions en attente avec `CANCELLED`, sans laisser d'action orpheline ni polluer l'historique conversationnel `ReplyMemory`.
+  - Préservation du mode `PAUSED` à travers les activations microphone PTT temporaires.
+- **Validation Matérielle & Bilan des Tests** : 2 813 tests unitaires natifs réussis (0 échec), compilation PlatformIO de l'exemple `VoiceUxLiveDemo` sur M5Stack CoreS3 (ESP32-S3) 100% réussie.
 
 La version **v0.6.4.3.1** est une mise à jour exclusivement corrective (« Event Safety ») qui fiabilise le traitement des événements asynchrones STT, TTS, STOP et la gestion du registre d'outils sans modifier l'architecture ni introduire de rupture :
 - **Sécurisation P0 des Transcriptions STT (`VoiceUxLiveBridge`)** : Corrélation par génération unique d'écoute (`_activeTurnId`), rejet systématique des transcriptions tardives après STOP ou annulation, interdiction de création implicite de nouveau tour sur paquet final sans identifiant (`turnId == 0`), rejet des deuxièmes transcriptions finales d'un même tour et réarmement déterministe lors d'une nouvelle capture.

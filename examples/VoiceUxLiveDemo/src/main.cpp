@@ -24,10 +24,6 @@
 static VoxCoreVoice s_voice;
 static VoiceUxLiveBridge s_bridge;
 
-// Générations actives pour sécurisation des événements asynchrones STT et TTS
-static uint32_t s_currentCaptureTurnId = 0;
-static uint32_t s_currentSpeechId = 0;
-
 // États et variables pour l'interface graphique M5GFX
 static bool s_needsRedraw = true;
 static bool s_touchListening = false;
@@ -91,7 +87,7 @@ static void drawUI() {
     M5.Display.fillRect(0, 0, dw, 24, M5.Display.color565(15, 30, 60));
     M5.Display.setTextSize(1);
     M5.Display.setTextColor(TFT_WHITE, M5.Display.color565(15, 30, 60));
-    M5.Display.drawString(dw >= 300 ? " VoiceKit v0.6.4.3.1 - Voice UX Live" : " VoiceKit UX Live", 4, 6);
+    M5.Display.drawString(dw >= 300 ? " VoiceKit v0.6.4.3.2 - Voice UX Live" : " VoiceKit UX Live", 4, 6);
 
     // Badge Wi-Fi
     bool wifiOk = (WiFi.status() == WL_CONNECTED);
@@ -262,7 +258,7 @@ static void drawUI() {
 // =============================================================================
 
 static void printHelp() {
-    Serial.println("\n--- Commandes de diagnostic VoiceKit v0.6.4.3.1 ---");
+    Serial.println("\n--- Commandes de diagnostic VoiceKit v0.6.4.3.2 ---");
     Serial.println("  P          : Demarrer la capture microphone");
     Serial.println("  R          : Terminer la capture microphone");
     Serial.println("  S          : STOP prioritaire");
@@ -311,8 +307,6 @@ static void handleSerialCommand(const String& line) {
         }
     } else if (first == 'S' || first == 's') {
         Serial.println("[CMD] S -> STOP prioritaire");
-        s_currentCaptureTurnId = 0;
-        s_currentSpeechId = 0;
         s_bridge.triggerPriorityStop();
         s_voice.stop();
         s_touchListening = false;
@@ -372,7 +366,7 @@ void setup() {
     delay(200);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.6.4.3.1 — Voice UX Live Demo              ");
+    Serial.println("  VoiceKit v0.6.4.3.2 — Voice UX Live Demo              ");
     Serial.println("  Pont STT -> VoiceUxController -> ReplyMemory -> TTS   ");
     Serial.println("========================================================");
 
@@ -433,10 +427,9 @@ void setup() {
         s_needsRedraw = true;
     });
 
-    s_voice.onListeningStarted([]() {
-        Serial.println("[VOICE] Capture microphone active !");
-        s_bridge.onListeningStarted();
-        s_currentCaptureTurnId = s_bridge.getActiveTurnId();
+    s_voice.onListeningStarted([](uint32_t turnId) {
+        Serial.printf("[VOICE] Capture microphone active (turnId=%u) !\n", (unsigned)turnId);
+        s_bridge.onListeningStarted(turnId);
         s_needsRedraw = true;
     });
 
@@ -446,14 +439,14 @@ void setup() {
         s_needsRedraw = true;
     });
 
-    // Réception des transcriptions STT (partielles et finales)
-    s_voice.onTranscription([](const String& text, bool isFinal) {
+    // Réception des transcriptions STT (partielles et finales) avec identifiant réel d'opération
+    s_voice.onTranscription([](const String& text, bool isFinal, uint32_t turnId) {
         if (isFinal) {
-            Serial.printf("[STT][REAL] Transcription finale (gen=%u) : %s\n", (unsigned)s_currentCaptureTurnId, text.c_str());
-            s_bridge.feedTranscription(text, true, s_currentCaptureTurnId);
+            Serial.printf("[STT][REAL] Transcription finale (turnId=%u) : %s\n", (unsigned)turnId, text.c_str());
+            s_bridge.feedTranscription(text, true, turnId);
         } else {
             Serial.printf("... [interim] %s\n", text.c_str());
-            s_bridge.feedTranscription(text, false, s_currentCaptureTurnId);
+            s_bridge.feedTranscription(text, false, turnId);
         }
         s_needsRedraw = true;
     });
@@ -463,10 +456,9 @@ void setup() {
         s_needsRedraw = true;
     });
 
-    s_voice.onSpeechFinished([]() {
-        Serial.println("[VOICE] Restitution TTS terminee.");
-        s_bridge.notifySpeechFinished(true, s_currentSpeechId);
-        s_currentSpeechId = 0;
+    s_voice.onSpeechFinished([](uint32_t speechId) {
+        Serial.printf("[VOICE] Restitution TTS terminee (speechId=%u).\n", (unsigned)speechId);
+        s_bridge.notifySpeechFinished(true, speechId);
         s_needsRedraw = true;
     });
 
@@ -522,25 +514,21 @@ void loop() {
                 if (s_bridge.canSpeak() && (s_voice.isReady() || s_voice.getState() == VoiceState::READY)) {
                     bool ok = s_voice.say(act.text);
                     if (ok) {
-                        s_bridge.notifySpeechStarted(act.text);
-                        s_currentSpeechId = s_bridge.getCurrentSpeechId();
-                        Serial.println("[VOICE] TTS demarre");
+                        uint32_t speechId = s_voice.getActiveSpeechId();
+                        s_bridge.notifySpeechStarted(act.text, speechId);
+                        Serial.printf("[VOICE] TTS demarre (speechId=%u)\n", (unsigned)speechId);
                     } else {
                         Serial.println("[ACTION][ERREUR] Echec say(), restitution refusee");
                         s_bridge.notifySpeechRefused("say() refuse par s_voice");
-                        s_currentSpeechId = 0;
                     }
                 } else {
                     Serial.println("[ACTION][REPORTE] Moteur vocal non disponible pour TTS");
                     s_bridge.notifySpeechRefused("Moteur vocal non disponible");
-                    s_currentSpeechId = 0;
                 }
                 break;
             }
             case VoiceUxBridgeActionType::STOP: {
                 Serial.println("[ACTION] Commande STOP executee");
-                s_currentCaptureTurnId = 0;
-                s_currentSpeechId = 0;
                 s_bridge.triggerPriorityStop();
                 s_voice.stop();
                 s_bridge.notifyActionCompleted();
@@ -616,8 +604,6 @@ void loop() {
     if (touch.wasPressed() && inStopArea) {
         Serial.println("[TOUCH] Appui STOP prioritaire !");
         s_touchListening = false;
-        s_currentCaptureTurnId = 0;
-        s_currentSpeechId = 0;
         s_bridge.triggerPriorityStop();
         s_voice.stop();
         s_needsRedraw = true;

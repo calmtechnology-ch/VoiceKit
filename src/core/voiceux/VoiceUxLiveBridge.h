@@ -9,7 +9,7 @@
 /**
  * @enum VoiceUxBridgeState
  * @brief Machine à états applicative pour le pont vocal temps réel.
- *        VoiceKit v0.6.4.2 — Voice UX Live Bridge
+ *        VoiceKit v0.6.4.3.2 — Voice UX Live Bridge
  */
 enum class VoiceUxBridgeState : uint8_t {
     READY = 0,          ///< Prêt pour une nouvelle écoute ou une commande
@@ -21,6 +21,33 @@ enum class VoiceUxBridgeState : uint8_t {
     PAUSED,             ///< Session en pause (requêtes conversationnelles ordinaires ignorées)
     ERROR               ///< État d'erreur non-bloquant avec récupération possible
 };
+
+/**
+ * @enum VoiceUxSttPhase
+ * @brief Phases explicites du cycle de capture et de validation STT.
+ *        VoiceKit v0.6.4.3.2 — Validation stricte de capture
+ */
+enum class VoiceUxSttPhase : uint8_t {
+    IDLE = 0,           ///< Aucune capture active ni autorisée (état de repos initial ou après achèvement)
+    LISTENING,          ///< Acquisition microphone en cours (capture ouverte via onListeningStarted)
+    TRANSCRIBING,       ///< Capture achevée (onListeningFinished), attente de transcription finale du tour
+    COMPLETED,          ///< Transcription finale reçue et traitée pour ce tour
+    CANCELLED           ///< Capture ou tour définitivement annulé (STOP prioritaire ou erreur)
+};
+
+/**
+ * @brief Convertit la phase de capture STT en chaîne lisible.
+ */
+inline const char* voiceUxSttPhaseToString(VoiceUxSttPhase phase) {
+    switch (phase) {
+        case VoiceUxSttPhase::IDLE:         return "IDLE";
+        case VoiceUxSttPhase::LISTENING:    return "LISTENING";
+        case VoiceUxSttPhase::TRANSCRIBING: return "TRANSCRIBING";
+        case VoiceUxSttPhase::COMPLETED:    return "COMPLETED";
+        case VoiceUxSttPhase::CANCELLED:    return "CANCELLED";
+        default:                            return "UNKNOWN";
+    }
+}
 
 /**
  * @brief Convertit l'état du pont en chaîne lisible.
@@ -184,9 +211,10 @@ public:
 
     /**
      * @brief Notifie le début d'une capture microphone (ex: appui PARLER).
+     * @param turnId Identifiant optionnel fourni par le moteur (0 = auto-incrémentation).
      * @return true si la capture est autorisée dans l'état courant, false sinon.
      */
-    bool onListeningStarted();
+    bool onListeningStarted(uint32_t turnId = 0);
 
     /**
      * @brief Notifie la fin d'une capture microphone (relâchement bouton ou timeout).
@@ -239,8 +267,9 @@ public:
     /**
      * @brief Notifie le début d'une restitution vocale TTS.
      * @param spokenText Texte prononcé.
+     * @param speechId Identifiant de génération de la restitution (0 pour attribution automatique).
      */
-    void notifySpeechStarted(const String& spokenText = "");
+    void notifySpeechStarted(const String& spokenText = "", uint32_t speechId = 0);
 
     /**
      * @brief Notifie la fin d'une restitution vocale TTS.
@@ -302,6 +331,11 @@ public:
      * @brief Récupère l'état courant de la machine à états.
      */
     VoiceUxBridgeState getState() const;
+
+    /**
+     * @brief Récupère la phase de capture STT courante.
+     */
+    VoiceUxSttPhase getSttPhase() const { return _sttPhase; }
 
     /**
      * @brief Récupère l'identifiant du tour actif courant.
@@ -407,10 +441,12 @@ private:
     bool _hasPendingAction;
 
     uint32_t _activeTurnId;
+    VoiceUxSttPhase _sttPhase;
     bool _turnInProgress;
     bool _captureActive;
     bool _finalReceivedForTurn;
     bool _turnCancelled;
+    bool _activeActionTerminated;
 
     String _interimText;
     String _lastFinalText;

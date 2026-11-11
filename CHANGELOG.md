@@ -28,6 +28,56 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.4.3.2] - 2026-11-11 (Corrective — Event Correlation : Corrélation Asynchrone STT, TTS, STOP & Statuts Terminaux)
+
+Version corrective de stabilisation garantissant l'origine réelle et la propagation de bout en bout des identifiants d'opérations asynchrones STT et TTS, éliminant définitivement la lecture de variables globales actives dans l'application, et verrouillant le cycle de vie des actions.
+
+### 1. P0 — Origine et Propagation Réelle des Identifiants STT & TTS (`VoxCoreVoice`, `VoiceUxLiveBridge`, `VoiceUxLiveDemo`)
+- **Élimination des Variables Globales Fragiles** : Suppression totale de `s_currentCaptureTurnId` et `s_currentSpeechId` dans l'application `VoiceUxLiveDemo`.
+- **Génération Monotone & Propagation dans `VoxCoreVoice`** :
+  - Chaque `startListening()` incrémente un identifiant monotone de capture (`_sttTurnId`) et le notifie via `onListeningStartedWithTurnId(uint32_t turnId)`.
+  - Lors de la réception d'une transcription serveur, `VoxCoreVoice` associe le paquet à son tour d'origine réel (`_activeCaptureTurnId` ou `_pendingTranscriptionTurnId`) et le transmet via le nouveau callback `onTranscriptionWithTurnId(const String& text, bool isFinal, uint32_t turnId)`.
+  - En cas de `stopListening()`, le tour passe en attente de transcription finale (`_pendingTranscriptionTurnId`).
+  - En cas de `cancelListening()` ou `stop()`, les tours actifs sont immédiatement invalidés (`_cancelledCaptureTurnId`), empêchant toute corrélation tardive erronée.
+  - Chaque opération `say()` attribue un identifiant unique de restitution monotone (`speechId`). À l'achèvement de la lecture audio, `LiveAudioPlayer` déclenche `onSpeechFinishedWithId(uint32_t speechId)` portant l'identifiant exact de la restitution achevée.
+- **Rétrocompatibilité Préservée** : Maintien intégral des signatures sans identifiant (`onListeningStarted`, `onTranscription`, `onSpeechFinished`) encapsulant les nouvelles signatures étendues.
+
+### 2. P1 — Validation Stricte du Cycle de Vie STT (`VoiceUxLiveBridge`)
+- **Phasage Explicite du STT (`VoiceUxSttPhase`)** :
+  - États de phase : `IDLE`, `LISTENING`, `TRANSCRIBING`, `COMPLETED`, `CANCELLED`.
+  - Rejet strict de toute transcription finale reçue en phase `IDLE` sans capture préalable autorisée.
+  - Les simulations d'entrées (`feedSimulatedText()`) créent leur propre contexte de tour valide et atteignent `COMPLETED` sans contourner la sûreté des événements réels.
+- **Dédoublonnage & Rejet des Tours Obsolètes** :
+  - Détection prioritaire des tours antérieurs (`turnId < _activeTurnId`) classifiés et comptabilisés comme `staleTranscriptionsIgnored`.
+  - Rejet des doubles finalisations pour un même tour (`duplicateTranscriptionsIgnored`).
+
+### 3. P1 — Statuts Terminaux Uniques & Gestion des Erreurs Audio (`VoiceUxLiveBridge`)
+- **Garantie d'Unique Statut Terminal** :
+  - Chaque action créée (`VoiceUxBridgeAction`) ne peut recevoir qu'un seul statut terminal parmi `COMPLETED`, `REJECTED` ou `CANCELLED` (`_activeActionTerminated`).
+  - Aucun événement tardif ne peut émettre un second statut terminal pour une action déjà achevée ou annulée.
+- **Gestion Robuste des Erreurs pendant TTS** :
+  - `notifyError()` termine proprement l'action TTS active avec `REJECTED` et les actions en attente avec `CANCELLED`.
+  - Aucune action orpheline n'est laissée en mémoire.
+  - Les réponses interrompues par erreur ne sont jamais mémorisées dans `ReplyMemory`.
+  - La récupération via `recoverFromError()` réarme proprement le pont sans résidu d'erreur.
+
+### 4. P1 — Préservation du Mode Pause à Travers PTT (`VoiceUxLiveBridge`)
+- **Maintien de l'État Pause** :
+  - Lorsque le microphone est activé temporairement en mode `PAUSED`, l'état sous-jacent `_stateBeforePause` est préservé.
+  - Les intentions ordinaires restent rejetées avec retour immédiat à l'état `PAUSED`, tandis que les intentions de reprise (`RESUME`) et d'arrêt (`STOP`) sont exécutées nominalement.
+
+### 5. P2 — Validation Complète & Bilan de Non-Régression
+- **Suite de Tests Dédiée Suite 142** :
+  - Test A : Corrélation STT et rejet des transcriptions retardées.
+  - Test B : Ancien événement TTS après nouveau TTS (rejet de terminaison obsolète).
+  - Test C : Rejet des transcriptions sans capture (phase `IDLE`).
+  - Test D : Gestion des erreurs pendant TTS et statut terminal unique `REJECTED`.
+  - Test E : Concurrence STOP / fin audio et idempotence terminale.
+  - Test F : Attribution réelle et propagation depuis `VoxCoreVoice`.
+- **Résultats** : 2 813 tests unitaires réussis (0 échec), compilation PlatformIO de `VoiceUxLiveDemo` sur M5Stack CoreS3 (ESP32-S3) 100% propre (RAM 24.2%, Flash 82.3%).
+
+---
+
 ## [0.6.4.3.1] - 2026-11-10 (Corrective — Event Safety : Sécurisation STT, TTS, STOP & ToolRegistry)
 
 Version exclusivement corrective garantissant la robustesse événementielle asynchrone sans modifier l'architecture ni dégrader les fonctionnalités existantes.
