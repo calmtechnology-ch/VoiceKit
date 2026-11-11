@@ -128,10 +128,11 @@ static void updatePttUi(bool isListening, bool isSpeaking, bool isReady) {
 static void onPttButtonEvent(lv_event_t* e) {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_PRESSED) {
-        if (!s_voice.isReady() && s_voice.getState() != VoiceState::READY) {
+        if (!s_voice.isReady()) {
             Serial.println("[UI] PTT Pressé mais service vocal pas encore prêt.");
             snprintf(s_userTextBuf, sizeof(s_userTextBuf), "Service vocal non prêt (connexion en cours)...");
             s_userTextDirty = true;
+            updatePttUi(false, false, false);
             return;
         }
         Serial.println("[UI] PTT Pressed -> startListening()");
@@ -385,6 +386,10 @@ static void handleSerialCommand(const String& cmd) {
 
     if (first == 'p' || first == 'P') {
         Serial.println("[CMD] P -> Démarrer écoute");
+        if (!s_voice.isReady()) {
+            Serial.println("[CMD][REFUS] Service vocal non prêt (connexion en cours)...");
+            return;
+        }
         s_pipeline.startListening();
     } else if (first == 'r' || first == 'R') {
         Serial.println("[CMD] R -> Arrêter écoute");
@@ -465,17 +470,33 @@ void setup() {
 
     // 2. Configuration du Moteur Vocal VoxCoreVoice en mode MANAGED_WIFI
     VoiceKitConfig vcfg;
-    if (strlen(GEMINI_API_KEY) > 0) {
+#if defined(VOICE_PROVIDER) && (VOICE_PROVIDER == 1)
+    vcfg.provider = VoiceProviderType::OPENAI;
+    vcfg.apiKey = OPENAI_API_KEY;
+#elif defined(VOICE_PROVIDER) && (VOICE_PROVIDER == 0)
+    vcfg.provider = VoiceProviderType::GEMINI;
+    vcfg.apiKey = GEMINI_API_KEY;
+#else
+    // Sélection intelligente : si la clé Gemini commence par AIzaSy (format officiel), on l'utilise.
+    // Sinon, si une clé OpenAI valide est fournie, on bascule automatiquement sur OpenAI.
+    if (strncmp(GEMINI_API_KEY, "AIzaSy", 6) == 0) {
         vcfg.provider = VoiceProviderType::GEMINI;
         vcfg.apiKey = GEMINI_API_KEY;
     } else if (strlen(OPENAI_API_KEY) > 0) {
         vcfg.provider = VoiceProviderType::OPENAI;
         vcfg.apiKey = OPENAI_API_KEY;
+    } else if (strlen(GEMINI_API_KEY) > 0) {
+        vcfg.provider = VoiceProviderType::GEMINI;
+        vcfg.apiKey = GEMINI_API_KEY;
     }
+#endif
     vcfg.wifiMode = WiFiMode::MANAGED_WIFI;
     vcfg.wifiSSID = WIFI_SSID;
     vcfg.wifiPassword = WIFI_PASSWORD;
     vcfg.volume = 75;
+
+    Serial.printf("[MAIN] Fournisseur vocal configuré : %s\n",
+                  (vcfg.provider == VoiceProviderType::OPENAI) ? "OpenAI Realtime" : "Google Gemini Live");
 
     bool voiceOk = s_voice.begin(vcfg);
     if (!voiceOk) {
@@ -535,6 +556,9 @@ void setup() {
     });
 
     s_voice.onStateChanged([](VoiceState st) {
+        if (s_pipeline.getState() == PipelineState::READY) {
+            updatePttUi(false, false, s_voice.isReady());
+        }
         if (!s_voice.isReady() && s_pipeline.getState() == PipelineState::READY) {
             if (s_lblStateBadge) {
                 switch (st) {
