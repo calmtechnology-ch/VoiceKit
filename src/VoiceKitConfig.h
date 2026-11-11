@@ -205,6 +205,13 @@ struct VoiceToneWrapper {
     "Tu es un assistant vocal bienveillant, intelligent et concis. " \
     "Reponds toujours en francais direct et naturel en une ou deux phrases maximum."
 
+#define VOICEKIT_DEFAULT_INTEGRATED_INSTRUCTION \
+    "Tu es un assistant vocal polyvalent et concis en francais. " \
+    "Si le message commence par une consigne de restitution vocale mot a mot (ex: 'Prononce exactement et uniquement ce texte : '), " \
+    "ton unique role est de prononcer tres exactement le texte demande sans aucun ajout, sans introduction ni commentaire. " \
+    "Si le message est une question, une demande d'information ou une consigne conversationnelle (ex: 'Reponds brievement...'), " \
+    "reponds intelligemment, directement et brievement en francais naturel en une ou deux phrases maximum."
+
 /**
  * @brief Métriques détaillées d'instrumentation de la latence vocale d'un tour (v0.5.3 — Latency Optimization).
  * 

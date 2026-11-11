@@ -188,7 +188,7 @@ static void createUi() {
     lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* lblTitle = lv_label_create(header);
-    lv_label_set_text(lblTitle, "VoiceKit v0.6.5 Pipeline");
+    lv_label_set_text(lblTitle, "VoiceKit v0.6.5.1 Pipeline");
     lv_obj_set_style_text_font(lblTitle, &font_french_bold_16, 0);
     lv_obj_set_style_text_color(lblTitle, lv_color_hex(0xFFFFFF), 0);
     lv_obj_align(lblTitle, LV_ALIGN_LEFT_MID, 6, 0);
@@ -299,9 +299,11 @@ static void createUi() {
 // Enregistrement des Outils de Démonstration (ToolRegistry)
 // =============================================================================
 
-static void registerDemoTools() {
+static bool registerDemoTools() {
+    bool ok = true;
+
     // 1. Outil Lecture Seule : État général du système
-    s_tools.registerTool(
+    ok &= s_tools.registerTool(
         "system.get_status",
         "Obtenir le statut general et la batterie",
         []() {
@@ -313,7 +315,7 @@ static void registerDemoTools() {
     );
 
     // 2. Outil Lecture Seule : Mémoire libre
-    s_tools.registerTool(
+    ok &= s_tools.registerTool(
         "system.get_free_memory",
         "Obtenir la memoire interne et PSRAM disponible",
         []() {
@@ -336,10 +338,10 @@ static void registerDemoTools() {
         M5.Display.setBrightness(hwLevel);
         return ToolResult::success("Luminosité réglée à " + String(level) + " pour cent.");
     });
-    s_tools.registerTool(brightDef);
+    ok &= s_tools.registerTool(brightDef);
 
     // 4. Outil Sensible : Réinitialisation écran (Requiert confirmation explicite !)
-    s_tools.registerTool(
+    ok &= s_tools.registerTool(
         "system.reset_screen",
         "Reinitialiser l'affichage graphique de l'ecran",
         []() {
@@ -352,10 +354,12 @@ static void registerDemoTools() {
 
     // Mappages en langage naturel français vers VoiceCommandDispatcher
     VoiceCommandDispatcher& disp = s_pipeline.getDispatcher();
-    disp.registerMapping("system.get_status", {"statut", "etat", "état", "etat du systeme", "état du système", "quel est le statut"});
-    disp.registerMapping("system.get_free_memory", {"memoire", "mémoire", "memoire libre", "mémoire libre", "espace memoire", "ram"});
-    disp.registerMapping("system.set_brightness", {"luminosite", "luminosité", "regle la luminosite", "règle la luminosité à", "mets la luminosite a"});
-    disp.registerMapping("system.reset_screen", {"reinitialise l'ecran", "réinitialise l'écran", "reset ecran", "reinitialiser ecran"});
+    ok &= disp.registerMapping("system.get_status", {"statut", "etat", "état", "etat du systeme", "état du système", "quel est le statut"});
+    ok &= disp.registerMapping("system.get_free_memory", {"memoire", "mémoire", "memoire libre", "mémoire libre", "espace memoire", "ram"});
+    ok &= disp.registerMapping("system.set_brightness", {"luminosite", "luminosité", "regle la luminosite", "règle la luminosité à", "mets la luminosite a"});
+    ok &= disp.registerMapping("system.reset_screen", {"reinitialise l'ecran", "réinitialise l'écran", "reset ecran", "reinitialiser ecran"});
+
+    return ok;
 }
 
 // =============================================================================
@@ -473,10 +477,30 @@ void setup() {
     vcfg.wifiPassword = WIFI_PASSWORD;
     vcfg.volume = 75;
 
-    s_voice.begin(vcfg);
+    bool voiceOk = s_voice.begin(vcfg);
+    if (!voiceOk) {
+        Serial.println("[MAIN] ERREUR : Echec initialisation VoxCoreVoice !");
+        if (s_lblStateBadge) {
+            lv_label_set_text(s_lblStateBadge, "ERR INIT VOCAL");
+            lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFF5252), 0);
+            lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x490000), 0);
+        }
+        snprintf(s_responseTextBuf, sizeof(s_responseTextBuf), "Erreur: Echec initialisation du moteur vocal.");
+        s_responseTextDirty = true;
+    }
 
     // 3. Enregistrement des outils locaux
-    registerDemoTools();
+    bool toolsOk = registerDemoTools();
+    if (!toolsOk) {
+        Serial.println("[MAIN] ERREUR : Echec enregistrement outils ou mappages !");
+        if (s_lblStateBadge) {
+            lv_label_set_text(s_lblStateBadge, "ERR OUTILS");
+            lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFF5252), 0);
+            lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x490000), 0);
+        }
+        snprintf(s_responseTextBuf, sizeof(s_responseTextBuf), "Erreur: Echec enregistrement des outils locaux.");
+        s_responseTextDirty = true;
+    }
 
     // 4. Configuration et Démarrage du Pipeline Intégré
     VoicePipelineConfig pcfg;
@@ -487,7 +511,17 @@ void setup() {
     pcfg.speakToolResult = true;
     pcfg.speakConfirmationRequired = true;
 
-    s_pipeline.begin(s_voice, s_tools, pcfg);
+    bool pipeOk = s_pipeline.begin(s_voice, s_tools, pcfg);
+    if (!pipeOk) {
+        Serial.println("[MAIN] ERREUR : Echec initialisation IntegratedVoicePipeline !");
+        if (s_lblStateBadge) {
+            lv_label_set_text(s_lblStateBadge, "ERR PIPELINE");
+            lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFF5252), 0);
+            lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x490000), 0);
+        }
+        snprintf(s_responseTextBuf, sizeof(s_responseTextBuf), "Erreur: Echec demarrage du pipeline integre.");
+        s_responseTextDirty = true;
+    }
 
     // 5. Abonnements aux Événements du Pipeline & Moteur Vocal
     s_voice.onReady([]() {

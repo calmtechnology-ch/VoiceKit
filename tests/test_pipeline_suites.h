@@ -495,3 +495,597 @@ inline void run_pipeline_v065_tests() {
 
     std::cout << "\n[TEST SUITE 144] SUCCES INTEGRAL DES 10 TESTS OBLIGATOIRES A -> J (v0.6.5)" << std::endl;
 }
+
+// =============================================================================
+// SUITE 145 : VoiceKit v0.6.5.1 — Integrated Pipeline Stabilization
+// Tests indispensables : A, B, C, D, E, F, G, H, I, J
+// =============================================================================
+
+inline void run_pipeline_v0651_tests() {
+    std::cout << "\n===========================================================" << std::endl;
+    std::cout << "  [TEST SUITE 145] VoiceKit v0.6.5.1 — Integrated Pipeline Stabilization" << std::endl;
+    std::cout << "===========================================================" << std::endl;
+
+    // -------------------------------------------------------------------------
+    // TEST A : Commande locale complète
+    // STT -> commande -> ToolRegistry -> résultat -> TTS -> ReplyMemory -> READY
+    // -------------------------------------------------------------------------
+    {
+        std::cout << "\n--- TEST A (v0.6.5.1) : Commande locale complete & ReplyMemory ---" << std::endl;
+        MockLiveTransport mockTransport;
+        VoxCoreVoice voice;
+        ToolRegistry tools;
+        IntegratedVoicePipeline pipeline;
+
+        VoiceKitConfig vcfg;
+        vcfg.apiKey = "AIzaSyTestPipeline0651A";
+        vcfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voice.begin(vcfg);
+        prepareMockVoiceReady(voice, mockTransport);
+
+        bool toolExecuted = false;
+        tools.registerTool("system.get_status", "Obtenir le statut general", [&toolExecuted]() {
+            toolExecuted = true;
+            return ToolResult::success("Le systeme fonctionne normalement.");
+        }, ToolSecurityPolicy::READ_ONLY);
+
+        VoicePipelineConfig pcfg;
+        pcfg.enableVoiceUx = true;
+        pcfg.enableLocalTools = true;
+        pcfg.enableAiProcessing = true;
+        pcfg.speakToolResult = true;
+
+        pipeline.begin(voice, tools, pcfg);
+        pipeline.getDispatcher().registerMapping("system.get_status", {"statut", "etat du systeme", "quel est le statut"});
+
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("Peux-tu me donner le statut du systeme s'il te plait ?", true);
+
+        TEST_ASSERT(toolExecuted, "Test A.1 Commande executee");
+        TEST_ASSERT(pipeline.getState() == PipelineState::SPEAKING, "Test A.2 Etat = SPEAKING");
+
+        // Simuler restitution complète audio
+        injectGeminiPcmAndDrain(voice, 3, true);
+        drainVoicePlayback(voice);
+        pipeline.update();
+
+        TEST_ASSERT(pipeline.getState() == PipelineState::READY, "Test A.3 Retour a READY");
+        TEST_ASSERT(pipeline.getLastResult() == PipelineResult::COMPLETED, "Test A.4 Resultat COMPLETED");
+
+        // Vérifier que la réponse locale est mémorisée dans ReplyMemory
+        ReplyMemory& mem = pipeline.getVoiceUxController().getReplyMemory();
+        TEST_ASSERT(mem.getCount() == 1, "Test A.5 Reponse locale memorisee dans ReplyMemory");
+        TEST_ASSERT(mem.getLastReply() == "Le systeme fonctionne normalement.", "Test A.6 Contenu exact dans ReplyMemory");
+
+        // Tester la répétition (REPEAT) : ne doit PAS dupliquer l'entrée dans ReplyMemory
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("repete s'il te plait", true);
+        TEST_ASSERT(pipeline.getState() == PipelineState::SPEAKING, "Test A.7 Repetition en cours de parole");
+
+        injectGeminiPcmAndDrain(voice, 3, true);
+        drainVoicePlayback(voice);
+        pipeline.update();
+
+        TEST_ASSERT(pipeline.getState() == PipelineState::READY, "Test A.8 Retour a READY apres REPEAT");
+        TEST_ASSERT(mem.getCount() == 1, "Test A.9 La repetition ne cree PAS de doublon dans ReplyMemory");
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST B : Question IA complète
+    // STT -> routage IA -> réponse textuelle -> audio -> ReplyMemory -> READY
+    // -------------------------------------------------------------------------
+    {
+        std::cout << "\n--- TEST B (v0.6.5.1) : Question IA complete & restitution ---" << std::endl;
+        MockLiveTransport mockTransport;
+        VoxCoreVoice voice;
+        ToolRegistry tools;
+        IntegratedVoicePipeline pipeline;
+
+        VoiceKitConfig vcfg;
+        vcfg.apiKey = "AIzaSyTestPipeline0651B";
+        vcfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voice.begin(vcfg);
+        prepareMockVoiceReady(voice, mockTransport);
+
+        VoicePipelineConfig pcfg;
+        pcfg.enableVoiceUx = true;
+        pcfg.enableLocalTools = true;
+        pcfg.enableAiProcessing = true;
+        pcfg.defaultDestination = PipelineDefaultDestination::AI;
+
+        pipeline.begin(voice, tools, pcfg);
+
+        String capturedAiResponse = "";
+        pipeline.onAiResponse([&capturedAiResponse](uint32_t turn, const String& txt) {
+            capturedAiResponse = txt;
+        });
+
+        PipelineResult termResult = PipelineResult::NONE;
+        uint32_t finishCallCount = 0;
+        pipeline.onTurnFinished([&termResult, &finishCallCount](uint32_t turn, PipelineResult r, const String& s) {
+            termResult = r;
+            finishCallCount++;
+        });
+
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("Pourquoi le ciel est-il bleu ?", true);
+
+        TEST_ASSERT(pipeline.getState() == PipelineState::AI_PROCESSING, "Test B.1 Pipeline en AI_PROCESSING");
+
+        // 1. Simuler réception du texte assistant Gemini Live
+        const char* aiTextJson = "{\"serverContent\":{\"modelTurn\":{\"parts\":[{\"text\":\"Le ciel est bleu en raison de la diffusion Rayleigh de la lumiere solaire.\"}]}}}";
+        voice.getClient().handleIncomingMessage(aiTextJson, strlen(aiTextJson));
+
+        // 2. Simuler réception des paquets audio 24 kHz
+        injectGeminiPcmAndDrain(voice, 4, true);
+
+        TEST_ASSERT(pipeline.getState() == PipelineState::SPEAKING, "Test B.2 Passage a SPEAKING pour restitution IA");
+        TEST_ASSERT(capturedAiResponse.indexOf("diffusion Rayleigh") >= 0, "Test B.3 Texte assistant capte");
+
+        // 3. Vidage complet de la lecture audio
+        drainVoicePlayback(voice);
+        pipeline.update();
+
+        TEST_ASSERT(pipeline.getState() == PipelineState::READY, "Test B.4 Retour a READY apres reponse IA");
+        TEST_ASSERT(termResult == PipelineResult::COMPLETED, "Test B.5 Resultat terminal COMPLETED");
+        TEST_ASSERT(finishCallCount == 1, "Test B.6 Exactement 1 callback de terminaison pour le tour IA");
+
+        // Vérifier mémorisation dans ReplyMemory
+        ReplyMemory& mem = pipeline.getVoiceUxController().getReplyMemory();
+        TEST_ASSERT(mem.getCount() == 1, "Test B.7 Reponse IA memorisee dans ReplyMemory");
+        TEST_ASSERT(mem.getLastReply().indexOf("diffusion Rayleigh") >= 0, "Test B.8 Contenu conforme dans ReplyMemory");
+
+        // 4. Test d'interruption STOP pendant la réponse IA : pas de mémorisation partielle
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("Raconte-moi une histoire", true);
+        TEST_ASSERT(pipeline.getState() == PipelineState::AI_PROCESSING, "Test B.9 Deuxieme tour IA");
+
+        const char* partialTextJson = "{\"serverContent\":{\"modelTurn\":{\"parts\":[{\"text\":\"Il etait une fois dans un pays lointain...\"}]}}}";
+        voice.getClient().handleIncomingMessage(partialTextJson, strlen(partialTextJson));
+
+        // STOP immédiat avant fin audio
+        pipeline.cancel();
+        TEST_ASSERT(pipeline.getState() == PipelineState::READY || pipeline.getState() == PipelineState::STOPPING, "Test B.10 STOP execute");
+        pipeline.update();
+
+        // Vérifier que la réponse interrompue n'a pas écrasé la mémoire
+        TEST_ASSERT(mem.getLastReply().indexOf("diffusion Rayleigh") >= 0, "Test B.11 Pas de memorisation d'une reponse IA interrompue");
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST C : Refus TTS
+    // Simuler say() retournant false -> vérifier l'absence de blocage SPEAKING
+    // -------------------------------------------------------------------------
+    {
+        std::cout << "\n--- TEST C (v0.6.5.1) : Refus TTS & non-blocage SPEAKING ---" << std::endl;
+        VoxCoreVoice voice;
+        ToolRegistry tools;
+        IntegratedVoicePipeline pipeline;
+
+        // voice non démarrée ou avec Wi-Fi non connecté -> say() retourne false
+        VoiceKitConfig vcfg;
+        vcfg.wifiMode = WiFiMode::MANAGED_WIFI;
+        // Ne pas appeler voice.begin() ou laisser wifi non connecté
+        VoicePipelineConfig pcfg;
+        pipeline.begin(voice, tools, pcfg);
+
+        pipeline.startListening();
+        pipeline.stopListening();
+
+        // Forcer appel speakOutput avec say() échouant
+        PipelineResult res = PipelineResult::NONE;
+        pipeline.onTurnFinished([&res](uint32_t t, PipelineResult r, const String& s) {
+            res = r;
+        });
+
+        // Simuler déclenchement d'un outil local dont le speakOutput doit échouer
+        tools.registerTool("test.fail_speech", "Test", []() {
+            return ToolResult::success("Message impossible a prononcer.");
+        });
+        pipeline.getDispatcher().registerMapping("test.fail_speech", "test speech");
+
+        pipeline.feedSimulatedTranscription("test speech", true);
+
+        // Vérifier que le pipeline n'est PAS resté bloqué dans SPEAKING
+        TEST_ASSERT(pipeline.getState() != PipelineState::SPEAKING, "Test C.1 Le pipeline n'est JAMAIS bloque dans SPEAKING");
+        TEST_ASSERT(pipeline.getState() == PipelineState::READY, "Test C.2 Retour propre a READY apres refus TTS");
+        TEST_ASSERT(res == PipelineResult::FAILED, "Test C.3 Resultat FAILED notifie");
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST D : Double terminaison & Idempotence stricte
+    // -------------------------------------------------------------------------
+    {
+        std::cout << "\n--- TEST D (v0.6.5.1) : Idempotence stricte des terminaisons ---" << std::endl;
+        MockLiveTransport mockTransport;
+        VoxCoreVoice voice;
+        ToolRegistry tools;
+        IntegratedVoicePipeline pipeline;
+
+        VoiceKitConfig vcfg;
+        vcfg.apiKey = "AIzaSyTestPipeline0651D";
+        vcfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voice.begin(vcfg);
+        prepareMockVoiceReady(voice, mockTransport);
+
+        VoicePipelineConfig pcfg;
+        pcfg.confirmationTimeoutMs = 100; // court pour le test
+        pipeline.begin(voice, tools, pcfg);
+
+        tools.registerTool("system.wipe", "Action sensible", []() {
+            return ToolResult::success();
+        }, ToolSecurityPolicy::SENSITIVE);
+        pipeline.getDispatcher().registerMapping("system.wipe", "wipe");
+
+        // 1. Confirmation expirée : un seul callback terminal
+        uint32_t finishCount = 0;
+        PipelineResult lastRes = PipelineResult::NONE;
+        pipeline.onTurnFinished([&finishCount, &lastRes](uint32_t t, PipelineResult r, const String& s) {
+            finishCount++;
+            lastRes = r;
+        });
+
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("wipe", true);
+
+        TEST_ASSERT(pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Test D.1 WAITING_CONFIRMATION");
+
+        // Attendre expiration
+        delay(150);
+        pipeline.update();
+
+        TEST_ASSERT(pipeline.getState() == PipelineState::READY, "Test D.2 Retour a READY");
+        TEST_ASSERT(finishCount == 1, "Test D.3 Exactement 1 seul callback pour confirmation expiree");
+        TEST_ASSERT(lastRes == PipelineResult::TIMEOUT, "Test D.4 Resultat unique TIMEOUT");
+
+        // 2. STOP puis timeout : un seul callback terminal
+        finishCount = 0;
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.cancel();
+        TEST_ASSERT(finishCount == 1, "Test D.5 Cancel a emis exactement 1 callback");
+        TEST_ASSERT(lastRes == PipelineResult::CANCELLED, "Test D.6 Resultat CANCELLED");
+
+        // Appel tardif update() : ne doit pas re-terminer
+        pipeline.update();
+        TEST_ASSERT(finishCount == 1, "Test D.7 update() tardif n'emet pas de 2eme callback");
+
+        // 3. Double transcription finale
+        finishCount = 0;
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("wipe", true);
+        pipeline.feedSimulatedTranscription("wipe", true); // 2ème finale identique
+        TEST_ASSERT(finishCount == 0, "Test D.8 Pas de terminaison prematuree sur 2eme finale");
+        pipeline.cancel();
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST E : PAUSE / RESUME effectif
+    // -------------------------------------------------------------------------
+    {
+        std::cout << "\n--- TEST E (v0.6.5.1) : PAUSE & RESUME effectifs ---" << std::endl;
+        MockLiveTransport mockTransport;
+        VoxCoreVoice voice;
+        ToolRegistry tools;
+        IntegratedVoicePipeline pipeline;
+
+        VoiceKitConfig vcfg;
+        vcfg.apiKey = "AIzaSyTestPipeline0651E";
+        vcfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voice.begin(vcfg);
+        prepareMockVoiceReady(voice, mockTransport);
+
+        uint32_t statusExecutedCount = 0;
+        tools.registerTool("system.get_status", "Statut", [&statusExecutedCount]() {
+            statusExecutedCount++;
+            return ToolResult::success("Ok");
+        });
+        pipeline.begin(voice, tools);
+        pipeline.getDispatcher().registerMapping("system.get_status", "statut");
+
+        TEST_ASSERT(!pipeline.isPaused(), "Test E.1 Initialement non en pause");
+
+        // 1. Dire « Pause »
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("pause", true);
+
+        // Vider audio de l'annonce "En pause."
+        injectGeminiPcmAndDrain(voice, 2, true);
+        drainVoicePlayback(voice);
+        pipeline.update();
+
+        TEST_ASSERT(pipeline.isPaused(), "Test E.2 Pipeline est desormais en PAUSE");
+
+        // 2. Tenter une commande ordinaire pendant la pause
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("statut", true);
+
+        injectGeminiPcmAndDrain(voice, 2, true);
+        drainVoicePlayback(voice);
+        pipeline.update();
+
+        TEST_ASSERT(statusExecutedCount == 0, "Test E.3 Commande ordinaire bloquee pendant la pause");
+        TEST_ASSERT(pipeline.isPaused(), "Test E.4 Toujours en pause");
+
+        // 3. Dire « Reprends »
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("reprends", true);
+
+        injectGeminiPcmAndDrain(voice, 2, true);
+        drainVoicePlayback(voice);
+        pipeline.update();
+
+        TEST_ASSERT(!pipeline.isPaused(), "Test E.5 Sortie effective de la pause");
+
+        // 4. Commande ordinaire maintenant acceptee
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("statut", true);
+
+        injectGeminiPcmAndDrain(voice, 2, true);
+        drainVoicePlayback(voice);
+        pipeline.update();
+
+        TEST_ASSERT(statusExecutedCount == 1, "Test E.6 Commande ordinaire executee apres reprise");
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST F : Routage ambigu, négations et questions vs actions
+    // -------------------------------------------------------------------------
+    {
+        std::cout << "\n--- TEST F (v0.6.5.1) : Routage ambigu & negations ---" << std::endl;
+        ToolRegistry tools;
+        VoiceCommandDispatcher dispatcher;
+
+        tools.registerTool("system.set_brightness", "Regler la luminosite", [](const ToolArgs& args) {
+            return ToolResult::success();
+        }, std::vector<ToolParam>{ToolParam("level", ToolParamType::INT, 0, 100, true)});
+
+        dispatcher.setRegistry(&tools);
+        dispatcher.registerMapping("system.set_brightness", {"regle la luminosite", "luminosite"});
+
+        // 1. Négation explicite : ne doit JAMAIS matcher l'outil d'écriture
+        VoiceCommandMatch mNeg = dispatcher.match("Je ne veux pas régler la luminosité.");
+        TEST_ASSERT(!mNeg.matched, "Test F.1 Negation 'ne veux pas' non matchee vers un outil");
+
+        VoiceCommandMatch mNeg2 = dispatcher.match("Ne touche pas à la luminosité surtout pas");
+        TEST_ASSERT(!mNeg2.matched, "Test F.2 Negation 'ne touche pas' non matchee");
+
+        // 2. Question d'explication : ne doit pas être traitée comme une action
+        VoiceCommandMatch mQuery = dispatcher.match("Explique-moi comment fonctionne la luminosité.");
+        TEST_ASSERT(!mQuery.matched, "Test F.3 Demande d'explication non matchee comme outil d'ecriture");
+
+        VoiceCommandMatch mQuery2 = dispatcher.match("Comment fonctionne la luminosité de l'écran ?");
+        TEST_ASSERT(!mQuery2.matched, "Test F.4 Question générale non traitée comme action");
+
+        // 3. Commande affirmative polie : doit matcher
+        VoiceCommandMatch mPos = dispatcher.match("Règle la luminosité à 40 % s'il te plaît.");
+        TEST_ASSERT(mPos.matched, "Test F.5 Commande affirmative matchee");
+        TEST_ASSERT(mPos.args.getInt("level") == 40, "Test F.6 Niveau 40 extrait");
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST G : Paramètres numériques complets (0, 50, 75, 100, 101, -5, 12,5, 12.5)
+    // -------------------------------------------------------------------------
+    {
+        std::cout << "\n--- TEST G (v0.6.5.1) : Parametres numeriques entiers et decimaux ---" << std::endl;
+        ToolRegistry tools;
+        VoiceCommandDispatcher dispatcher;
+
+        // Outil entier borné 0 .. 100
+        tools.registerTool("system.set_volume", "Volume", [](const ToolArgs& args) {
+            return ToolResult::success();
+        }, std::vector<ToolParam>{ToolParam("level", ToolParamType::INT, 0, 100, true)});
+
+        // Outil flottant
+        tools.registerTool("system.set_temp", "Temperature", [](const ToolArgs& args) {
+            return ToolResult::success();
+        }, std::vector<ToolParam>{ToolParam("temp", ToolParamType::FLOAT, 10.0, 30.0, true)});
+
+        dispatcher.setRegistry(&tools);
+        dispatcher.registerMapping("system.set_volume", {"volume", "regle le volume"});
+        dispatcher.registerMapping("system.set_temp", {"temperature", "regle la temperature"});
+
+        // 1. Valeurs entières dans les bornes
+        int valInt = 0; double valDouble = 0.0;
+        TEST_ASSERT(VoiceCommandDispatcher::extractNumber("0", valInt, valDouble) && valInt == 0, "Test G.1 0");
+        TEST_ASSERT(VoiceCommandDispatcher::extractNumber("50", valInt, valDouble) && valInt == 50, "Test G.2 50");
+        TEST_ASSERT(VoiceCommandDispatcher::extractNumber("75", valInt, valDouble) && valInt == 75, "Test G.3 75");
+        TEST_ASSERT(VoiceCommandDispatcher::extractNumber("100", valInt, valDouble) && valInt == 100, "Test G.4 100");
+
+        // 2. Valeur hors limites 101 (> 100)
+        VoiceCommandMatch m101 = dispatcher.match("regle le volume a 101");
+        TEST_ASSERT(m101.matched, "Test G.5 101 matche syntaxiquement");
+        ToolResult r101 = tools.execute("system.set_volume", m101.args);
+        TEST_ASSERT(!r101.isSuccess(), "Test G.6 101 rejete par ToolValidator car > max");
+
+        // 3. Valeur négative -5 (< 0) avec préservation du signe
+        VoiceCommandMatch mNeg = dispatcher.match("regle le volume a -5");
+        TEST_ASSERT(mNeg.matched, "Test G.7 -5 matche syntaxiquement");
+        TEST_ASSERT(mNeg.args.getInt("level") == -5, "Test G.8 Signe negatif -5 extrait");
+        ToolResult rNeg = tools.execute("system.set_volume", mNeg.args);
+        TEST_ASSERT(!rNeg.isSuccess(), "Test G.9 -5 rejete par ToolValidator car < min");
+
+        // 4. Valeurs décimales avec virgule et point (12,5 et 12.5)
+        VoiceCommandMatch mDec1 = dispatcher.match("regle la temperature a 12,5 degres");
+        TEST_ASSERT(mDec1.matched, "Test G.10 12,5 matche");
+        TEST_ASSERT(mDec1.args.has("temp"), "Test G.11 Param temp present");
+        ToolResult rDec1 = tools.execute("system.set_temp", mDec1.args);
+        TEST_ASSERT(rDec1.isSuccess(), "Test G.12 12,5 valide");
+
+        VoiceCommandMatch mDec2 = dispatcher.match("regle la temperature a 12.5");
+        TEST_ASSERT(mDec2.matched, "Test G.13 12.5 matche");
+        ToolResult rDec2 = tools.execute("system.set_temp", mDec2.args);
+        TEST_ASSERT(rDec2.isSuccess(), "Test G.14 12.5 valide");
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST H : Confirmation sensible robuste & anti-rejeu
+    // -------------------------------------------------------------------------
+    {
+        std::cout << "\n--- TEST H (v0.6.5.1) : Confirmation sensible & securite ---" << std::endl;
+        MockLiveTransport mockTransport;
+        VoxCoreVoice voice;
+        ToolRegistry tools;
+        IntegratedVoicePipeline pipeline;
+
+        VoiceKitConfig vcfg;
+        vcfg.apiKey = "AIzaSyTestPipeline0651H";
+        vcfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voice.begin(vcfg);
+        prepareMockVoiceReady(voice, mockTransport);
+
+        bool executed = false;
+        tools.registerTool("system.factory_reset", "Reinitialisation totale", [&executed]() {
+            executed = true;
+            return ToolResult::success("Reinitialisation terminee.");
+        }, ToolSecurityPolicy::SENSITIVE);
+
+        VoicePipelineConfig pcfg;
+        pcfg.requireConfirmationForSensitive = true;
+        pipeline.begin(voice, tools, pcfg);
+        pipeline.getDispatcher().registerMapping("system.factory_reset", "reset usine");
+
+        // 1. Demande d'action sensible
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("reset usine", true);
+
+        TEST_ASSERT(pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Test H.1 WAITING_CONFIRMATION");
+        String token = pipeline.getPendingConfirmationToken();
+        TEST_ASSERT(!token.isEmpty(), "Test H.2 Jeton genere valide");
+
+        // Restitution de la demande vocale de confirmation ("Confirmez-vous cette action ?")
+        injectGeminiPcmAndDrain(voice, 2, true);
+        drainVoicePlayback(voice);
+        pipeline.update();
+        // L'état doit rester en WAITING_CONFIRMATION après la fin de l'annonce vocale de confirmation
+        TEST_ASSERT(pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Test H.2b Reste WAITING_CONFIRMATION apres annonce");
+
+        // 2. Faux jeton
+        bool badConf = pipeline.confirmPendingAction("fake-token-123");
+        TEST_ASSERT(!badConf, "Test H.3 Faux jeton refuse");
+        TEST_ASSERT(!executed, "Test H.4 Outil non execute avec faux jeton");
+
+        // 3. Vrai jeton
+        bool goodConf = pipeline.confirmPendingAction(token);
+        TEST_ASSERT(goodConf, "Test H.5 Vrai jeton accepte");
+        TEST_ASSERT(executed, "Test H.6 Action executee");
+
+        injectGeminiPcmAndDrain(voice, 2, true);
+        drainVoicePlayback(voice);
+        pipeline.update();
+
+        TEST_ASSERT(pipeline.getState() == PipelineState::READY, "Test H.7 Retour a READY");
+
+        // 4. Double validation avec le même jeton (anti-rejeu)
+        bool replayConf = pipeline.confirmPendingAction(token);
+        TEST_ASSERT(!replayConf, "Test H.8 Rejeu du jeton strictement rejete");
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST I : Échecs réseau et résilience
+    // -------------------------------------------------------------------------
+    {
+        std::cout << "\n--- TEST I (v0.6.5.1) : Echecs reseau et resilience ---" << std::endl;
+        MockLiveTransport mockTransport;
+        VoxCoreVoice voice;
+        ToolRegistry tools;
+        IntegratedVoicePipeline pipeline;
+
+        VoiceKitConfig vcfg;
+        vcfg.apiKey = "AIzaSyTestPipeline0651I";
+        vcfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voice.begin(vcfg);
+        prepareMockVoiceReady(voice, mockTransport);
+        pipeline.begin(voice, tools);
+
+        // Simulation erreur durant session active
+        pipeline.startListening();
+        mockTransport.simulateError("Perte connexion TLS");
+        pipeline.update();
+
+        TEST_ASSERT(pipeline.getState() == PipelineState::ERROR || pipeline.getLastResult() == PipelineResult::FAILED,
+                    "Test I.1 Transition vers ERROR en cas de defaillance reseau");
+
+        // Récupération contrôlée
+        TEST_ASSERT(pipeline.recoverFromError(), "Test I.2 recoverFromError() reussi");
+        TEST_ASSERT(pipeline.getState() == PipelineState::READY, "Test I.3 Retour sain a READY");
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST J : Endurance (30 tours successifs)
+    // -------------------------------------------------------------------------
+    {
+        std::cout << "\n--- TEST J (v0.6.5.1) : Endurance (30 tours successifs) ---" << std::endl;
+        MockLiveTransport mockTransport;
+        VoxCoreVoice voice;
+        ToolRegistry tools;
+        IntegratedVoicePipeline pipeline;
+
+        VoiceKitConfig vcfg;
+        vcfg.apiKey = "AIzaSyTestPipeline0651J";
+        vcfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voice.begin(vcfg);
+        prepareMockVoiceReady(voice, mockTransport);
+
+        tools.registerTool("system.ping", "Ping", []() {
+            return ToolResult::success("Pong.");
+        });
+
+        VoicePipelineConfig pcfg;
+        pcfg.enableVoiceUx = true;
+        pcfg.enableLocalTools = true;
+        pcfg.enableAiProcessing = true;
+        pipeline.begin(voice, tools, pcfg);
+        pipeline.getDispatcher().registerMapping("system.ping", "ping");
+
+        bool allToursOk = true;
+        for (int tour = 1; tour <= 30; ++tour) {
+            pipeline.startListening();
+            pipeline.stopListening();
+
+            if (tour % 3 == 0) {
+                // Tour STOP
+                pipeline.cancel();
+            } else if (tour % 3 == 1) {
+                // Tour commande locale
+                pipeline.feedSimulatedTranscription("ping", true);
+                injectGeminiPcmAndDrain(voice, 2, true);
+                drainVoicePlayback(voice);
+                pipeline.update();
+            } else {
+                // Tour question IA
+                pipeline.feedSimulatedTranscription("Quelle heure est-il ?", true);
+                const char* aiResp = "{\"serverContent\":{\"modelTurn\":{\"parts\":[{\"text\":\"Il est midi.\"}]}}}";
+                voice.getClient().handleIncomingMessage(aiResp, strlen(aiResp));
+                injectGeminiPcmAndDrain(voice, 2, true);
+                drainVoicePlayback(voice);
+                pipeline.update();
+            }
+
+            if (pipeline.getState() != PipelineState::READY && pipeline.getState() != PipelineState::STOPPING) {
+                allToursOk = false;
+                break;
+            }
+            if (pipeline.getState() == PipelineState::STOPPING) {
+                drainVoicePlayback(voice);
+                pipeline.update();
+            }
+        }
+
+        TEST_ASSERT(allToursOk, "Test J.1 30 tours consecutifs executes avec succes");
+        TEST_ASSERT(pipeline.getState() == PipelineState::READY, "Test J.2 Pipeline parfaitement READY a l'issue");
+    }
+
+    std::cout << "\n[TEST SUITE 145] SUCCES INTEGRAL DES 10 TESTS OBLIGATOIRES A -> J (v0.6.5.1)" << std::endl;
+}

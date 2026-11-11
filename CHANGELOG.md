@@ -28,6 +28,55 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.5.1] - 2026-11-11 (Integrated Pipeline Corrective & Stabilisation)
+
+Version corrective et de stabilisation majeure de l'orchestrateur `IntegratedVoicePipeline` et de son exemple de référence `IntegratedVoiceDemo` sur M5Stack CoreS3 (ESP32-S3).
+
+### 1. P0 — Parcours IA Complet et Instructions Système Duales
+- **Consigne Système Duale** : Définition de `VOICEKIT_DEFAULT_INTEGRATED_INSTRUCTION` distinguant explicitement le mode TTS verbatim ("Prononce fidèlement...") et le mode conversationnel IA ("Réponds de manière concise, naturelle et fluide...").
+- **Synchronisation Dynamique** : Ajout de `setSystemInstruction()` et `setAiPromptPrefix()` dans `VoxCoreVoice` pour garantir la cohérence des consignes sans dégrader la restitution littérale en mode TTS.
+- **Capture Asynchrone de Réponse IA** : Abonnement interne `_voice->onAssistantText` dès l'initialisation du pipeline pour capturer le texte émis par Gemini Live ou OpenAI Realtime au fil de l'eau.
+- **Règle de Clôture IA** : Séparation stricte de la réception du texte et de l'achèvement effectif du flux audio avant notification de fin de tour (`COMPLETED`).
+
+### 2. P0 — Sécurisation de `speakOutput()` et des Démarrages TTS
+- **Vérification Systématique du Retour de `say()`** : En cas de refus ou indisponibilité du moteur vocal, transition immédiate vers `READY` avec résultat `FAILED` sans bloquer le pipeline dans l'état `SPEAKING`.
+- **Suivi Précis par `speechId`** : Filtrage strict des callbacks de fin TTS (`onSpeechFinishedWithId`) pour ignorer les annonces résiduelles ou antérieures.
+- **Watchdog Temporel** : Ajout de `ttsStartTimeoutMs` (8 000 ms) et `ttsPlaybackTimeoutMs` (25 000 ms) dans `VoicePipelineConfig` pour prévenir tout blocage audio.
+
+### 3. P0 — Idempotence Stricte des Terminaisons (`finishTurn`)
+- **Verrou Terminal Idempotent** : Enregistrement de `_lastFinishedTurnId` interdisant toute émission multiple ou contradictoire de `onTurnFinished()` pour un même tour.
+- **Élimination de la Double Terminaison** : Correction de l'expiration du délai de confirmation dans `update()` (`rejectPendingAction()` soldant déjà le tour, élimination de l'appel redondant à `finishTurn()`).
+- **Annulation Active Prioritaire** : Annulation réelle du transport ou du lecteur lors des évènements `STOP`, timeout ou erreur.
+
+### 4. P1 — Unification et Fiabilisation de `ReplyMemory`
+- **Politique Unifiée** : Enregistrement systématique des réponses d'outils locaux (`LOCAL_TOOL`) et des réponses d'assistant IA (`AI_PROVIDER`) dans `ReplyMemory` uniquement après restitution vocale complète et non interrompue.
+- **Exclusion des Messages de Contrôle** : Les répétitions (`REPEAT`, `PREVIOUS`), les messages système et les annonces de confirmation sensibles sont exclus pour préserver l'historique conversationnel utile.
+- **Troncature UTF-8 Sécurisée** : `truncateUtf8Safe()` préserve les frontières de points de code multi-octets français et coupe sur les espaces pour éviter les caractères corrompus.
+
+### 5. P1 — Gestion Effective de `PAUSE` et `RESUME`
+- **Suspension Réelle du Pipeline** : Implémentation de `isPaused()` et `setPaused()` dans `IntegratedVoicePipeline`.
+- **Filtrage des Commandes en Pause** : Rejet immédiat de toute commande ordinaire ou demande IA lorsque le pipeline est en pause (avec annonce "En pause."), tout en conservant `STOP` et `RESUME` ("Reprise.") actifs.
+
+### 6. P1 — Durcissement du `VoiceCommandDispatcher`
+- **Détection des Négations** : `hasNegation()` intercepte les tournures négatives françaises ("ne ... pas", "je ne veux pas", etc.) pour éviter d'exécuter des outils par inadvertance.
+- **Filtrage des Requêtes d'Information** : `isInformationQuery()` empêche le déclenchement d'outils d'écriture sur des questions explicatives ("comment fonctionne...", "explique-moi...").
+- **Suppression du Substring Matching Indiscriminé** : Remplacement de `indexOf >= 0` par une concordance stricte, par préfixe ou par suffixe sur mots complets.
+- **Robustesse Numérique** : Prise en charge des nombres négatifs, des décimaux français (virgule ou point), du zéro et des valeurs supérieures à 100.
+
+### 7. P1 — Robustesse des Actions Sensibles et Anti-Rejeu
+- **Sanctuarisation SENSITIVE** : Si la politique sensible est requise, aucun outil `SENSITIVE` ne peut être exécuté sans jeton valide généré par `ToolRegistry`.
+- **Maintien de l'État de Confirmation** : La fin de l'annonce vocale de confirmation ne fait pas basculer le pipeline à `READY`, mais le maintient en `WAITING_CONFIRMATION` jusqu'à validation utilisateur ou expiration.
+
+### 8. P1 — Table de Partitions Flash 16 Mo pour CoreS3
+- **Nouvelle Table `partitions_16MB.csv`** : Allocation d'une partition application `app0` de 8 Mo (0x800000) et SPIFFS de 7,875 Mo, éliminant la saturation de la partition `no_ota.csv` (2 Mo / 98.9% d'occupation avec polices françaises LVGL).
+- **Vérification d'Initialisation dans `main.cpp`** : Contrôle systématique des retours de `s_voice.begin()`, `s_pipeline.begin()`, `registerTool()` et `registerMapping()` avec affichage visuel d'erreur sur l'écran tactile CoreS3.
+
+### 9. Validation et Tests Automatisés
+- **Suite de Tests 145 (v0.6.5.1)** : 10 tests obligatoires (A à J) couvrant commande locale avec ReplyMemory, cycle IA complet simulé, refus TTS, idempotence de terminaison, pause/reprise, négations, parsing numérique, sécurité sensible, pannes réseau et test d'endurance de 30 tours consécutifs.
+- **Bilan Global** : 3 016 assertions logiques réussies sur 3 016 (100% de succès, 0 échec).
+
+---
+
 ## [0.6.5] - 2026-11-11 (Integrated Voice Pipeline)
 
 Mise à niveau majeure introduisant l'orchestrateur centralisé `IntegratedVoicePipeline`, permettant de construire des applications vocales complètes sans devoir programmer manuellement la coordination entre STT, TTS, Voice UX, ToolRegistry et les fournisseurs d'IA (Gemini Live / OpenAI Realtime).

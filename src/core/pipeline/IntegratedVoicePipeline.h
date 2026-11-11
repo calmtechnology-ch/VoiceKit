@@ -217,6 +217,11 @@ public:
     bool isTranscribing() const { return _state == PipelineState::TRANSCRIBING; }
     bool isSpeaking() const { return _state == PipelineState::SPEAKING; }
     bool isWaitingConfirmation() const { return _state == PipelineState::WAITING_CONFIRMATION; }
+    bool isPaused() const { return _isPaused; }
+
+    void setPaused(bool paused) { _isPaused = paused; }
+    void pause() { _isPaused = true; }
+    void resume() { _isPaused = false; }
 
     // =========================================================================
     // Configuration et Accès aux Composants
@@ -263,7 +268,8 @@ private:
     void routeText(const String& text);
     void executeTool(const String& toolId, const ToolArgs& args);
     void transmitToAi(const String& text);
-    void speakOutput(const String& text, bool isAiResponse = false);
+    void speakOutput(const String& text, bool isAiResponse = false, bool rememberReply = true);
+    static String truncateUtf8Safe(const String& str, size_t maxBytes);
 
     VoxCoreVoice* _voice = nullptr;
     ToolRegistry* _tools = nullptr;
@@ -280,10 +286,12 @@ private:
     uint32_t _turnCounter = 0;
     uint32_t _activeTurnId = 0;
     uint32_t _cancelledTurnId = 0;
+    uint32_t _lastFinishedTurnId = 0;
     uint32_t _activeSpeechId = 0;
 
     uint32_t _stateStartTimeMs = 0;
     uint32_t _confirmationStartTimeMs = 0;
+    uint32_t _speechStartTimeMs = 0;
 
     String _lastTranscription;
     String _lastSpokenText;
@@ -294,6 +302,10 @@ private:
     String _pendingToolId;
     ToolArgs _pendingToolArgs;
     bool _isAiSpeechActive = false;
+    bool _isPaused = false;
+    bool _speechWaitingStart = false;
+    bool _shouldRememberReply = false;
+    bool _finalTranscriptionReceivedForTurn = false;
 
     // Callbacks
     StateCallback _onStateChanged;

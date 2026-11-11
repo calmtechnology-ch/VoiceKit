@@ -1,4 +1,4 @@
-# VoiceKit v0.6.5 — Integrated Voice Pipeline
+# VoiceKit v0.6.5.1 — Integrated Voice Pipeline (Stabilisation)
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -11,7 +11,46 @@ Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)
 
 ---
 
-### Nouveautés majeures de la v0.6.5 (Integrated Voice Pipeline)
+### Nouveautés majeures de la v0.6.5.1 (Stabilisation du Pipeline Intégré)
+
+La version **v0.6.5.1** apporte une série de correctifs critiques et de durcissements sur le module `IntegratedVoicePipeline` et son exemple de démonstration `IntegratedVoiceDemo` :
+
+1. **Parcours IA Complet et Instruction Système Duale** :
+   - Définition d'une instruction système adaptée (`VOICEKIT_DEFAULT_INTEGRATED_INSTRUCTION`) garantissant que `askAi()` reçoit de vraies réponses conversationnelles et ne fait pas répéter la question.
+   - Synchronisation dynamique dans `VoxCoreVoice` sans perturber le mode TTS verbatim.
+   - Écoute continue de `onAssistantText` dès l'initialisation du pipeline et clôture après achèvement effectif du flux audio.
+
+2. **Sécurisation de `speakOutput()` et des Démarrages TTS** :
+   - Contrôle strict du retour de `say()` : en cas de refus, bascule immédiate vers `READY` avec résultat `FAILED` sans bloquer le pipeline dans l'état `SPEAKING`.
+   - Suivi par `speechId` filtrant les notifications tardives ou obsolètes.
+   - Timeouts configurables de démarrage et de restitution audio (`ttsStartTimeoutMs`, `ttsPlaybackTimeoutMs`).
+
+3. **Idempotence Stricte des Terminaisons (`finishTurn`)** :
+   - Verrou terminal interdisant l'émission de multiples callbacks `onTurnFinished()` pour un même tour.
+   - Élimination de la double terminaison lors de l'expiration du délai de confirmation.
+   - Annulation active des opérations en cours lors d'un `STOP` prioritaire.
+
+4. **Unification de `ReplyMemory` et Troncature UTF-8** :
+   - Mémorisation homogène des réponses d'outils locaux et d'assistant IA uniquement après restitution complète.
+   - Exclusion stricte des répétitions (`REPEAT`, `PREVIOUS`) et des messages système.
+   - Troncature sécurisée des chaînes UTF-8 françaises avec `truncateUtf8Safe()`.
+
+5. **PAUSE et RESUME Effectifs** :
+   - Suspension opérationnelle réelle bloquant toute commande ordinaire ou transmission IA en pause.
+   - Réponses directes « En pause. » et « Reprise. », maintien du `STOP` prioritaire.
+
+6. **Durcissement de `VoiceCommandDispatcher`** :
+   - Détection des négations (`hasNegation()`) pour empêcher l'exécution d'actions non souhaitées ("je ne veux pas...").
+   - Filtrage des questions explicatives (`isInformationQuery()`).
+   - Parsing numérique robuste pour les entiers, les décimaux français (virgule et point) et les valeurs négatives.
+
+7. **Table de Partitions 16 Mo pour M5Stack CoreS3** :
+   - Table `partitions_16MB.csv` attribuant 8 Mo à l'application `app0` (résolvant l'occupation à 98.9% de `no_ota.csv` 2 Mo).
+   - Validation systématique des retours de démarrage et de registre d'outils dans `main.cpp`.
+
+---
+
+### Nouveautés de la v0.6.5 (Integrated Voice Pipeline)
 
 La version **v0.6.5** transforme VoiceKit en une bibliothèque de haut niveau permettant de construire des applications vocales complètes sans devoir programmer manuellement la coordination entre STT, TTS, Voice UX, ToolRegistry et les fournisseurs d'IA :
 

@@ -86,6 +86,12 @@ String VoiceCommandDispatcher::normalize(const String& input) {
                 result += static_cast<char>(c + 32); // Minuscule
             } else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
                 result += c;
+            } else if ((c == '.' || c == ',') && (i + 1 < len) && (bytes[i + 1] >= '0' && bytes[i + 1] <= '9') && (i > 0 && bytes[i - 1] >= '0' && bytes[i - 1] <= '9')) {
+                // Séparateur décimal entre deux chiffres (ex: 12.5 ou 12,5)
+                result += '.';
+            } else if (c == '-' && (i + 1 < len) && (bytes[i + 1] >= '0' && bytes[i + 1] <= '9') && (i == 0 || bytes[i - 1] == ' ' || bytes[i - 1] == '(' || bytes[i - 1] == '=')) {
+                // Signe négatif devant un chiffre (ex: -5)
+                result += '-';
             } else {
                 result += ' '; // Séparateur d'espace pour ponctuation et symboles
             }
@@ -162,12 +168,23 @@ String VoiceCommandDispatcher::stripPoliteWrappers(const String& text) {
     // Préfixes courants
     static const char* prefixes[] = {
         "s il te plait", "s il vous plait", "sil te plait", "sil vous plait",
+        "peux tu me donner", "pouvez vous me donner", "pourrais tu me donner", "pourriez vous me donner",
         "peux tu me dire", "pouvez vous me dire", "pourrais tu me dire", "pourriez vous me dire",
+        "peux tu me montrer", "pouvez vous me montrer",
+        "peux tu afficher", "pouvez vous afficher",
+        "peux tu donner", "pouvez vous donner",
+        "peux tu mettre", "pouvez vous mettre",
+        "peux tu regler", "pouvez vous regler",
         "peux tu", "pouvez vous", "pourrais tu", "pourriez vous",
-        "dis moi", "dites moi", "donne moi", "donnez moi",
-        "je voudrais savoir", "je voudrais", "je veux",
+        "donne moi le", "donne moi la", "donne moi l", "donne moi les", "donne moi",
+        "donnez moi le", "donnez moi la", "donnez moi l", "donnez moi les", "donnez moi",
+        "dis moi le", "dis moi la", "dis moi", "dites moi",
+        "affiche moi", "affiche le", "affiche la", "affiche",
+        "montre moi", "montre",
+        "je voudrais savoir", "je voudrais le", "je voudrais la", "je voudrais", "je veux",
         "merci de me dire", "merci de",
-        "veuillez", "stp", "svp"
+        "veuillez", "stp", "svp",
+        "le ", "la ", "l ", "les ", "un ", "une "
     };
 
     bool stripped = true;
@@ -180,8 +197,8 @@ String VoiceCommandDispatcher::stripPoliteWrappers(const String& text) {
                     s = "";
                     stripped = true;
                     break;
-                } else if (s[plen] == ' ') {
-                    s = s.substring(plen + 1);
+                } else if (p[plen - 1] == ' ' || s[plen] == ' ') {
+                    s = s.substring(p[plen - 1] == ' ' ? plen : (plen + 1));
                     s.trim();
                     stripped = true;
                     break;
@@ -220,20 +237,58 @@ String VoiceCommandDispatcher::stripPoliteWrappers(const String& text) {
     return s;
 }
 
+bool VoiceCommandDispatcher::hasNegation(const String& text) {
+    if (text.isEmpty()) return false;
+    String s = " " + text + " ";
+
+    // Détection des formes négatives françaises usuelles
+    if (s.indexOf(" pas ") >= 0 || s.indexOf(" plus ") >= 0 ||
+        s.indexOf(" jamais ") >= 0 || s.indexOf(" rien ") >= 0) {
+        if (s.indexOf(" ne ") >= 0 || s.indexOf(" n ") >= 0 ||
+            s.indexOf(" pas de ") >= 0 || s.indexOf(" surtout pas ") >= 0) {
+            return true;
+        }
+    }
+    if (s.indexOf(" je ne veux pas ") >= 0 || s.indexOf(" surtout pas ") >= 0 ||
+        s.indexOf(" ne pas ") >= 0 || s.indexOf(" non ") >= 0) {
+        return true;
+    }
+    return false;
+}
+
+bool VoiceCommandDispatcher::isInformationQuery(const String& text) {
+    if (text.isEmpty()) return false;
+    String s = text;
+    s.trim();
+    if (s.startsWith("explique ") || s.startsWith("expliquez ") ||
+        s.startsWith("comment fonctionne ") || s.startsWith("comment marche ") ||
+        s.startsWith("pourquoi ") || s.startsWith("qu est ce que ") ||
+        s.startsWith("qu est ce qui ") || s.startsWith("c est quoi ") ||
+        s.startsWith("en quoi consiste ")) {
+        return true;
+    }
+    return false;
+}
+
 bool VoiceCommandDispatcher::extractNumber(const String& text, int& outInt, double& outDouble) {
     int foundStart = -1;
     int foundLen = 0;
     bool hasDot = false;
+    const size_t len = text.length();
 
-    for (size_t i = 0; i < text.length(); ++i) {
+    for (size_t i = 0; i < len; ++i) {
         char c = text[i];
-        if (c >= '0' && c <= '9') {
+        if (c == '-' && (i + 1 < len) && (text[i + 1] >= '0' && text[i + 1] <= '9') && foundStart < 0) {
+            foundStart = (int)i;
+            foundLen = 1;
+            hasDot = false;
+        } else if (c >= '0' && c <= '9') {
             if (foundStart < 0) {
                 foundStart = (int)i;
                 hasDot = false;
             }
             foundLen++;
-        } else if ((c == '.' || c == ',') && foundStart >= 0 && !hasDot) {
+        } else if ((c == '.' || c == ',') && foundStart >= 0 && !hasDot && (i + 1 < len) && (text[i + 1] >= '0' && text[i + 1] <= '9')) {
             hasDot = true;
             foundLen++;
         } else {
@@ -273,6 +328,14 @@ VoiceCommandMatch VoiceCommandDispatcher::match(const String& rawText) const {
         return res;
     }
 
+    // Protection 1 : Si la phrase contient une négation, ne JAMAIS déclencher d'outil à effet
+    if (hasNegation(norm) || hasNegation(cleaned)) {
+        return res;
+    }
+
+    // Protection 2 : Si la phrase est une demande d'explication / question générale
+    bool isInfoQuery = isInformationQuery(norm) || isInformationQuery(cleaned);
+
     // Parcourir toutes les correspondances enregistrées
     for (const auto& item : _patterns) {
         // Règle de sécurité stricte : si un ToolRegistry est associé, la commande DOIT exister
@@ -282,6 +345,11 @@ VoiceCommandMatch VoiceCommandDispatcher::match(const String& rawText) const {
 
         for (const auto& pat : item.patterns) {
             bool matches = false;
+
+            // Si c'est une question d'information, seul un motif enregistrant explicitement cette question est accepté
+            if (isInfoQuery && !pat.startsWith("explique") && !pat.startsWith("comment") && !pat.startsWith("pourquoi")) {
+                continue;
+            }
 
             // 1. Correspondance exacte
             if (cleaned == pat || norm == pat) {
@@ -294,9 +362,12 @@ VoiceCommandMatch VoiceCommandDispatcher::match(const String& rawText) const {
                     matches = true;
                 }
             }
-            // 3. Correspondance de sous-chaîne significative
-            else if (cleaned.indexOf(pat) >= 0) {
-                matches = true;
+            // 3. Correspondance avec suffixe (ex: "regle la luminosite a 80")
+            else if (cleaned.endsWith(pat)) {
+                size_t patLen = pat.length();
+                if (cleaned.length() > patLen && cleaned[cleaned.length() - patLen - 1] == ' ') {
+                    matches = true;
+                }
             }
 
             if (matches) {

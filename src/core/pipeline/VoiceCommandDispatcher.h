@@ -100,6 +100,16 @@ public:
     static String stripPoliteWrappers(const String& normalizedText);
 
     /**
+     * @brief Détecte si une phrase contient une négation (« ne ... pas », « ne veux pas », « pas de », etc.).
+     */
+    static bool hasNegation(const String& normalizedText);
+
+    /**
+     * @brief Détecte si une phrase constitue une demande d'explication ou une question (« comment fonctionne », « explique-moi », etc.).
+     */
+    static bool isInformationQuery(const String& normalizedText);
+
+    /**
      * @brief Tente d'extraire une valeur numérique (entière et réelle) d'une chaîne.
      */
     static bool extractNumber(const String& text, int& outInt, double& outDouble);

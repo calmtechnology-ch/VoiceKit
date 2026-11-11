@@ -8673,6 +8673,9 @@ int main() {
     // Suite VoiceKit v0.6.5 — Integrated Voice Pipeline (Tests A, B, C, D, E, F, G, H, I & J)
     run_pipeline_v065_tests();
 
+    // Suite VoiceKit v0.6.5.1 — Integrated Pipeline Stabilization (Tests A, B, C, D, E, F, G, H, I & J)
+    run_pipeline_v0651_tests();
+
     std::cout << "\n===========================================================" << std::endl;
     std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, " << s_testsFailed << " ECHECS" << std::endl;
     std::cout << "===========================================================" << std::endl;

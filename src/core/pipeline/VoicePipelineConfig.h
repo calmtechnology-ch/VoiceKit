@@ -33,9 +33,11 @@ struct VoicePipelineConfig {
 
     // 2. Délais et timeouts (en millisecondes)
     uint32_t sttTimeoutMs = 6000;            ///< Délai d'attente max pour la transcription finale après fin d'écoute
-    uint32_t toolExecutionTimeoutMs = 10000; ///< Délai max d'exécution d'un outil local (pour tâches différées)
+    uint32_t toolExecutionTimeoutMs = 10000; ///< Délai max d'exécution d'un outil local pour tâches différées (les handlers synchrones s'exécutent jusqu'à complétion)
     uint32_t aiResponseTimeoutMs = 15000;    ///< Délai max d'attente d'une réponse de l'IA
     uint32_t confirmationTimeoutMs = 30000;  ///< Délai d'expiration du jeton de confirmation pour commande SENSITIVE
+    uint32_t ttsStartTimeoutMs = 8000;       ///< Délai d'attente max pour le début de restitution vocale TTS
+    uint32_t ttsPlaybackTimeoutMs = 25000;   ///< Délai max d'émission audio TTS avant timeout de sécurité
 
     // 3. Sécurité et confirmations
     bool requireConfirmationForSensitive = true; ///< Commande sensible requiert une confirmation explicite obligatoire

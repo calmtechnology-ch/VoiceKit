@@ -220,6 +220,12 @@ public:
     VoiceTone getTone() const { return _config.tone; }
     String getAccent() const { return _config.accent; }
 
+    bool setSystemInstruction(const String& instruction);
+    const String& getSystemInstruction() const { return _config.systemInstruction; }
+
+    void setAiPromptPrefix(const String& prefix) { _config.aiPromptPrefix = prefix; }
+    const String& getAiPromptPrefix() const { return _config.aiPromptPrefix; }
+
     // =========================================================================
     // API STT (Speech-to-Text)
     // =========================================================================

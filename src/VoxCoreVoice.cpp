@@ -1216,6 +1216,14 @@ bool VoxCoreVoice::setAccent(const String& accent) {
     return setVoiceProfile(_config.voice, _config.language, _config.style, _config.tone, accent);
 }
 
+bool VoxCoreVoice::setSystemInstruction(const String& instruction) {
+    _config.systemInstruction = instruction;
+    if (_activeProvider && !_conversationEnabled) {
+        _activeProvider->setSystemInstruction(instruction);
+    }
+    return true;
+}
+
 // =============================================================================
 // Implémentation Conversation Bidirectionnelle (v0.4.0 / v0.4.1.1 / v0.6.0)
 // =============================================================================
