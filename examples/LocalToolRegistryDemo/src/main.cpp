@@ -1,6 +1,6 @@
 /**
  * @file main.cpp
- * @brief Exemple LocalToolRegistryDemo — Registre Local d'Outils pour VoiceKit v0.6.4
+ * @brief Exemple LocalToolRegistryDemo — Registre Local d'Outils pour VoiceKit v0.6.5.2
  * 
  * Fonctionne a 100% hors ligne, sans Wi-Fi ni fournisseur IA.
  * Enregistre, decouvre, valide et execute trois commandes locales reelles :
@@ -92,7 +92,7 @@ static void refreshScreen() {
     M5.Display.fillRect(0, 0, 320, 30, TFT_NAVY);
     M5.Display.setTextColor(TFT_WHITE, TFT_NAVY);
     M5.Display.setTextDatum(MC_DATUM);
-    M5.Display.drawString("VoiceKit v0.6.4 : Local Tool Registry", 160, 15);
+    M5.Display.drawString("VoiceKit v0.6.5.2 : Local Tool Registry", 160, 15);
 
     // Sous-titre
     M5.Display.setTextDatum(TL_DATUM);
@@ -132,7 +132,7 @@ static void refreshScreen() {
 
 static void printMenu() {
     Serial.println("\n=======================================================");
-    Serial.println("  VoiceKit v0.6.4 — Local Tool Registry Demo");
+    Serial.println("  VoiceKit v0.6.5.2 — Local Tool Registry Demo");
     Serial.println("  M5Stack CoreS3 (100% Hors-Ligne / Sans Wi-Fi / Sans IA)");
     Serial.println("=======================================================");
     Serial.println("Menu des actions interactives :");

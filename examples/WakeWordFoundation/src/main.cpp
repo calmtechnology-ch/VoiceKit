@@ -1,13 +1,13 @@
 /**
  * @file main.cpp
- * @brief Exemple autonome — VoiceKit v0.6.2.1 (Wake Word Foundation — M5Stack CoreS3)
+ * @brief Exemple autonome — VoiceKit v0.6.5.2 (Wake Word Foundation — M5Stack CoreS3)
  *
  * Fonctionnement :
  * - S'exécute sur M5Stack CoreS3 SANS écran LVGL et SANS connexion Wi-Fi ni Gemini/OpenAI.
  * - Valide la capture audio locale partagée (ES7210, PCM 16000 Hz / 16-bit mono) via VoiceKit.
  * - Affiche sur le moniteur série ET sur l'écran M5Stack CoreS3 (M5GFX sans LVGL) la carte
- *   visuelle v0.6.2.1 mettant immédiatement en évidence chaque détection de « Bonjour ESP » :
- *     VOICEKIT — WAKE WORD                                    v0.6.2.1
+ *   visuelle v0.6.5.2 mettant immédiatement en évidence chaque détection de « Bonjour ESP » :
+ *     VOICEKIT — WAKE WORD                                    v0.6.5.2
  *     ────────────────────────────────────────────────────────────────
  *     🎙 ARMED — En écoute...
  *     ╭──────────────────────────────────────────────────────────────╮

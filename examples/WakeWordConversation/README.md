@@ -1,24 +1,110 @@
-# WakeWordConversation — VoiceKit v0.6.3.2
+# WakeWordConversation — VoiceKit v0.6.5.2
 
-Exemple de conversation vocale entièrement mains libres déclenchée exclusivement par le mot de réveil acoustique local **« Bonjour ESP »** (`wn10_fr_bonjouresp`) sur **M5Stack CoreS3**, avec affichage direct **M5GFX** (sans LVGL).
+Exemple officiel de dialogue vocal mains libres complet : réveil acoustique hors ligne par « **Bonjour ESP** » puis conversation multi-tours avec **Gemini Live** ou **OpenAI Realtime** sur **M5Stack CoreS3**.
 
-## Cycle fonctionnel
+---
 
-1. **EN ATTENTE — « Bonjour ESP »** (`WAKE_ARMED`) : WakeNet (`wn10_fr_bonjouresp`) écoute localement en hors ligne sur le microphone ES7210.
-2. **MOT DE RÉVEIL DÉTECTÉ** (`WAKE_DETECTED` / `PREPARING_SESSION`) : Suspension contrôlée de WakeNet et libération vérifiée du microphone.
-3. **CONNEXION GEMINI / CONNEXION OPENAI** (`CONNECTING`) : Établissement de la session WebSocket TLS et confirmation `setupComplete`.
-4. **PRÊT — PARLEZ** / **ÉCOUTE** (`CONVERSATION_LISTENING`) : Capture vocale automatique avec détection locale de fin de phrase (VAD) et timeout d'inactivité configurable (30 s par défaut).
-5. **RÉPONSE VOCALE** (`CONVERSATION_SPEAKING`) : Restitution intégrale de la réponse PCM 24 kHz via VoxCore Mode 2, puis retour automatique en écoute pour permettre plusieurs tours sans répéter « Bonjour ESP ».
-6. **FIN DE CONVERSATION** (`ENDING_SESSION`) : Clôture par timeout de silence (30 s), durée maximale, arrêt manuel (`STOP SESSION`) ou commande vocale confirmée par transcription finale (« Au revoir »), puis déconnexion réseau.
-7. **RETOUR EN ÉCOUTE** (`RETURNING_TO_WAKE`) : Réactivation contrôlée de WakeNet et retour à `WAKE_ARMED`.
+## 1. Objectif
 
-## Configuration
+Démontrer et valider l'intégralité du cycle de vie mains libres sur microcontrôleur :
+$$\text{WAKE\_ARMED} \overset{\text{« Bonjour ESP »}}{\longrightarrow} \text{DETECTED} \longrightarrow \text{CONNECTING} \longrightarrow \text{LISTENING} \rightleftarrows \text{SPEAKING} \longrightarrow \text{RETURNING\_TO\_WAKE} \longrightarrow \text{WAKE\_ARMED}$$
+Cet exemple garantit l'arbitrage exclusif du microphone matériel ES7210 entre le moteur local WakeNet et la session cloud bidirectionnelle, sans conflit d'acquisition ni fuite mémoire.
 
-Copiez `include/secrets.example.h` vers `include/secrets.h` et renseignez vos identifiants Wi-Fi et clé API (`GEMINI_KEY` ou `OPENAI_API_KEY`).
+---
 
-## Compilation et téléversement
+## 2. Fonctionnalités
 
+- **Activation acoustique réelle « Bonjour ESP »** : Détection locale hors ligne ultra-rapide par modèle WakeNet ESP-SR.
+- **Passation sans coupure du microphone** : Libération contrôlée du microphone par WakeNet avant son assignation au flux conversationnel.
+- **Support multi-fournisseurs** : Compatible Google Gemini Live (par défaut) et OpenAI Realtime.
+- **Dialogue multi-tours naturel** : Une fois réveillé, l'assistant enchaîne les questions et réponses sans avoir à répéter le mot de réveil.
+- **Clôture automatique intelligente** : Fin de session après 30 s d'inactivité, commande vocale finale (*« Au revoir »*) ou bouton tactile STOP.
+- **Retour automatique à WakeNet** : Réarmement silencieux du détecteur local à la clôture de la session cloud.
+- **Affichage M5GFX dynamique** : Rendu visuel 320 × 240 avec vumètre audio RMS temps réel et code couleur par état.
+
+---
+
+## 3. Matériel requis
+
+- **Carte** : M5Stack CoreS3 (ESP32-S3).
+- **Mémoire** : 8 Mo OPI PSRAM requise.
+- **Audio** : Microphone double ES7210 et haut-parleur AW88298.
+- **Alimentation** : USB-C 5V / 1A.
+
+---
+
+## 4. Configuration
+
+1. Copier le fichier des secrets :
+   ```bash
+   cp include/secrets.example.h include/secrets.h
+   ```
+2. Éditer `include/secrets.h` avec vos identifiants :
+   ```cpp
+   #define WIFI_SSID     "Votre_SSID_WiFi"
+   #define WIFI_PASSWORD "Votre_Mot_De_Passe"
+   #define GEMINI_KEY    "Votre_Cle_API_Google_Gemini"
+   // ou #define OPENAI_API_KEY "Votre_Cle_API_OpenAI"
+   ```
+
+---
+
+## 5. Compilation
+
+Compiler avec PlatformIO :
 ```bash
-pio run -e m5stack-cores3
-pio run -e m5stack-cores3 -t upload
+pio run -d examples/WakeWordConversation
 ```
+
+---
+
+## 6. Téléversement
+
+1. Téléverser le programme :
+   ```bash
+   pio run -d examples/WakeWordConversation -t upload
+   ```
+2. Ouvrir la console série :
+   ```bash
+   pio device monitor -d examples/WakeWordConversation -b 115200
+   ```
+
+---
+
+## 7. Mode d'utilisation
+
+1. L'écran affiche un bandeau vert : `EN ATTENTE — « Bonjour ESP »`. Le microphone écoute localement sans consommer de bande passante réseau.
+2. Dire à voix intelligible : **« Bonjour ESP »**.
+3. Le bandeau passe en orange vif (`BONJOUR ESP DÉTECTÉ`), puis en cyan (`CONNEXION...`), puis en vert clair (`PRÊT — PARLEZ`).
+4. Poser votre question (ex: *« Quel temps fait-il aujourd'hui ? »*).
+5. L'assistant répond vocalement (bandeau bleu ciel `RÉPONSE VOCALE`).
+6. Enchaîner immédiatement avec une autre question sans répéter « Bonjour ESP ».
+7. Pour clore la conversation : dire *« Au revoir »*, attendre 30 secondes de silence ou toucher le bouton STOP sur l'écran.
+8. Le système affiche brièvement `RETOUR EN ÉCOUTE` puis revient en veille locale sur « Bonjour ESP ».
+
+---
+
+## 8. Tests à effectuer
+
+| # | Test | Procédure | Résultat attendu |
+|---|---|---|---|
+| 1 | Réveil acoustique | Dire *« Bonjour ESP »* | Détection confirmée, connexion cloud initiée immédiatement. |
+| 2 | Échange vocal multi-tours | Poser 2 questions à la suite | Échanges fluides, réponses orales complètes sans coupure. |
+| 3 | Fin par mot-clé | Dire distinctement *« Au revoir »* | Clôture de la session cloud, retour à l'écoute « Bonjour ESP ». |
+| 4 | Fin par timeout | Laisser 30 s de silence après une réponse | Fermeture automatique de la session, réarmement de WakeNet. |
+| 5 | Arrêt manuel STOP | Toucher STOP pendant la réponse | Coupure immédiate, déconnexion et réarmement local. |
+
+---
+
+## 9. Résultats attendus
+
+- Aucun conflit matériel sur le microphone (arbitrage sans double initialisation I2S).
+- Absence totale de double session WebSocket.
+- Réarmement automatique systématique et stable sur des dizaines de cycles successifs.
+
+---
+
+## 10. Limitations connues
+
+- La transition de connexion réseau initiale (TLS handshake) prend généralement entre 800 ms et 1,8 s selon le Wi-Fi.
+- Le mot de réveil « Bonjour ESP » doit être prononcé clairement avec une articulation naturelle.

@@ -1,6 +1,6 @@
 /**
  * @file main.cpp
- * @brief Exemple OpenAIConversationLVGL v0.1.0.1 — Modern Voice UI avec LVGL 9
+ * @brief Exemple OpenAIConversationLVGL v0.6.5.2 — Modern Voice UI avec LVGL 9
  *        Dialogue vocal bidirectionnel temps reel avec OpenAI Realtime API
  *        (gpt-realtime-2.1-mini) sur M5Stack CoreS3 (320x240 LVGL 9).
  */
@@ -87,7 +87,7 @@ void setup() {
     delay(300);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.1.0.1 — OpenAIConversationLVGL Edition       ");
+    Serial.println("  VoiceKit v0.6.5.2 — OpenAIConversationLVGL Edition    ");
     Serial.println("  OpenAI Realtime (gpt-realtime-2.1-mini) + LVGL 9      ");
     Serial.println("  M5Stack CoreS3 (320x240 LCD + Capacitive Touch)       ");
     Serial.println("========================================================");

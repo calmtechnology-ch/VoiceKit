@@ -16,6 +16,8 @@
 
 #if __has_include("secrets.h")
     #include "secrets.h"
+#elif __has_include("secrets.example.h")
+    #include "secrets.example.h"
 #endif
 
 #ifndef WIFI_SSID
@@ -388,9 +390,10 @@ static void printHelp() {
     Serial.println("  p       : Démarrer l'écoute vocale (PTT ON)");
     Serial.println("  r       : Arrêter l'écoute vocale (PTT OFF -> Transcrire)");
     Serial.println("  s       : STOP prioritaire");
+    Serial.println("  k       : Basculer Pause / Reprise du pipeline");
     Serial.println("  c       : Confirmer l'action sensible en attente");
     Serial.println("  x       : Refuser l'action sensible en attente");
-    Serial.println("  t <txt> : Injecter un texte simulé (ex: 't statut')");
+    Serial.println("  t <txt> : Injecter un texte simulé (ex: 't statut', 't repete')");
     Serial.println("  o <0..3>: Régler la rotation écran (0=Paysage normal, 2=Paysage inv, 1=Portrait)");
     Serial.println("  ?       : Afficher cette aide");
     Serial.println("-------------------------------------------\n");
@@ -413,6 +416,12 @@ static void handleSerialCommand(const String& cmd) {
     } else if (first == 's' || first == 'S') {
         Serial.println("[CMD] S -> STOP prioritaire");
         s_pipeline.cancel();
+    } else if (first == 'k' || first == 'K') {
+        bool nowPaused = !s_pipeline.isPaused();
+        s_pipeline.setPaused(nowPaused);
+        Serial.printf("[CMD] K -> Pipeline %s\n", nowPaused ? "EN PAUSE" : "REPRIS (ACTIF)");
+        snprintf(s_responseTextBuf, sizeof(s_responseTextBuf), "Pipeline %s", nowPaused ? "en pause." : "repris.");
+        s_responseTextDirty = true;
     } else if (first == 'c' || first == 'C') {
         Serial.println("[CMD] C -> Confirmer action");
         s_pipeline.confirmPendingAction();
@@ -493,7 +502,7 @@ void setup() {
     }
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.6.5.1 — Integrated Voice Pipeline Demo     ");
+    Serial.println("  VoiceKit v0.6.5.2 — Integrated Voice Pipeline Demo     ");
     Serial.printf ("  Moteur IA actif : %s\n", providerName);
     Serial.println("========================================================\n");
 

@@ -47,7 +47,7 @@ static const char* TEST_PHRASES[] = {
     // 3. Phrase moyenne (~10 secondes)
     "La synthese vocale haute fidelite fonctionne maintenant parfaitement sans aucune coupure grace au moteur audio stabilise de VoxCore.",
     // 4. Phrase longue (~20-25 secondes)
-    "VoiceKit version zero point deux point zero est une bibliotheque autonome legere construite directement sur les composants stabilises de VoxCore. Les protocoles reseau et la restitution sonore vingt-quatre kilohertz sont desormais valides mot a mot jusqu au dernier echantillon sonore."
+    "VoiceKit version zero point six point cinq est une bibliotheque autonome legere construite directement sur les composants stabilises de VoxCore. Les protocoles reseau et la restitution sonore vingt-quatre kilohertz sont desormais valides mot a mot jusqu au dernier echantillon sonore."
 };
 static constexpr size_t TEST_PHRASES_COUNT = sizeof(TEST_PHRASES) / sizeof(TEST_PHRASES[0]);
 
@@ -56,8 +56,8 @@ void setup() {
     delay(200);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.2.0 — Exemple MinimalTTS          ");
-    Serial.println("  Reconstruction sur la base stable de VoxCore          ");
+    Serial.println("  VoxCore VoiceKit v0.6.5.2 — Exemple MinimalTTS       ");
+    Serial.println("  Synthese vocale unitaire haute fidelite               ");
     Serial.println("========================================================");
 
     // 1. Initialisation materielle CoreS3 (Ecran LCD, Alimentation, Haut-parleur)
@@ -67,7 +67,7 @@ void setup() {
 
     M5.Display.setTextSize(2);
     M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5.Display.drawString("VoiceKit v0.2.0", 10, 15);
+    M5.Display.drawString("VoiceKit v0.6.5.2", 10, 15);
     M5.Display.setTextSize(1);
     M5.Display.drawString("Moteur VoxCore (Mode 2 DMA)", 10, 45);
     M5.Display.drawString("Appuyez sur l'ecran pour parler", 10, 65);

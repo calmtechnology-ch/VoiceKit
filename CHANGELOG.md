@@ -28,11 +28,42 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
-## [0.6.5.2] - 2026-11-13 (Transcription Assembly & OpenAI Realtime Finalization)
+## [0.6.5.2] - 2026-11-13 (Examples Cleanup, Validation & Transcription Assembly)
 
-Correctif ciblé fiabilisant l'assemblage et la consolidation des transcriptions de sortie de l'assistant observés sur matériel M5Stack CoreS3 avec OpenAI Realtime (`gpt-realtime-2.1-mini`), sans aucune régression sur Google Gemini Live ni rupture de l'API publique (`VoxCoreVoice`, `IVoiceProvider`, mocks de test).
+Version de consolidation consacrée au nettoyage, à la fiabilisation, à la documentation uniforme et à la validation des exemples de VoiceKit, accompagnée du correctif ciblé d'assemblage des transcriptions OpenAI Realtime sans aucune modification de l'architecture interne ni régression du moteur VoxCore.
 
-### 1. Préservation des Espaces Significatifs (`LiveSessionController::appendTranscriptionFragment`)
+### 1. Organisation et Standardisation des Exemples (11 Exemples Officiels)
+- **11 Exemples Officiels Conservés** :
+  1. `MinimalTTS` : Synthèse vocale pure unitaire (TTS PCM 24 kHz haute fidélité).
+  2. `MinimalSTT` : Reconnaissance vocale Push-to-Talk (STT PCM 16 kHz) fiabilisée.
+  3. `MinimalConversation` : Dialogue bidirectionnel direct (Mode B) avec Google Gemini Live.
+  4. `MinimalTTS_Arduino` : Exemple autonome `.ino` pour l'IDE Arduino officiel.
+  5. `WakeWordFoundation` : Diagnostic acoustique hors ligne « Bonjour ESP » (WakeNet ESP-SR).
+  6. `WakeWordConversation` : Cycle mains libres complet Wake Word $\to$ Conversation multi-tours.
+  7. `LocalToolRegistryDemo` : Registre local d'outils matériels hors ligne (`ToolRegistry`).
+  8. `VoiceDiagnostics` : Télémétrie vocale, monitoring RAM/PSRAM et latences (6 onglets M5GFX).
+  9. `VoiceSettingsDemo` : Démonstration multilingue (FR, DE, EN), profils vocaux et chaîne UTF-8.
+  10. `OpenAIConversationLVGL` : Référence OpenAI Realtime avec interface graphique tactile LVGL 9.
+  11. `IntegratedVoiceDemo` : Exemple phare illustrant l'orchestrateur `IntegratedVoicePipeline`.
+- **Archivage et Reclassement (Zéro perte de code)** :
+  - `archive/examples/MinimalVoiceKit/` : Ancien exemple composite archivé.
+  - `archive/examples/ContinuousSTT/` : Mode continu unitaire archivé (intégré au pipeline).
+  - `archive/examples/OpenAIConversation/` : Version M5GFX brute remplacée par LVGL 9.
+  - `showcases/OrientationClockVoice/` : Reclassé en application vitrine gyroscopique complète.
+  - `tests/manual/VoiceUxDemo/` : Reclassé en banc d'essai manuel hors ligne.
+  - `tests/integration/VoiceUxLiveDemo/` : Reclassé en test d'intégration du pont temps réel.
+
+### 2. Fiabilisation et Normalisation PlatformIO
+- **Suppression des ports COM en dur** : Élimination de `upload_port = COMx` dans tous les `platformio.ini` officiels et archivés pour une détection automatique universelle.
+- **`MinimalSTT` durci** : Démarrage du micro validé uniquement sur confirmation de `startListening()`, gestion des rejets, détection des sorties de zone tactile, protection anti-double commande, états stricts (`READY`, `LISTENING`, `TRANSCRIBING`, `ERROR`), et reprise après erreur par toucher tactile.
+- **`IntegratedVoiceDemo` enrichi** : Ajout du fichier modèle `secrets.example.h`, support des commandes série de pause/reprise (`k`), répétition vocale et vérification effective des résultats d'outils.
+
+### 3. Documentation Uniforme et Outils de Validation
+- **Documentation 10/10** : Chaque exemple officiel possède un `README.md` complet structuré en 10 sections obligatoires.
+- **Script automatisé `tools/validation/validate_examples.py`** : Audit complet des répertoires, vérification des fichiers obligatoires, des en-têtes secrets et compilation PlatformIO automatisée sous Windows 11.
+- **Matrice de tests matériels (`tools/validation/MATRICE_TESTS_MATERIELS.md`)** : Protocole documenté pour les 14 tests physiques sur M5Stack CoreS3.
+
+### 4. Préservation des Espaces Significatifs (`LiveSessionController::appendTranscriptionFragment`)
 - **Préservation des deltas d'espaces isolés** : Le tokenizer OpenAI (`o200k_base`) émettant l'espace précédant un nombre sous forme de delta audio transcript dédié contenant uniquement `" "`, correction du test d'élagage (`fTrim.isEmpty()`) pour insérer un espace unique `' '` lorsque la cible ne se termine pas déjà par un blanc au lieu de jeter le delta.
 - **Résolution du collage numérique** : Élimination du collage de mots et de nombres (ex: `"Nous sommes en2026"` $\to$ `"Nous sommes en 2026"`).
 - **Anti-double espace** : Coalescence préventive des espaces consécutifs à la frontière entre deux fragments disjoints lorsque la cible se termine déjà par un espace et que le delta en débute par un.

@@ -1,6 +1,6 @@
 /**
  * @file MinimalTTS_Arduino.ino
- * @brief Exemple autonome VoiceKit v0.5.3.1 pour Arduino IDE (M5Stack CoreS3)
+ * @brief Exemple autonome VoiceKit v0.6.5.2 pour Arduino IDE (M5Stack CoreS3)
  * 
  * =============================================================================
  * Configuration requise dans l'Arduino IDE :
@@ -43,14 +43,14 @@ void setup() {
     delay(500);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.5.3.1 — Exemple MinimalTTS (Arduino IDE)");
+    Serial.println("  VoiceKit v0.6.5.2 — Exemple MinimalTTS (Arduino IDE)");
     Serial.println("========================================================");
 
     // Affichage initial sur l'écran CoreS3
     M5.Display.fillScreen(TFT_BLACK);
     M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
     M5.Display.setTextSize(2);
-    M5.Display.drawString("VoiceKit v0.5.3.1", 10, 15);
+    M5.Display.drawString("VoiceKit v0.6.5.2", 10, 15);
     M5.Display.setTextSize(1);
     M5.Display.drawString("Connexion Wi-Fi & Initialisation...", 10, 50);
 
@@ -97,7 +97,7 @@ void loop() {
         speechTriggered = true;
         Serial.println("[VoiceKit] Moteur pret -> Envoi de la synthese vocale.");
         M5.Display.drawString("Enonciation du message...", 10, 120);
-        voice.say("Bonjour, VoiceKit version zero point deux point un fonctionne parfaitement sur CoreS3.");
+        voice.say("Bonjour, VoiceKit version zero point six point cinq fonctionne parfaitement sur CoreS3.");
     }
 
     // Ré-énonciation par appui tactile sur l'écran

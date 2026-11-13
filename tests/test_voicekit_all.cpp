@@ -5,10 +5,10 @@
 #include <iostream>
 #include <vector>
 
-#include "../examples/OrientationClockVoice/include/FrenchTimeFormatter.h"
-#include "../examples/OrientationClockVoice/include/WiFiTimeSync.h"
-#include "../examples/OrientationClockVoice/src/FrenchTimeFormatter.cpp"
-#include "../examples/OrientationClockVoice/src/WiFiTimeSync.cpp"
+#include "../showcases/OrientationClockVoice/include/FrenchTimeFormatter.h"
+#include "../showcases/OrientationClockVoice/include/WiFiTimeSync.h"
+#include "../showcases/OrientationClockVoice/src/FrenchTimeFormatter.cpp"
+#include "../showcases/OrientationClockVoice/src/WiFiTimeSync.cpp"
 #include "ContinuousListeningController.h"
 #include "Utf8Utils.h"
 #include "VoiceActivityDetector.h"

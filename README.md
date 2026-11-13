@@ -1,19 +1,41 @@
-# VoiceKit v0.6.5.1 — Integrated Voice Pipeline (Stabilisation)
+# VoiceKit v0.6.5.2 — Examples Cleanup & Validation
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
 [![ESP32-S3](https://img.shields.io/badge/Target-M5Stack%20CoreS3%20(ESP32--S3)-blue.svg)](https://docs.m5stack.com/en/core/CoreS3)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **pipeline vocal intégré autonome (`IntegratedVoicePipeline`)**, de **dictée vocale continue mains libres (ContinuousSTT)**, de **conversation vocale bidirectionnelle native (Mode B)**, de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** et de **registre local d'outils (Local Tool Registry)** pour **M5Stack CoreS3** (ESP32-S3).
+Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **pipeline vocal intégré autonome (`IntegratedVoicePipeline`)**, de **conversation vocale bidirectionnelle native (Mode B)**, de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** et de **registre local d'outils (Local Tool Registry)** pour **M5Stack CoreS3** (ESP32-S3).
 
 Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)** supportant à la fois **Google Gemini Live** (moteur par défaut, 100% rétrocompatible) et **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`), construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
 
 ---
 
-### Nouveautés majeures de la v0.6.5.1 (Stabilisation du Pipeline Intégré)
+### Nouveautés majeures de la v0.6.5.2 (Examples Cleanup & Validation)
 
-La version **v0.6.5.1** apporte une série de correctifs critiques et de durcissements sur le module `IntegratedVoicePipeline` et son exemple de démonstration `IntegratedVoiceDemo` :
+La version **v0.6.5.2** est une version dédiée à la clarification, la normalisation, la fiabilisation et la documentation intégrale des exemples de la bibliothèque :
+
+1. **Standardisation autour des 11 Exemples Officiels** :
+   - Sélection stricte de 11 exemples officiels couvrant l'ensemble du périmètre fonctionnel réel de VoiceKit.
+   - Exemple de référence principal : **`IntegratedVoiceDemo`** avec interface tactile **LVGL 9** illustrant le cycle complet sans redondance applicative.
+   - Documentation uniforme : **100 % des 11 exemples disposent d'un `README.md` complet et structuré en 10 sections obligatoires**.
+
+2. **Réorganisation et Archivage Propre (Zéro perte de code)** :
+   - Les exemples composites, obsolètes ou doublons sont déplacés hors de `examples/` avec préservation de leur exploitabilité :
+     - `archive/examples/MinimalVoiceKit/` (remplacé par `MinimalTTS` et `MinimalConversation`)
+     - `archive/examples/ContinuousSTT/` (centralisé dans le pipeline intégré)
+     - `archive/examples/OpenAIConversation/` (remplacé par `OpenAIConversationLVGL`)
+   - Les projets applicatifs complets sont reclassés dans `showcases/` (`showcases/OrientationClockVoice/`).
+   - Les bancs de test manuels et d'intégration sont reclassés dans `tests/` (`tests/manual/VoiceUxDemo/`, `tests/integration/VoiceUxLiveDemo/`).
+
+3. **Fiabilisation des Exemples et Normalisation PlatformIO** :
+   - Élimination de tous les ports COM en dur (`upload_port`) dans les fichiers de configuration PlatformIO.
+   - `MinimalSTT` : Push-to-Talk fiabilisé avec confirmation de démarrage, gestion des rejets, sorties de zone tactile et reprise après erreur.
+   - `IntegratedVoiceDemo` : Ajout de `secrets.example.h`, support des commandes de pause/reprise et répétition.
+
+4. **Validation Automatisée et Matrice Matérielle** :
+   - Outil automatisé `tools/validation/validate_examples.py` sous Windows 11 vérifiant les fichiers obligatoires, les configurations et compilant tous les exemples PlatformIO.
+   - Matrice de tests physiques M5Stack CoreS3 documentée avec distinction stricte entre les tests automatiques (100% PASS) et les tests matériels en attente de banc physique (`NOT TESTED`).
 
 1. **Parcours IA Complet et Instruction Système Duale** :
    - Définition d'une instruction système adaptée (`VOICEKIT_DEFAULT_INTEGRATED_INSTRUCTION`) garantissant que `askAi()` reçoit de vraies réponses conversationnelles et ne fait pas répéter la question.
@@ -825,46 +847,54 @@ Pour assurer une rétrocompatibilité ascendante stricte à 100%, la classe `Vox
 
 ---
 
-## 10. Exemples Inclus
+## 10. Guide de Choix des Exemples Officiels (v0.6.5.2)
 
-La bibliothèque fournit 16 exemples complets prêts à l'emploi :
+VoiceKit v0.6.5.2 propose **11 exemples officiels** rigoureusement nettoyés, documentés et validés, chacun ciblant un cas d'usage précis sans redondance architecturale :
 
-1. **`examples/VoiceUxLiveDemo/`** (PlatformIO) — **NOUVEAU v0.6.4.2** :  
-   Démonstration matérielle du pont vocal temps réel `VoiceUxLiveBridge` (STT → `VoiceUxController` → `ReplyMemory` → TTS). Interface M5Unified/M5GFX (320 × 240) sans LVGL, boutons tactiles `PARLER` (PTT) et `STOP`, console série avec mode hybride voix réelle (`[STT][REAL]`) et simulation (`[STT][SIM]`).
+### Tableau Comparatif pour Choisir le Bon Exemple
 
-2. **`examples/VoiceUxDemo/`** (PlatformIO) — **NOUVEAU v0.6.4.1** :  
-   Démonstrateur de la fondation Voice UX locale (`TextGate`, `VoiceIntentRouter`, `ReplyMemory`, `VoiceUxController`), 100 % hors ligne sans Wi-Fi, sans clé API et sans capture audio, avec affichage M5GFX et pilotage série interactif (commandes `T`, `M`, `H`, `C`, `D`).
+| Exemple | Dossier | Mode Vocal | Fournisseur / IA | Interface Graphique | Cas d'Usage Principal |
+|---|---|---|---|---|---|
+| **IntegratedVoiceDemo** ⭐ | `examples/IntegratedVoiceDemo/` | Pipeline Intégré | Gemini Live / OpenAI | LVGL 9 | **Exemple phare v0.6.5.2** : Cycle complet PTT $\to$ STT $\to$ Outils locaux / IA $\to$ TTS $\to$ READY, confirmation sensible, mémoire des réponses, pause/reprise. |
+| **MinimalTTS** | `examples/MinimalTTS/` | Synthèse pure | Gemini Live | M5Unified | Synthèse vocale unitaire PCM 24 kHz haute fidélité sans LVGL. |
+| **MinimalSTT** | `examples/MinimalSTT/` | Dictée manuelle | Gemini Live | M5Unified | Push-to-Talk unitaire fiabilisé, gestion des rejets et transcriptions partielles/finales. |
+| **MinimalConversation** | `examples/MinimalConversation/` | Dialogue direct | Gemini Live | M5Unified | Dialogue vocal bidirectionnel fluide (Full-Duplex) sans orchestrateur lourd. |
+| **MinimalTTS_Arduino** | `examples/MinimalTTS_Arduino/` | Synthèse pure | Gemini Live | M5Unified | Esquisse `.ino` autonome pour les utilisateurs de l'IDE Arduino officiel. |
+| **WakeWordFoundation** | `examples/WakeWordFoundation/` | Détection locale | 100% Hors ligne | M5GFX pur | Diagnostic acoustique hors ligne du mot de réveil « Bonjour ESP » (WakeNet ESP-SR). |
+| **WakeWordConversation** | `examples/WakeWordConversation/` | Mains libres | Gemini / OpenAI | M5GFX pur | Cycle mains libres complet : réveil « Bonjour ESP » $\to$ Dialogue multi-tours $\to$ Réarmement automatique. |
+| **LocalToolRegistryDemo** | `examples/LocalToolRegistryDemo/` | Outils locaux | 100% Hors ligne | M5Unified | Validation matérielle des commandes READ_ONLY, WRITE, SENSITIVE, avec protection anti-rejeu. |
+| **VoiceDiagnostics** | `examples/VoiceDiagnostics/` | Télémétrie | Gemini Live | M5Unified (6 onglets) | Télémétrie complète : RAM/PSRAM, micro RMS, latences audio/réseau, jalons VAD, reconnexions. |
+| **VoiceSettingsDemo** | `examples/VoiceSettingsDemo/` | Profils vocaux | Gemini Live | M5Unified | Démonstration multilingue (FR, DE, EN), voix Gemini, styles, tons et chaîne UTF-8 intégrale. |
+| **OpenAIConversationLVGL** | `examples/OpenAIConversationLVGL/` | Dialogue direct | OpenAI Realtime | LVGL 9 | Référence spécialisée OpenAI Realtime (`gpt-realtime-2.1-mini`) avec interface tactile dark mode LVGL 9 et polices françaises accentuées. |
 
-3. **`examples/LocalToolRegistryDemo/`** (PlatformIO) — **NOUVEAU v0.6.4** :  
-   Démonstrateur autonome de registre local d'outils sur M5Stack CoreS3 **sans Wi-Fi, sans Gemini Live ni OpenAI**, avec écran de diagnostic M5GFX (320 × 240) et menu interactif série. Enregistre trois commandes matérielles réelles (`system.get_status`, `audio.set_volume`, `display.set_brightness`) et une commande sensible d'exemple (`system.factory_reset`) avec validation stricte de types/bornes et confirmation par jeton à usage unique.
+---
 
-4. **`examples/WakeWordConversation/`** (PlatformIO) — **NOUVEAU v0.6.3** :  
-   Application de conversation vocale entièrement mains libres sur M5Stack CoreS3 (affichage M5GFX 320 × 240, sans LVGL), déclenchée par le mot de réveil local « Bonjour ESP ». Affiche clairement les 9 états en français (`EN ATTENTE — « Bonjour ESP »`, `MOT DE RÉVEIL DÉTECTÉ`, `CONNEXION GEMINI / OPENAI`, `PRÊT — PARLEZ`, `ÉCOUTE`, `RÉPONSE VOCALE`, `FIN DE CONVERSATION`, `RETOUR EN ÉCOUTE`, `ERREUR / RÉCUPÉRATION`), les compteurs de sessions, détections, reconnexions et erreurs, et distingue strictement une détection acoustique réelle (`WAKENET`) d'une détection simulée (`TEST`).
+### Exemples Archivés, Vitrines et Bancs de Test
 
-5. **`examples/WakeWordFoundation/`** (PlatformIO) — **NOUVEAU v0.6.2** :  
-   Exemple autonome sur M5Stack CoreS3 **sans écran LVGL et sans connexion réseau**. Valide la capture PCM 16 kHz / 16 bits partagée du microphone ES7210, le pont audio borné `WakeWordAudioBridge`, la machine à états `WakeWordManager` (`DISABLED` $\to$ `INITIALIZING` $\to$ `ARMED` $\to$ `DETECTED` $\to$ `SUSPENDED` $\to$ `ARMED`), l'état explicite d'indisponibilité de `WAKENET` sous IDF 4.4 et le moteur de test déterministe `TEST`.
-6. **`examples/OpenAIConversation/`** (PlatformIO) :  
-   Démonstration épurée et headless de conversation vocale bidirectionnelle en français avec l'API **OpenAI Realtime** (`gpt-realtime-2.1-mini`). Acquisition microphone ES7210 16 kHz rééchantillonnée à chaud en 24 kHz via `AudioResampler`, streaming Base64, VAD local, restitution haut-parleur AW88298 24 kHz et interruption instantanée STOP sur appui tactile.
-7. **`examples/OpenAIConversationLVGL/`** (PlatformIO) :  
-   Conversation vocale OpenAI Realtime avec interface tactile dark mode **LVGL 9** (orbe vocal animé, cartes de transcription, bouton Push-to-Talk), polices françaises intégrées et synchronisation inter-threads sans allocation dynamique.
-8. **`examples/VoiceDiagnostics/`** (PlatformIO) :  
-   Outil officiel de diagnostic et de télémétrie vocale pour M5Stack CoreS3. Interface tactile M5Unified (320 × 240) à 6 onglets (`SYS`, `AUDIO`, `LAT`, `NET`, `CONN`, `EVT`). Journalisation série `[LATENCY]` et export CSV `[LATENCY_CSV]`.
-9. **`examples/MinimalVoiceKit/`** (PlatformIO) :  
-   Démonstrateur de référence de la façade simplifiée `VoiceKit`. Permet de tester successivement les 4 modes vocaux (TTS, STT manuel, dictée continue et conversation) sur l'écran tactile du M5Stack CoreS3 (320 × 240) avec diagnostic en temps réel.
-10. **`examples/ContinuousSTT/`** (PlatformIO) :  
-    Application autonome de dictée vocale mains libres avec interface graphique complète M5Unified (7 états, VU-mètre RMS, compte à rebours de silence, bouton Pause/Reprendre, accents français UTF-8).
-11. **`examples/VoiceSettingsDemo/`** (PlatformIO) :  
-    Démonstrateur tactile multi-profils et validation UTF-8 pour M5Stack CoreS3. Permet de faire défiler et tester 5 scénarios complets avec accents français, allemand et anglais.
-12. **`examples/MinimalConversation/`** (PlatformIO) :  
-    Application conversationnelle vocale bidirectionnelle native (Mode B) avec Gemini Live pour M5Stack CoreS3. Bouton tactile dynamique (« PARLER » / « STOP ») et cartes d'affichage.
-13. **`examples/MinimalTTS/`** (PlatformIO) :  
-    Validation physique TTS minimale sans LVGL. Démonstration de synthèse vocale au démarrage puis déclenchement tactile sur l'écran.
-14. **`examples/MinimalSTT/`** (PlatformIO) :  
-    Démonstration de reconnaissance vocale Push-to-Talk STT pour M5Stack CoreS3 avec transcriptions intérimaires et finales.
-15. **`examples/OrientationClockVoice/`** (PlatformIO) :  
-    Horloge dynamique complète avec **LVGL 9**, accéléromètre **BMI270** (rotation 360°), horloge RTC **BM8563**, et annonce vocale de l'heure en français.
-16. **`examples/MinimalTTS_Arduino/`** (Arduino IDE) :  
-    Croquis autonome `.ino` prêt à l'emploi avec documentation pas-à-pas des menus Arduino IDE.
+Conformément à la politique de clarté de VoiceKit v0.6.5.2, les projets composites, vitrines ou tests ont été reclassés sans aucune perte de code :
+
+- **Exemples Archivés** ([`archive/README.md`](archive/README.md)) :
+  - `archive/examples/MinimalVoiceKit/` : Exemple historique composite remplacé par `MinimalTTS` et `MinimalConversation`.
+  - `archive/examples/ContinuousSTT/` : Remplacé par l'orchestrateur `IntegratedVoicePipeline`.
+  - `archive/examples/OpenAIConversation/` : Version M5GFX remplacée par `OpenAIConversationLVGL` (LVGL 9).
+- **Applications Vitrines** ([`showcases/README.md`](showcases/README.md)) :
+  - `showcases/OrientationClockVoice/` : Horloge gyroscopique complète avec annonce vocale de l'heure en français.
+- **Bancs de Tests Manuels & Intégration** :
+  - `tests/manual/VoiceUxDemo/` : Banc d'essai VoiceUX 100 % hors ligne.
+  - `tests/integration/VoiceUxLiveDemo/` : Banc d'intégration temps réel du pont vocal `VoiceUxLiveBridge`.
+
+---
+
+### Validation Automatisée des Exemples
+
+Un script Python sous Windows 11 permet de valider l'arborescence, les fichiers obligatoires, la conformité PlatformIO et de compiler l'ensemble des exemples officiels :
+```bash
+# Vérification rapide de conformité des fichiers et README (10/10 sections)
+python tools/validation/validate_examples.py --check-only
+
+# Compilation complète de tous les exemples PlatformIO
+python tools/validation/validate_examples.py --output tools/validation/rapport_validation.md
+```
 
 ---
 

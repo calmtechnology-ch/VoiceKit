@@ -1,7 +1,7 @@
 /**
  * @file main.cpp
  * @brief Exemple officiel VoiceDiagnostics — Outil de diagnostic et visualisation
- *        pour le moteur vocal VoiceKit v0.5.2 sur M5Stack CoreS3.
+ *        pour le moteur vocal VoiceKit v0.6.5.2 sur M5Stack CoreS3.
  * 
  * Cet exemple offre une interface tactile 320x240 M5Unified (sans LVGL)
  * structurée en 5 écrans de diagnostic :
@@ -232,7 +232,7 @@ static void drawUI() {
         // En-tête supérieur
         M5.Display.setTextColor(COLOR_FG, COLOR_BG);
         M5.Display.setCursor(10, 6);
-        M5.Display.print("VoiceDiagnostics v0.5.3.1");
+        M5.Display.print("VoiceDiagnostics v0.6.5.2");
 
         // Barre d'onglets (SYS, AUDIO, LAT, NET, CONN, EVT)
         const char* tabs[6] = {"SYS", "AUDIO", "LAT", "NET", "CONN", "EVT"};
@@ -468,7 +468,7 @@ void setup() {
     delay(100);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.5.2 — Demonstration VoiceDiagnostics      ");
+    Serial.println("  VoiceKit v0.6.5.2 — Demonstration VoiceDiagnostics    ");
     Serial.println("  Outil de diagnostic vocal & systeme pour M5 CoreS3     ");
     Serial.println("========================================================");
 

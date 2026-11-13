@@ -1,68 +1,105 @@
-# Exemple Autonome : WakeWordFoundation (VoiceKit v0.6.2.1)
+# WakeWordFoundation — VoiceKit v0.6.5.2
 
-Cet exemple autonome valide la fondation matérielle et logicielle de détection locale de mot de réveil (**Wake Word Foundation**) sur **M5Stack CoreS3**, **sans écran LVGL** (rendu direct M5GFX) et **sans connexion réseau Wi-Fi / Gemini / OpenAI**.
+Exemple autonome de référence pour la détection acoustique locale hors ligne de mot de réveil (**Wake Word**) sur **M5Stack CoreS3**.
 
-## Objectifs validés par cet exemple
+---
 
-1. **Propriété unique du microphone CoreS3 ES7210** :
-   - Acquisition continue non bloquante en **PCM 16 000 Hz mono 16 bits signé** via `LiveAudioStreamer` en mode capture locale (`startLocalCapture()`).
-   - Aucune seconde initialisation concurrente du codec ES7210.
-2. **Pont audio temps réel (`WakeWordAudioBridge`)** :
-   - File circulaire SPSC bornée (8 trames de 512 échantillons = 256 ms).
-   - Une seule copie mémoire (`memcpy` DMA $\to$ slot) dans la tâche audio, zéro copie au dépilage dans `voice.update()`, zéro impression `Serial` dans le callback audio critique.
-3. **Machine à états complète et affichage français explicite (`WakeWordManager`)** :
-   - Transitions clairement distinguées sur l'écran CoreS3 et le moniteur série :
-     - `ARMED — En écoute...` (activation initiale)
-     - `DETECTED — Mot reconnu` (avec encadré vert `MOT DE RÉVEIL DÉTECTÉ !`, `« Bonjour ESP »` et `Détection réussie — événement #N`)
-     - `SUSPENDED — Suspension temporaire (Détection suspendue)`
-     - `ARMED — Prêt pour un nouveau réveil (Écoute réactivée)`
-   - Pied de page de compteurs : `Détections : X | Réarmements : Y | Erreurs : Z` (une détection n'est comptabilisée qu'une seule fois par événement réel).
-   - Aucune sortie série répétitive dans `loop()`.
-4. **Distinction honnête du moteur actif (`IWakeWordEngine`)** :
-   - Affiche explicitement le nom du moteur actif ainsi que **`RECONNAISSANCE RÉELLE`** (pour `WAKENET` / `wn9l_fr_bonjouresp_tts3`) ou **`SIMULATION (TEST)`** (pour `TEST`).
-   - Ne présente jamais un déclenchement du moteur `TEST` comme une détection acoustique.
+## 1. Objectif
 
-## Affichage Écran M5Stack CoreS3 & Moniteur Série (115200 bauds)
+Valider à 100 % hors ligne la détection acoustique locale du mot de réveil officiel « **Bonjour ESP** » (modèle WakeNet ESP-SR `wn9l_fr_bonjouresp_tts3`), sans recours à une connexion Wi-Fi ni à un service cloud.
+Cet exemple sert de banc de diagnostic acoustique pour vérifier le bon fonctionnement du microphone ES7210, la cadence des trames audio et la stabilité de la machine à états de détection.
 
-```text
-VOICEKIT — WAKE WORD                                            v0.6.2.1
-Moteur actif : WAKENET (wn9l_fr_bonjouresp_tts3) — RECONNAISSANCE RÉELLE
-────────────────────────────────────────────────────────────────────────
+---
 
-🎙 ARMED — En écoute...
-✓ DETECTED — Mot reconnu
+## 2. Fonctionnalités
 
-╭──────────────────────────────────────────────────────────────────────╮
-│  ✓ MOT DE RÉVEIL DÉTECTÉ !                                           │
-│                                                                      │
-│  « Bonjour ESP »                                                     │
-│                                                                      │
-│  Détection réussie — événement #12                                   │
-│  Moteur : WAKENET — RECONNAISSANCE RÉELLE                            │
-╰──────────────────────────────────────────────────────────────────────╯
+- **Reconnaissance acoustique réelle WakeNet** : Exécution du modèle neural d'Espressif ESP-SR optimisé pour l'ESP32-S3.
+- **Distinction honnête de l'origine** : Différencie clairement à l'écran et sur la liaison série une reconnaissance acoustique réelle d'un événement simulé.
+- **Machine à états complète** :
+  - `INITIALIZING` : Chargement du modèle neural.
+  - `ARMED` : Écoute continue et analyse spectrale active.
+  - `DETECTED` : Mot de réveil reconnu avec affichage de l'encadré vert de validation.
+  - `SUSPENDED` : Détection mise en pause temporaire.
+  - `ERROR` : Signalement d'anomalie.
+- **Rendu graphique M5GFX ultra-léger** : Interface graphique fluide 320 × 240 sans surcharge de mémoire (sans LVGL).
+- **Compteurs de métriques fiables** : Comptabilisation unitaire des détections, des réarmements et des erreurs.
+- **Pilotage interactif par console série** : Commandes pour simuler, suspendre, réarmer ou changer de moteur.
 
-⏸ SUSPENDED — Suspension temporaire (Détection suspendue)
-✓ ARMED — Prêt pour un nouveau réveil (Écoute réactivée)
-────────────────────────────────────────────────────────────────────────
-Détections : 12 | Réarmements : 12 | Erreurs : 0
-```
+---
 
-## Commandes Série Interactives
+## 3. Matériel requis
 
-| Commande | Action |
-|---|---|
-| `bonjour esp` ou `wake` | Déclenche une détection de test simulée (`SIMULATION (TEST)`, uniquement si moteur `TEST` et état `ARMED`) |
-| `r` ou `resume` | Simule la fin de conversation et réarme le détecteur (`SUSPENDED` $\to$ `ARMED — Prêt pour un nouveau réveil (Écoute réactivée)`) |
-| `s` ou `suspend` | Suspend manuellement le détecteur (`ARMED` $\to$ `SUSPENDED — Suspension temporaire (Détection suspendue)`) |
-| `d` ou `disable` | Désactive le détecteur (`DISABLED`) |
-| `e` ou `enable` | Réactive le détecteur (`DISABLED` $\to$ `INITIALIZING` $\to$ `ARMED`) |
-| `c` ou `cycle` | Exécute 5 cycles d'activation / suspension / reprise / désactivation |
-| `w` ou `wakenet` | Sélectionne le moteur `WAKENET` (`RECONNAISSANCE RÉELLE` si disponible, sinon `ERROR` explicite) |
-| `t` ou `test` | Sélectionne le moteur `TEST` (`SIMULATION (TEST)`) et arme la capture locale (`ARMED`) |
-| `m` ou `metrics` | Affiche les métriques mémoire (RAM interne, PSRAM), CPU, file audio et compteurs (`Détections`, `Réarmements`, `Erreurs`) |
+- **Carte** : M5Stack CoreS3 (ESP32-S3 avec instructions vectorielles IA).
+- **Mémoire** : 8 Mo PSRAM (utilisée pour les buffers d'inférence WakeNet).
+- **Capteurs** : Microphone double ES7210 CoreS3.
+- **Alimentation** : Câble USB-C connecté à une source stable (5V / 1A).
 
-## Compilation PlatformIO
+---
 
+## 4. Configuration
+
+Aucun fichier `secrets.h` ni identifiant Wi-Fi n'est requis : l'exemple fonctionne entièrement hors ligne.
+Le fichier `platformio.ini` est préconfiguré pour inclure les drapeaux de compilation et les bibliothèques d'inférence nécessaires à ESP-SR.
+
+---
+
+## 5. Compilation
+
+Compiler avec PlatformIO :
 ```bash
 pio run -d examples/WakeWordFoundation
 ```
+
+---
+
+## 6. Téléversement
+
+1. Téléverser le binaire sur le CoreS3 :
+   ```bash
+   pio run -d examples/WakeWordFoundation -t upload
+   ```
+2. Ouvrir le moniteur série à 115 200 baud :
+   ```bash
+   pio device monitor -d examples/WakeWordFoundation -b 115200
+   ```
+
+---
+
+## 7. Mode d'utilisation
+
+1. À la mise sous tension, l'écran affiche `Moteur actif : WAKENET` et le statut passe à `ARMED — En écoute...`.
+2. **Prononcer** distinctement à voix normale à environ 20-40 cm du CoreS3 :
+   > *« Bonjour ESP »*
+3. Dès détection, l'écran s'illumine en vert avec l'encadré :
+   `MOT DE RÉVEIL DÉTECTÉ ! — « Bonjour ESP » — Événement #1`.
+4. Après 2,5 secondes de suspension, le système se réarme automatiquement (`ARMED — Prêt pour un nouveau réveil`).
+5. Toucher l'écran permet de forcer une simulation ou de basculer l'état.
+
+---
+
+## 8. Tests à effectuer
+
+| # | Test | Procédure | Résultat attendu |
+|---|---|---|---|
+| 1 | Détection acoustique nominale | Prononcer *« Bonjour ESP »* à 30 cm | Détection instantanée, compteur incrémenté de 1, badge vert. |
+| 2 | Robustesse aux faux positifs | Parler d'autre chose (*« Bonjour tout le monde »*) | Pas de déclenchement intempestif. |
+| 3 | Réarmement automatique | Attendre 2,5 s après détection | Transition automatique de `SUSPENDED` vers `ARMED`. |
+| 4 | Suspension manuelle | Envoyer `s` sur la console série | L'état passe à `SUSPENDED`, l'écoute est arrêtée. |
+| 5 | Réarmement manuel | Envoyer `r` sur la console série | L'état repasse à `ARMED`, prêt pour une nouvelle détection. |
+| 6 | Compteurs cumulés | Déclencher 5 détections successives | Le compteur indique exactement 5 détections et 5 réarmements. |
+
+---
+
+## 9. Résultats attendus
+
+- Cycle d'états :
+  $$\text{INITIALIZING} \longrightarrow \text{ARMED} \overset{\text{« Bonjour ESP »}}{\longrightarrow} \text{DETECTED} \longrightarrow \text{SUSPENDED} \overset{2.5\text{ s}}{\longrightarrow} \text{ARMED}$$
+- Zéro crash ni fuite mémoire lors de détections répétées sur de longues périodes.
+- Distinction explicite entre détection acoustique réelle et test série.
+
+---
+
+## 10. Limitations connues
+
+- Le modèle WakeNet est optimisé pour la langue française (« Bonjour ESP ») et nécessite une prononciation claire.
+- Dans les environnements très bruyants (> 75 dB), la distance de détection efficace peut être réduite.

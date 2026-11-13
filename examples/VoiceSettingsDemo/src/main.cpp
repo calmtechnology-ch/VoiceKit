@@ -1,7 +1,7 @@
 /**
  * @file main.cpp
  * @brief Exemple VoiceSettingsDemo — Démonstrateur de configuration vocale et UTF-8
- *        pour M5Stack CoreS3 avec VoiceKit v0.5.3.1 et Google Gemini Live.
+ *        pour M5Stack CoreS3 avec VoiceKit v0.6.5.2 et Google Gemini Live.
  * 
  * Fonctionnalités démontrées :
  * - Alternance successive entre plusieurs voix Gemini (Aoede, Charon, Fenrir, Kore, Puck).
@@ -242,7 +242,7 @@ void setup() {
     delay(400);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.4.1 — VoiceSettingsDemo (CoreS3)          ");
+    Serial.println("  VoiceKit v0.6.5.2 — VoiceSettingsDemo (CoreS3)        ");
     Serial.println("  Test voix Gemini, BCP-47, Styles, Tons et UTF-8       ");
     Serial.println("========================================================");
 

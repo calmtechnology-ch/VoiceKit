@@ -80,7 +80,7 @@ static void drawUI() {
     // 2. En-tête : Titre & version
     M5.Display.setTextSize(1);
     M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5.Display.drawString("VoiceKit v0.4.0 — Conversation", 10, 8);
+    M5.Display.drawString("VoiceKit v0.6.5.2 — Conversation", 10, 8);
 
     // Badge d'état visuel en haut à droite
     const char* statusText = "INITIALISATION";
@@ -206,7 +206,7 @@ void setup() {
     delay(400);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.4.0 — MinimalConversation (Mode B Native) ");
+    Serial.println("  VoiceKit v0.6.5.2 — MinimalConversation (Mode B Native) ");
     Serial.println("  M5Stack CoreS3 (ES7210 Mic + AW88298 Speaker)         ");
     Serial.println("========================================================");
 

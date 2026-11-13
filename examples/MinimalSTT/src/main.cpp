@@ -38,13 +38,12 @@
     #endif
 #endif
 
-// États de l'application STT
+// États normalisés de l'application STT
 enum class DemoState {
     INITIALIZING,
     READY,
     LISTENING,
     TRANSCRIBING,
-    COMPLETED,
     ERROR
 };
 
@@ -56,6 +55,7 @@ static String s_finalText = "";
 static String s_errorMessage = "";
 static bool s_needsRedraw = true;
 static bool s_touchActive = false;
+static bool s_captureHappened = false;
 
 // Coordonnées du bouton tactile DICTER
 static constexpr int BTN_X = 20;
@@ -77,7 +77,7 @@ static void drawUI() {
     // 2. Barre d'en-tête (Titre et badge de statut)
     M5.Display.setTextSize(1);
     M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5.Display.drawString("VoiceKit v0.3.0 STT", 10, 10);
+    M5.Display.drawString("VoiceKit v0.6.5.2 STT", 10, 10);
 
     const char* statusText = "INITIALISATION";
     uint16_t statusColor = TFT_LIGHTGRAY;
@@ -98,10 +98,6 @@ static void drawUI() {
         case DemoState::TRANSCRIBING:
             statusText = "TRANSCRIPTION";
             statusColor = TFT_CYAN;
-            break;
-        case DemoState::COMPLETED:
-            statusText = "TERMINE";
-            statusColor = TFT_GREEN;
             break;
         case DemoState::ERROR:
             statusText = "ERREUR";
@@ -131,9 +127,11 @@ static void drawUI() {
         M5.Display.drawString("Erreur :", boxX + 10, boxY + 10);
         M5.Display.setTextColor(TFT_WHITE, boxBg);
         M5.Display.drawString(s_errorMessage.c_str(), boxX + 10, boxY + 30);
+        M5.Display.setTextColor(TFT_YELLOW, boxBg);
+        M5.Display.drawString("Touchez l'ecran pour reinitialiser", boxX + 10, boxY + 70);
     } else if (s_uiState == DemoState::LISTENING) {
         M5.Display.setTextColor(TFT_YELLOW, boxBg);
-        M5.Display.drawString("Parlez maintenant... [Dictée en direct]", boxX + 10, boxY + 10);
+        M5.Display.drawString("Parlez maintenant... [Dictee en direct]", boxX + 10, boxY + 10);
         M5.Display.setTextColor(TFT_WHITE, boxBg);
         if (s_interimText.length() > 0) {
             M5.Display.drawString(s_interimText.c_str(), boxX + 10, boxY + 35);
@@ -143,14 +141,14 @@ static void drawUI() {
         }
     } else if (s_uiState == DemoState::TRANSCRIBING) {
         M5.Display.setTextColor(TFT_CYAN, boxBg);
-        M5.Display.drawString("Finalisation de la transcription Gemini...", boxX + 10, boxY + 10);
+        M5.Display.drawString("Finalisation de la transcription...", boxX + 10, boxY + 10);
         if (s_interimText.length() > 0) {
             M5.Display.setTextColor(TFT_LIGHTGRAY, boxBg);
             M5.Display.drawString(s_interimText.c_str(), boxX + 10, boxY + 35);
         }
     } else if (s_finalText.length() > 0) {
         M5.Display.setTextColor(TFT_GREEN, boxBg);
-        M5.Display.drawString("Dernière transcription reçue :", boxX + 10, boxY + 10);
+        M5.Display.drawString("Derniere transcription recue :", boxX + 10, boxY + 10);
         M5.Display.setTextColor(TFT_WHITE, boxBg);
         M5.Display.drawString(s_finalText.c_str(), boxX + 10, boxY + 35);
     } else {
@@ -158,7 +156,7 @@ static void drawUI() {
         M5.Display.drawString("Appuyez sur le bouton ci-dessous", boxX + 10, boxY + 25);
         M5.Display.drawString("et parlez en maintenant l'appui.", boxX + 10, boxY + 45);
         M5.Display.setTextColor(TFT_DARKGRAY, boxBg);
-        M5.Display.drawString("Relâchez dès que vous avez terminé.", boxX + 10, boxY + 70);
+        M5.Display.drawString("Relachez des que vous avez termine.", boxX + 10, boxY + 70);
     }
 
     // 4. Bouton tactile « DICTER »
@@ -167,10 +165,13 @@ static void drawUI() {
 
     if (s_uiState == DemoState::LISTENING) {
         btnColor = M5.Display.color565(220, 30, 30);
-        btnLabel = "ENREGISTREMENT EN COURS...";
+        btnLabel = "ENREGISTREMENT...";
     } else if (s_uiState == DemoState::TRANSCRIBING) {
         btnColor = M5.Display.color565(180, 120, 20);
-        btnLabel = "PATIENTEZ (TRAITEMENT)...";
+        btnLabel = "TRAITEMENT...";
+    } else if (s_uiState == DemoState::ERROR) {
+        btnColor = M5.Display.color565(120, 30, 30);
+        btnLabel = "REINITIALISER";
     }
 
     M5.Display.fillRoundRect(BTN_X, BTN_Y, BTN_W, BTN_H, 10, btnColor);
@@ -187,8 +188,8 @@ void setup() {
     delay(200);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.3.0 — Exemple MinimalSTT          ");
-    Serial.println("  Reconnaissance vocale STT en streaming Gemini Live    ");
+    Serial.println("  VoxCore VoiceKit v0.6.5.2 — Exemple MinimalSTT       ");
+    Serial.println("  Reconnaissance vocale Push-to-Talk fiabilisee         ");
     Serial.println("========================================================");
 
     // 1. Initialisation matérielle CoreS3
@@ -221,6 +222,7 @@ void setup() {
 
     voice.onListeningStarted([]() {
         Serial.println("[MinimalSTT] Callback onListeningStarted : Microphone actif !");
+        s_captureHappened = true;
         setDemoState(DemoState::LISTENING);
     });
 
@@ -231,11 +233,16 @@ void setup() {
 
     // Callback de transcription (partielle et finale)
     voice.onTranscription([](const String& text, bool isFinal) {
+        if (!s_captureHappened) {
+            Serial.printf("[MinimalSTT][WARN] Transcription reçue sans capture correspondante : %s\n", text.c_str());
+            return;
+        }
         if (isFinal) {
             Serial.printf("\n>>> [TRANSCRIPTION FINALE] %s\n\n", text.c_str());
             s_finalText = text;
             s_interimText = "";
-            setDemoState(DemoState::COMPLETED);
+            s_captureHappened = false;
+            setDemoState(DemoState::READY);
         } else {
             Serial.printf("... [interim] %s\n", text.c_str());
             s_interimText = text;
@@ -246,6 +253,8 @@ void setup() {
     voice.onError([](const String& err) {
         Serial.printf("[MinimalSTT][ERREUR] %s\n", err.c_str());
         s_errorMessage = err;
+        s_touchActive = false;
+        s_captureHappened = false;
         setDemoState(DemoState::ERROR);
     });
 
@@ -268,26 +277,52 @@ void loop() {
     bool inButtonArea = (touch.x >= BTN_X && touch.x <= (BTN_X + BTN_W) &&
                          touch.y >= BTN_Y && touch.y <= (BTN_Y + BTN_H));
 
-    // Début de l'appui sur le bouton DICTER
-    if (touch.wasPressed() && inButtonArea) {
-        if (voice.isReady() || s_uiState == DemoState::COMPLETED || s_uiState == DemoState::READY) {
+    // Récupération après état ERROR : un toucher réinitialise si le moteur est prêt
+    if (s_uiState == DemoState::ERROR && touch.wasPressed()) {
+        Serial.println("[MinimalSTT] Réinitialisation manuelle suite erreur");
+        s_touchActive = false;
+        s_captureHappened = false;
+        s_errorMessage = "";
+        setDemoState(voice.isReady() ? DemoState::READY : DemoState::INITIALIZING);
+        return;
+    }
+
+    // Début de l'appui sur le bouton DICTER (anti-double commande stricte)
+    if (touch.wasPressed() && inButtonArea && !s_touchActive) {
+        if (s_uiState == DemoState::READY && voice.isReady() && !voice.isListening()) {
             Serial.println("[MinimalSTT] Appui detecte sur DICTER -> Demarrage ecoute");
-            s_touchActive = true;
             s_interimText = "";
+            s_captureHappened = false;
             bool ok = voice.startListening();
             if (ok) {
+                s_touchActive = true;
+                // Ne considérer actif qu'après confirmation explicite
                 setDemoState(DemoState::LISTENING);
+            } else {
+                Serial.println("[MinimalSTT] Refus de startListening() par le moteur vocal");
+                s_touchActive = false;
+                s_errorMessage = "Demarrage ecoute refuse";
+                setDemoState(DemoState::ERROR);
             }
+        } else {
+            Serial.printf("[MinimalSTT] Appui ignore : non pret (uiState=%d, voiceReady=%d, voiceListening=%d)\n",
+                          (int)s_uiState, voice.isReady(), voice.isListening());
         }
     }
 
-    // Relâchement du bouton DICTER
-    if (touch.wasReleased() && s_touchActive) {
-        Serial.println("[MinimalSTT] Relachement detecte -> Fin de la dictee");
-        s_touchActive = false;
-        if (voice.isListening()) {
-            voice.stopListening();
-            setDemoState(DemoState::TRANSCRIBING);
+    // Relâchement (ou sortie de zone tactile alors qu'un appui était actif)
+    if (s_touchActive) {
+        bool released = touch.wasReleased() || !touch.isPressed();
+        if (released) {
+            Serial.println("[MinimalSTT] Relachement / sortie tactile detectee -> Fin de la capture");
+            s_touchActive = false;
+            if (voice.isListening()) {
+                voice.stopListening();
+                setDemoState(DemoState::TRANSCRIBING);
+            } else {
+                // Si l'écoute n'était pas encore active lors du relâchement rapide
+                setDemoState(DemoState::READY);
+            }
         }
     }
 

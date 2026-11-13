@@ -8,7 +8,7 @@
 #endif
 
 // =============================================================================
-// VoiceKit v0.6.3.2 — Exemple WakeWordConversation (M5Stack CoreS3, M5GFX pur)
+// VoiceKit v0.6.5.2 — Exemple WakeWordConversation (M5Stack CoreS3, M5GFX pur)
 //
 // Cycle complet mains libres (exclusivement WakeNet acoustique « Bonjour ESP ») :
 //   1. WakeNet écoute localement « Bonjour ESP » (WAKE_ARMED)
@@ -118,7 +118,7 @@ static void drawInterface() {
     M5.Display.setTextColor(TFT_WHITE, 0x0000);
     M5.Display.setTextDatum(middle_left);
     M5.Display.setFont(&fonts::Font2);
-    M5.Display.drawString("VoiceKit v0.6.3.2 - WakeConv", 6, 12);
+    M5.Display.drawString("VoiceKit v0.6.5.2 - WakeConv", 6, 12);
 
     M5.Display.setTextDatum(middle_right);
     if (wakeNetUnavailable) {
