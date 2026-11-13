@@ -44,7 +44,11 @@
 #endif
 
 #ifndef OPENAI_API_KEY
-    #define OPENAI_API_KEY ""
+    #ifdef OPENAI_KEY
+        #define OPENAI_API_KEY OPENAI_KEY
+    #else
+        #define OPENAI_API_KEY ""
+    #endif
 #endif
 
 // =============================================================================
