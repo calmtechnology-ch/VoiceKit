@@ -2,6 +2,7 @@
 #include "DisplayTextNormalizer.h"
 #include "core/AudioTraceLog.h"
 #include "core/GeminiVoiceProvider.h"
+#include "core/Utf8Utils.h"
 #include <cctype>
 #include <cstring>
 
@@ -39,6 +40,7 @@ LiveSessionController::~LiveSessionController() {
     _provider->setOnError(nullptr);
     _provider->setOnAudioData(nullptr);
     _provider->setOnOutputTranscription(nullptr);
+    _provider->setOnOutputTranscriptionWithFinal(nullptr);
     _provider->setOnText(nullptr);
     _provider->setOnInputTranscription(nullptr);
     _provider->setOnTurnComplete(nullptr);
@@ -57,27 +59,51 @@ void LiveSessionController::appendTranscriptionFragment(String &target,
     size_t start = 0;
     while (start < fragment.length() && fragment[start] == ' ')
       start++;
-    target = fragment.substring(start);
-    if (target.length() > maxLength) {
-      target = target.substring(0, maxLength);
+    if (start < fragment.length()) {
+      target = fragment.substring(start);
+      if (target.length() > maxLength) {
+        target = Utf8Utils::truncateUtf8(target, maxLength);
+      }
     }
     return;
   }
 
-  // 1. Fragment identique à la cible
-  if (target == fragment)
+  auto isAllDigits = [](const String &s) -> bool {
+    if (s.isEmpty()) return false;
+    for (size_t i = 0; i < s.length(); ++i) {
+      if (s[i] < '0' || s[i] > '9') return false;
+    }
+    return true;
+  };
+
+  // 1. Fragment identique à la cible (hors chiffres consécutifs légitimes comme "11" + "11")
+  if (target == fragment && (!isAllDigits(target) || !isAllDigits(fragment)))
     return;
 
-  // 2. Déduplication de phrases complètes retransmises (avec ou sans ponctuation/espaces de bord)
-  String tTrim = target;
-  tTrim.trim();
+  // 2. Gestion des deltas constitués uniquement d'espaces / blancs
   String fTrim = fragment;
   fTrim.trim();
-
-  if (tTrim.isEmpty() || fTrim.isEmpty())
+  if (fTrim.isEmpty()) {
+    char lastChar = target[target.length() - 1];
+    if (lastChar != ' ' && lastChar != '\t' && lastChar != '\n' && lastChar != '\r') {
+      if (target.length() < maxLength) {
+        target += ' ';
+      }
+    }
     return;
+  }
 
-  if (tTrim == fTrim)
+  String tTrim = target;
+  tTrim.trim();
+  if (tTrim.isEmpty()) {
+    target = fTrim;
+    if (target.length() > maxLength) {
+      target = Utf8Utils::truncateUtf8(target, maxLength);
+    }
+    return;
+  }
+
+  if (tTrim == fTrim && (!isAllDigits(tTrim) || !isAllDigits(fTrim)))
     return;
 
   auto stripPunct = [](const String &s) -> String {
@@ -93,23 +119,24 @@ void LiveSessionController::appendTranscriptionFragment(String &target,
   String tBase = stripPunct(tTrim);
   String fBase = stripPunct(fTrim);
 
-  // Retransmission de phrase complète identique
-  if (!tBase.isEmpty() && tBase == fBase) {
+  // Retransmission de phrase complète identique (hors chiffres consécutifs comme "11" + "11")
+  if (!tBase.isEmpty() && tBase == fBase && (!isAllDigits(tBase) || !isAllDigits(fBase))) {
     // Si le fragment apporte une ponctuation finale que la cible n'avait pas
     if (fTrim.length() > tTrim.length() && fTrim.startsWith(tBase)) {
       target = fragment;
       if (target.length() > maxLength) {
-        target = target.substring(0, maxLength);
+        target = Utf8Utils::truncateUtf8(target, maxLength);
       }
     }
     return;
   }
 
-  // 3. Transcription cumulative (le fragment commence par l'intégralité de la cible)
-  if (fragment.startsWith(target) || (!tTrim.isEmpty() && fTrim.startsWith(tTrim) && fTrim.length() > tTrim.length())) {
+  // 3. Transcription cumulative (le fragment commence par l'intégralité de la cible et apporte du contenu)
+  if ((fragment.startsWith(target) && fragment.length() > target.length()) ||
+      (!tTrim.isEmpty() && fTrim.startsWith(tTrim) && fTrim.length() > tTrim.length())) {
     target = fragment;
     if (target.length() > maxLength) {
-      target = target.substring(0, maxLength);
+      target = Utf8Utils::truncateUtf8(target, maxLength);
     }
     return;
   }
@@ -121,33 +148,89 @@ void LiveSessionController::appendTranscriptionFragment(String &target,
     }
   }
 
-  // 5. Recherche du chevauchement partiel (syllabes ou mots coupés à la frontière de trame)
+  // Éviter l'accumulation anormale d'espaces à la frontière de deux deltas
+  size_t fragStart = 0;
+  char lastT = target[target.length() - 1];
+  if (lastT == ' ' || lastT == '\t' || lastT == '\n' || lastT == '\r') {
+    while (fragStart < fragment.length() && (fragment[fragStart] == ' ' || fragment[fragStart] == '\t')) {
+      fragStart++;
+    }
+    if (fragStart >= fragment.length()) {
+      return;
+    }
+  }
+  String effectiveFrag = (fragStart > 0) ? fragment.substring(fragStart) : fragment;
+
+  // 5. Recherche du chevauchement partiel sécurisé
+  // RÈGLES STRICTES ANTI-FUSION :
+  // - Longueur de chevauchement minimale >= 3 caractères
+  // - Aucun chiffre ASCII dans le chevauchement (pour préserver "20" + "06" -> "2006", "11" + "11" -> "1111")
+  // - Frontière de mot obligatoire dans target (précédé d'un espace/séparateur ou début de chaîne)
   size_t targetLen = target.length();
-  size_t fragLen = fragment.length();
+  size_t fragLen = effectiveFrag.length();
   size_t maxOverlap = (targetLen < fragLen) ? targetLen : (fragLen - 1);
   size_t bestOverlap = 0;
 
-  for (size_t k = 1; k <= maxOverlap; ++k) {
+  for (size_t k = 3; k <= maxOverlap; ++k) {
     String suffix = target.substring(targetLen - k);
-    String prefix = fragment.substring(0, k);
+    String prefix = effectiveFrag.substring(0, k);
     if (suffix == prefix) {
-      bestOverlap = k;
+      bool hasDigit = false;
+      for (size_t d = 0; d < k; ++d) {
+        if (suffix[d] >= '0' && suffix[d] <= '9') {
+          hasDigit = true;
+          break;
+        }
+      }
+      if (hasDigit) {
+        continue;
+      }
+
+      bool atWordBoundary = (targetLen == k || target[targetLen - k - 1] == ' ' ||
+                             target[targetLen - k - 1] == '\t' || target[targetLen - k] == ' ');
+      if (atWordBoundary) {
+        bestOverlap = k;
+      }
     }
   }
 
   if (bestOverlap > 0) {
-    String toAppend = fragment.substring(bestOverlap);
+    String toAppend = effectiveFrag.substring(bestOverlap);
     target += toAppend;
   } else {
-    target += fragment;
+    target += effectiveFrag;
   }
 
   if (target.length() > maxLength) {
-    target = target.substring(0, maxLength);
+    target = Utf8Utils::truncateUtf8(target, maxLength);
   }
 }
 
-    void LiveSessionController::finishTurn() {
+void LiveSessionController::handleIncomingAssistantTranscription(const String &text, bool isFinal) {
+  if (!_turnActive.load(std::memory_order_acquire) ||
+      _turnCancelled.load(std::memory_order_acquire))
+    return;
+  _lastActivityMs = millis();
+  _hasOutputTranscription = true;
+
+  if (isFinal) {
+    _lastAssistantText = text;
+    if (_lastAssistantText.length() > 512) {
+      _lastAssistantText = Utf8Utils::truncateUtf8(_lastAssistantText, 512);
+    }
+  } else {
+    appendTranscriptionFragment(_lastAssistantText, text);
+  }
+
+  if (_onOutputTranscriptionWithFinal) {
+    _onOutputTranscriptionWithFinal(_lastAssistantText, isFinal);
+  }
+  if (_onOutputTranscription) {
+    _onOutputTranscription(_lastAssistantText);
+  }
+}
+
+void LiveSessionController::finishTurn() {
       if (!_turnCompletedLogged &&
           _turnActive.load(std::memory_order_acquire) &&
           !_turnCancelled.load(std::memory_order_acquire)) {
@@ -368,15 +451,11 @@ void LiveSessionController::appendTranscriptionFragment(String &target,
       });
 
       _provider->setOnOutputTranscription([this](const String &text) {
-        if (!_turnActive.load(std::memory_order_acquire) ||
-            _turnCancelled.load(std::memory_order_acquire))
-          return;
-        _lastActivityMs = millis();
-        _hasOutputTranscription = true;
-        appendTranscriptionFragment(_lastAssistantText, text);
-        if (_onOutputTranscription) {
-          _onOutputTranscription(_lastAssistantText);
-        }
+        handleIncomingAssistantTranscription(text, false);
+      });
+
+      _provider->setOnOutputTranscriptionWithFinal([this](const String &text, bool isFinal) {
+        handleIncomingAssistantTranscription(text, isFinal);
       });
 
       _provider->setOnText([this](const String &text) {
@@ -387,6 +466,9 @@ void LiveSessionController::appendTranscriptionFragment(String &target,
         _hasModelTurnText = true;
         if (!_hasOutputTranscription) {
           appendTranscriptionFragment(_lastAssistantText, text);
+          if (_onOutputTranscriptionWithFinal) {
+            _onOutputTranscriptionWithFinal(_lastAssistantText, false);
+          }
           if (_onOutputTranscription) {
             _onOutputTranscription(_lastAssistantText);
           }

@@ -1619,6 +1619,8 @@ inline void run_pipeline_v0651_minimal_corrective_tests() {
     std::cout << "  [TEST SUITE 147] VoiceKit v0.6.5.1 — Minimal Corrective Final" << std::endl;
     std::cout << "===========================================================" << std::endl;
 
+    int failuresBefore147 = s_testsFailed;
+
     // -------------------------------------------------------------------------
     // SECTION 1 (P0) : Retour stopListening() & gestion des erreurs
     // -------------------------------------------------------------------------
@@ -1672,13 +1674,13 @@ inline void run_pipeline_v0651_minimal_corrective_tests() {
             const char* getLastError() const override { return "Mock fail"; }
         };
         FailingAudioInput failingInput;
+        MockLiveTransport mockTransportHw;
         VoxCoreVoice voiceHwFail;
         VoiceKitConfig vcfgHw;
         vcfgHw.apiKey = "AIzaSyTest147Hw";
         vcfgHw.wifiMode = WiFiMode::EXTERNAL_WIFI;
         vcfgHw.audioInput = &failingInput;
         voiceHwFail.begin(vcfgHw);
-        MockLiveTransport mockTransportHw;
         prepareMockVoiceReady(voiceHwFail, mockTransportHw);
 
         IntegratedVoicePipeline pipeHw;
@@ -1711,14 +1713,18 @@ inline void run_pipeline_v0651_minimal_corrective_tests() {
         pipeHw.cancel();
         HardwareManager::getInstance().releaseMicCaptureReservation();
         HardwareManager::getInstance().setAudioInput(nullptr);
+        voiceHwFail.getClient().setTransport(nullptr);
 
         // 4. Erreur de transmission de activityEnd
         class ActivityEndFailingTransport : public MockLiveTransport {
         public:
             bool failActivityEnd = false;
             bool send(const char* data, size_t len) override {
-                if (failActivityEnd && strstr(data, "activityEnd") != nullptr) {
-                    return false;
+                if (failActivityEnd && data != nullptr && len > 0) {
+                    std::string s(data, len);
+                    if (s.find("activityEnd") != std::string::npos) {
+                        return false;
+                    }
                 }
                 return MockLiveTransport::send(data, len);
             }
@@ -1748,6 +1754,7 @@ inline void run_pipeline_v0651_minimal_corrective_tests() {
         TEST_ASSERT(pipeAct.getState() == PipelineState::ERROR, "P0.26 pipeline passe en ERROR");
         pipeAct.cancel();
         voiceActFail.getClient().setTransport(nullptr);
+        voice.getClient().setTransport(nullptr);
     }
 
     // -------------------------------------------------------------------------
@@ -1755,132 +1762,194 @@ inline void run_pipeline_v0651_minimal_corrective_tests() {
     // -------------------------------------------------------------------------
     {
         std::cout << "\n--- TEST P1-CONFIRM : Tests A, B, C, D, E confirmation sensible ---" << std::endl;
-        MockLiveTransport mockTransport;
-        VoxCoreVoice voice;
-        ToolRegistry tools;
-        IntegratedVoicePipeline pipeline;
 
-        VoiceKitConfig vcfg;
-        vcfg.apiKey = "AIzaSyTest147P1Conf";
-        vcfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
-        voice.begin(vcfg);
-        prepareMockVoiceReady(voice, mockTransport);
+        auto printDiag = [](const char* testName, const IntegratedVoicePipeline& p, const VoxCoreVoice& v) {
+            std::cout << "[CONF-DIAG] Test=" << testName << "\n"
+                      << "[CONF-DIAG] PipelineState=" << (int)p.getState() << "\n"
+                      << "[CONF-DIAG] VoiceState=" << (int)v.getState() << "\n"
+                      << "[CONF-DIAG] VoiceReady=" << (v.isReady() ? "true" : "false") << "\n"
+                      << "[CONF-DIAG] VoiceBusy=" << (v.isBusy() ? "true" : "false") << "\n"
+                      << "[CONF-DIAG] IsListening=" << (v.isListening() ? "true" : "false") << "\n"
+                      << "[CONF-DIAG] IsTranscribing=" << (v.isTranscribing() ? "true" : "false") << "\n"
+                      << "[CONF-DIAG] IsSpeaking=" << (v.isSpeaking() ? "true" : "false") << "\n"
+                      << "[CONF-DIAG] ActiveTurnId=" << p.getActiveTurnId() << "\n"
+                      << "[CONF-DIAG] PendingToolId=" << p.getPendingToolId().c_str() << "\n"
+                      << "[CONF-DIAG] HasPendingConfirmation=" << (p.getPendingConfirmationToken().length() > 0 ? "true" : "false") << "\n"
+                      << "[CONF-DIAG] MicReservation=" << (HardwareManager::getInstance().isMicCaptureReserved() ? "true" : "false") << "\n"
+                      << "[CONF-DIAG] LastError=" << v.getLastError().c_str() << std::endl;
+        };
 
-        VoicePipelineConfig pcfg;
-        pcfg.enableVoiceUx = true;
-        pcfg.requireConfirmationForSensitive = true;
-        pcfg.speakConfirmationRequired = false;
-        pcfg.speakToolResult = false;
-        pipeline.begin(voice, tools, pcfg);
+        struct ConfFixture {
+            MockLiveTransport mockTransport;
+            VoxCoreVoice voice;
+            ToolRegistry tools;
+            IntegratedVoicePipeline pipeline;
+            bool actionExecuted = false;
 
-        bool actionExecuted = false;
-        tools.registerTool("system.reset", "Reset", [&actionExecuted]() {
-            actionExecuted = true;
-            return ToolResult::success("Systeme reinitialise.");
-        }, ToolSecurityPolicy::SENSITIVE);
-        pipeline.getDispatcher().registerMapping("system.reset", "reinitialise");
+            ConfFixture(const char* apiKey) {
+                VoiceKitConfig vcfg;
+                vcfg.apiKey = apiKey;
+                vcfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+                voice.begin(vcfg);
+                prepareMockVoiceReady(voice, mockTransport);
+
+                VoicePipelineConfig pcfg;
+                pcfg.enableVoiceUx = true;
+                pcfg.requireConfirmationForSensitive = true;
+                pcfg.speakConfirmationRequired = false;
+                pcfg.speakToolResult = false;
+                pipeline.begin(voice, tools, pcfg);
+
+                tools.registerTool("system.reset", "Reset", [this]() {
+                    actionExecuted = true;
+                    return ToolResult::success("Systeme reinitialise.");
+                }, ToolSecurityPolicy::SENSITIVE);
+                pipeline.getDispatcher().registerMapping("system.reset", "reinitialise");
+            }
+
+            ~ConfFixture() {
+                HardwareManager::getInstance().releaseMicCaptureReservation();
+                voice.getClient().setTransport(nullptr);
+            }
+        };
 
         // TEST A : Confirmation en attente, moteur indisponible avant tentative d'écoute
-        pipeline.startListening();
-        pipeline.stopListening();
-        pipeline.feedSimulatedTranscription("reinitialise", true);
-        TEST_ASSERT(pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.A.1 WAITING_CONFIRMATION");
-        String tokA = pipeline.getPendingConfirmationToken();
-        TEST_ASSERT(tokA.length() > 0, "Conf.A.2 Jeton genere");
+        {
+            ConfFixture f("AIzaSyTest147P1ConfA");
+            printDiag("A-BEFORE", f.pipeline, f.voice);
+            f.pipeline.startListening();
+            f.pipeline.stopListening();
+            f.pipeline.feedSimulatedTranscription("reinitialise", true);
+            TEST_ASSERT(f.pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.A.1 WAITING_CONFIRMATION");
+            String tokA = f.pipeline.getPendingConfirmationToken();
+            TEST_ASSERT(tokA.length() > 0, "Conf.A.2 Jeton genere");
 
-        // Rendre le moteur vocal indisponible (ex: en cours de restitution)
-        voice.say("Notification importante");
-        TEST_ASSERT(voice.isBusy(), "Conf.A.3 Moteur vocal occupe");
+            // Rendre le moteur vocal indisponible (ex: en cours de restitution)
+            f.voice.say("Notification importante");
+            TEST_ASSERT(f.voice.isBusy(), "Conf.A.3 Moteur vocal occupe");
 
-        // Tentative d'écoute pendant que le moteur est indisponible
-        TEST_ASSERT(pipeline.startListening() == false, "Conf.A.4 startListening() refuse car moteur occupe");
-        TEST_ASSERT(pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.A.5 Reste en WAITING_CONFIRMATION");
-        TEST_ASSERT(pipeline.getPendingConfirmationToken() == tokA, "Conf.A.6 Jeton conserve intact");
+            // Tentative d'écoute pendant que le moteur est indisponible
+            TEST_ASSERT(f.pipeline.startListening() == false, "Conf.A.4 startListening() refuse car moteur occupe");
+            TEST_ASSERT(f.pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.A.5 Reste en WAITING_CONFIRMATION");
+            TEST_ASSERT(f.pipeline.getPendingConfirmationToken() == tokA, "Conf.A.6 Jeton conserve intact");
 
-        // Libérer le moteur et confirmer l'action
-        voice.stop();
-        TEST_ASSERT(pipeline.confirmPendingAction(tokA), "Conf.A.7 Action confirmee avec succes");
-        TEST_ASSERT(actionExecuted == true, "Conf.A.8 Action executee");
-        pipeline.cancel();
+            // Libérer le moteur et confirmer l'action
+            f.voice.stop();
+            TEST_ASSERT(f.pipeline.confirmPendingAction(tokA), "Conf.A.7 Action confirmee avec succes");
+            TEST_ASSERT(f.actionExecuted == true, "Conf.A.8 Action executee");
+            f.pipeline.cancel();
+            printDiag("A-AFTER", f.pipeline, f.voice);
+        }
 
         // TEST B : Confirmation annulée, puis échec réel de démarrage de capture
-        actionExecuted = false;
-        pipeline.startListening();
-        pipeline.stopListening();
-        pipeline.feedSimulatedTranscription("reinitialise", true);
-        TEST_ASSERT(pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.B.1 WAITING_CONFIRMATION");
-        String tokB = pipeline.getPendingConfirmationToken();
+        {
+            ConfFixture f("AIzaSyTest147P1ConfB");
+            printDiag("B-BEFORE", f.pipeline, f.voice);
+            f.actionExecuted = false;
+            f.pipeline.startListening();
+            f.pipeline.stopListening();
+            f.pipeline.feedSimulatedTranscription("reinitialise", true);
+            TEST_ASSERT(f.pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.B.1 WAITING_CONFIRMATION");
+            String tokB = f.pipeline.getPendingConfirmationToken();
 
-        // Réserver le micro par un tiers pour forcer l'échec matériel de capture dans startListening()
-        HardwareManager::getInstance().prepareMicCapture((const void*)0xdeadbeef);
+            // Réserver le micro par un tiers pour forcer l'échec matériel de capture dans startListening()
+            HardwareManager::getInstance().prepareMicCapture((const void*)0xdeadbeef);
 
-        // startListening() annule la confirmation puis échoue sur le démarrage effectif de capture
-        TEST_ASSERT(pipeline.startListening() == false, "Conf.B.2 startListening() echoue");
-        // Règle formelle : le jeton B ne doit JAMAIS être restauré
-        TEST_ASSERT(pipeline.getPendingConfirmationToken() == "", "Conf.B.3 Jeton annule NON restaure");
-        TEST_ASSERT(pipeline.getState() != PipelineState::WAITING_CONFIRMATION, "Conf.B.4 N'est plus en WAITING_CONFIRMATION");
+            // startListening() annule la confirmation puis échoue sur le démarrage effectif de capture
+            TEST_ASSERT(f.pipeline.startListening() == false, "Conf.B.2 startListening() echoue");
+            // Règle formelle : le jeton B ne doit JAMAIS être restauré
+            TEST_ASSERT(f.pipeline.getPendingConfirmationToken() == "", "Conf.B.3 Jeton annule NON restaure");
+            TEST_ASSERT(f.pipeline.getState() != PipelineState::WAITING_CONFIRMATION, "Conf.B.4 N'est plus en WAITING_CONFIRMATION");
+            TEST_ASSERT(f.pipeline.getState() == PipelineState::ERROR, "Conf.B.4b Pipeline en ERROR");
+            TEST_ASSERT(f.voice.getState() == VoiceState::ERROR_STATE, "Conf.B.4c Moteur vocal en ERROR_STATE");
 
-        HardwareManager::getInstance().releaseMicCaptureReservation();
+            HardwareManager::getInstance().releaseMicCaptureReservation();
 
-        // Tentative de confirmation avec l'ancien jeton B : doit être REFUSÉE
-        TEST_ASSERT(pipeline.confirmPendingAction(tokB) == false, "Conf.B.5 Confirmation ancien jeton B refusee");
-        TEST_ASSERT(actionExecuted == false, "Conf.B.6 Action B jamais executee");
-        pipeline.cancel();
-        voice.stop();
+            // Tentative de confirmation avec l'ancien jeton B : doit être REFUSÉE
+            TEST_ASSERT(f.pipeline.confirmPendingAction(tokB) == false, "Conf.B.5 Confirmation ancien jeton B refusee");
+            TEST_ASSERT(f.actionExecuted == false, "Conf.B.6 Action B jamais executee");
+
+            // Récupération explicite : Échec capture -> ERROR -> récupération -> nouvelle capture
+            f.voice.stop();
+            TEST_ASSERT(f.pipeline.recoverFromError() == true, "Conf.B.7 recoverFromError reussi");
+            TEST_ASSERT(f.pipeline.getState() == PipelineState::READY, "Conf.B.8 Pipeline READY apres recuperation");
+            TEST_ASSERT(f.pipeline.startListening() == true, "Conf.B.9 Nouvelle capture apres recuperation");
+            TEST_ASSERT(f.pipeline.stopListening() == true, "Conf.B.10 Arret capture apres recuperation");
+            f.pipeline.cancel();
+            printDiag("B-AFTER", f.pipeline, f.voice);
+        }
 
         // TEST C : Nouvelle capture acceptée après annulation de confirmation
-        actionExecuted = false;
-        pipeline.startListening();
-        pipeline.stopListening();
-        pipeline.feedSimulatedTranscription("reinitialise", true);
-        TEST_ASSERT(pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.C.1 WAITING_CONFIRMATION");
-        String tokC = pipeline.getPendingConfirmationToken();
+        {
+            ConfFixture f("AIzaSyTest147P1ConfC");
+            printDiag("C-BEFORE", f.pipeline, f.voice);
+            f.actionExecuted = false;
+            f.pipeline.startListening();
+            f.pipeline.stopListening();
+            f.pipeline.feedSimulatedTranscription("reinitialise", true);
+            TEST_ASSERT(f.pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.C.1 WAITING_CONFIRMATION");
+            String tokC = f.pipeline.getPendingConfirmationToken();
 
-        // Nouvelle capture démarrée -> confirmation annulée
-        TEST_ASSERT(pipeline.startListening() == true, "Conf.C.2 Nouvelle ecoute acceptee");
-        TEST_ASSERT(pipeline.getState() == PipelineState::LISTENING, "Conf.C.3 Etat LISTENING");
+            // Nouvelle capture démarrée -> confirmation annulée
+            TEST_ASSERT(f.pipeline.startListening() == true, "Conf.C.2 Nouvelle ecoute acceptee");
+            TEST_ASSERT(f.pipeline.getState() == PipelineState::LISTENING, "Conf.C.3 Etat LISTENING");
 
-        // Enregistrer outil de consultation inoffensif
-        tools.registerTool("system.status", "Statut", []() {
-            return ToolResult::success("Systeme nominal.");
-        }, ToolSecurityPolicy::READ_ONLY);
-        pipeline.getDispatcher().registerMapping("system.status", "statut");
+            // Enregistrer outil de consultation inoffensif
+            bool statusExecuted = false;
+            f.tools.registerTool("system.status", "Statut", [&statusExecuted]() {
+                statusExecuted = true;
+                return ToolResult::success("Systeme nominal.");
+            }, ToolSecurityPolicy::READ_ONLY);
+            f.pipeline.getDispatcher().registerMapping("system.status", "statut");
 
-        pipeline.stopListening();
-        pipeline.feedSimulatedTranscription("statut", true);
-        TEST_ASSERT(pipeline.getState() == PipelineState::READY, "Conf.C.4 Tour statut termine");
-        TEST_ASSERT(actionExecuted == false, "Conf.C.5 Action sensible annulee jamais executee");
+            f.pipeline.stopListening();
+            f.pipeline.feedSimulatedTranscription("statut", true);
+            TEST_ASSERT(f.pipeline.getState() == PipelineState::READY, "Conf.C.4 Tour statut termine");
+            TEST_ASSERT(f.actionExecuted == false, "Conf.C.5 Action sensible annulee jamais executee");
+            TEST_ASSERT(statusExecuted == true, "Conf.C.6 Outil statut execute exactement une fois");
+            printDiag("C-AFTER", f.pipeline, f.voice);
+        }
 
         // TEST D : Ancienne confirmation tentée après STOP
-        actionExecuted = false;
-        pipeline.startListening();
-        pipeline.stopListening();
-        pipeline.feedSimulatedTranscription("reinitialise", true);
-        TEST_ASSERT(pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.D.1 WAITING_CONFIRMATION");
-        String tokD = pipeline.getPendingConfirmationToken();
+        {
+            ConfFixture f("AIzaSyTest147P1ConfD");
+            printDiag("D-BEFORE", f.pipeline, f.voice);
+            f.actionExecuted = false;
+            f.pipeline.startListening();
+            f.pipeline.stopListening();
+            f.pipeline.feedSimulatedTranscription("reinitialise", true);
+            TEST_ASSERT(f.pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.D.1 WAITING_CONFIRMATION");
+            String tokD = f.pipeline.getPendingConfirmationToken();
 
-        pipeline.cancel();
-        TEST_ASSERT(pipeline.getState() == PipelineState::READY, "Conf.D.2 STOP -> READY");
-        TEST_ASSERT(pipeline.confirmPendingAction(tokD) == false, "Conf.D.3 Confirmation post-STOP refusee");
-        TEST_ASSERT(actionExecuted == false, "Conf.D.4 Action non executee");
+            f.pipeline.cancel();
+            TEST_ASSERT(f.pipeline.getState() == PipelineState::READY, "Conf.D.2 STOP -> READY");
+            TEST_ASSERT(f.pipeline.confirmPendingAction(tokD) == false, "Conf.D.3 Confirmation post-STOP refusee");
+            TEST_ASSERT(f.actionExecuted == false, "Conf.D.4 Action non executee");
+            printDiag("D-AFTER", f.pipeline, f.voice);
+        }
 
         // TEST E : Aucune double terminaison de l'action ou du tour
-        uint32_t finishCount = 0;
-        pipeline.onTurnFinished([&finishCount](uint32_t, PipelineResult, const String&) {
-            finishCount++;
-        });
+        {
+            ConfFixture f("AIzaSyTest147P1ConfE");
+            printDiag("E-BEFORE", f.pipeline, f.voice);
+            uint32_t finishCount = 0;
+            f.pipeline.onTurnFinished([&finishCount](uint32_t, PipelineResult, const String&) {
+                finishCount++;
+            });
 
-        pipeline.startListening();
-        pipeline.stopListening();
-        pipeline.feedSimulatedTranscription("reinitialise", true);
-        uint32_t countBefore = finishCount;
-        pipeline.cancel();
-        uint32_t countAfter = finishCount;
-        TEST_ASSERT(countAfter == countBefore + 1, "Conf.E.1 Exactement une notification de terminaison");
+            f.pipeline.startListening();
+            f.pipeline.stopListening();
+            f.pipeline.feedSimulatedTranscription("reinitialise", true);
+            uint32_t countBefore = finishCount;
+            f.pipeline.cancel();
+            uint32_t countAfter = finishCount;
+            TEST_ASSERT(countAfter == countBefore + 1, "Conf.E.1 Exactement une notification de terminaison");
 
-        // Appel redondant de cancel
-        pipeline.cancel();
-        TEST_ASSERT(finishCount == countAfter, "Conf.E.2 Pas de double terminaison sur cancel redondant");
+            // Appel redondant de cancel
+            f.pipeline.cancel();
+            TEST_ASSERT(finishCount == countAfter, "Conf.E.2 Pas de double terminaison sur cancel redondant");
+            printDiag("E-AFTER", f.pipeline, f.voice);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -2074,7 +2143,13 @@ inline void run_pipeline_v0651_minimal_corrective_tests() {
         TEST_ASSERT(pipeOAI.getState() == PipelineState::READY, "Late.E.1 Tour E acheve");
         TEST_ASSERT(ux.getReplyMemory().getCount() == memBefore + 1, "Late.E.2 Memorise exactement une fois dans ReplyMemory");
         TEST_ASSERT(ux.getReplyMemory().getLastReply().indexOf("Reponse unique E") >= 0, "Late.E.3 Contenu exact memorise");
+        voiceOAI.getClient().setTransport(nullptr);
+        voiceOAI.getOpenAIClient().setTransport(nullptr);
     }
 
-    std::cout << "\n[TEST SUITE 147] SUCCES INTEGRAL DES TESTS CORRECTIFS (v0.6.5.1 Final)" << std::endl;
+    if (s_testsFailed == failuresBefore147) {
+        std::cout << "\n[TEST SUITE 147] SUCCES INTEGRAL DES TESTS CORRECTIFS (v0.6.5.1 Final)" << std::endl;
+    } else {
+        std::cout << "\n[TEST SUITE 147] ECHEC" << std::endl;
+    }
 }

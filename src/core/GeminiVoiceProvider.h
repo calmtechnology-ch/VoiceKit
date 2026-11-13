@@ -58,6 +58,7 @@ public:
     void setOnText(TextCallback cb) override;
     void setOnInputTranscription(TranscriptionCallback cb) override;
     void setOnOutputTranscription(OutputTranscriptionCallback cb) override;
+    void setOnOutputTranscriptionWithFinal(OutputTranscriptionWithFinalCallback cb) override;
     void setOnTurnComplete(VoidCallback cb) override;
     void setOnInterrupted(VoidCallback cb) override;
     void setOnError(ErrorCallback cb) override;
@@ -95,4 +96,6 @@ private:
     GeminiLiveClient* _client = nullptr;
     std::unique_ptr<GeminiLiveClient> _ownedClient;
     bool _conversationMode = false;
+    OutputTranscriptionCallback _onOutputTranscription;
+    OutputTranscriptionWithFinalCallback _onOutputTranscriptionWithFinal;
 };

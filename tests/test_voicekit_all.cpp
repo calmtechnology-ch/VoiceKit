@@ -4620,10 +4620,11 @@ void test_v0531_facade_modes_transitions_and_resilience() {
   cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
   vk.begin(cfg);
 
-  // 1. Constante de version alignée sur v0.6.5.1 ou v0.6.5
-  TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.5.1") == 0 ||
+  // 1. Constante de version alignée sur v0.6.5.2, v0.6.5.1 ou v0.6.5
+  TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.5.2") == 0 ||
+                  strcmp(VOICEKIT_VERSION, "v0.6.5.1") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.5") == 0,
-              "VOICEKIT_VERSION est v0.6.5.1 ou v0.6.5");
+              "VOICEKIT_VERSION est v0.6.5.2, v0.6.5.1 ou v0.6.5");
 
   // 2. Mode par défaut IDLE
   TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode initial = IDLE");
@@ -10751,6 +10752,7 @@ void test_v06432_final_event_correlation_validation() {
 }
 
 #include "test_pipeline_suites.h"
+#include "test_v0652_transcription_suites.h"
 
 // =============================================================================
 // MAIN TEST RUNNER
@@ -10967,6 +10969,9 @@ int main() {
 
   // Suite VoiceKit v0.6.5.1 — Minimal Corrective Final Validation (P0, P1 Conf, P1 Late AI)
   run_pipeline_v0651_minimal_corrective_tests();
+
+  // Suite VoiceKit v0.6.5.2 — Transcription Assembly & Realtime Finalization (Tests 1 à 6)
+  run_transcription_assembly_v0652_tests();
 
   std::cout << "\n==========================================================="
             << std::endl;

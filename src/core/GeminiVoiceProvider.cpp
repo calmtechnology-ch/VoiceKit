@@ -157,7 +157,37 @@ void GeminiVoiceProvider::setOnInputTranscription(TranscriptionCallback cb) {
 }
 
 void GeminiVoiceProvider::setOnOutputTranscription(OutputTranscriptionCallback cb) {
-    if (_client) _client->setOnOutputTranscription(std::move(cb));
+    _onOutputTranscription = std::move(cb);
+    if (!_onOutputTranscription && !_onOutputTranscriptionWithFinal) {
+        if (_client) _client->setOnOutputTranscription(nullptr);
+        return;
+    }
+    if (_client) {
+        _client->setOnOutputTranscription([this](const String& text) {
+            if (_onOutputTranscriptionWithFinal) {
+                _onOutputTranscriptionWithFinal(text, false);
+            } else if (_onOutputTranscription) {
+                _onOutputTranscription(text);
+            }
+        });
+    }
+}
+
+void GeminiVoiceProvider::setOnOutputTranscriptionWithFinal(OutputTranscriptionWithFinalCallback cb) {
+    _onOutputTranscriptionWithFinal = std::move(cb);
+    if (!_onOutputTranscription && !_onOutputTranscriptionWithFinal) {
+        if (_client) _client->setOnOutputTranscription(nullptr);
+        return;
+    }
+    if (_client) {
+        _client->setOnOutputTranscription([this](const String& text) {
+            if (_onOutputTranscriptionWithFinal) {
+                _onOutputTranscriptionWithFinal(text, false);
+            } else if (_onOutputTranscription) {
+                _onOutputTranscription(text);
+            }
+        });
+    }
 }
 
 void GeminiVoiceProvider::setOnTurnComplete(VoidCallback cb) {

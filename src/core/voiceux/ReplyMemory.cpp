@@ -8,36 +8,7 @@ ReplyMemory::ReplyMemory(size_t capacity, size_t maxReplyBytes)
 }
 
 String ReplyMemory::truncateUtf8(const String& input, size_t maxBytes) {
-    if (input.length() <= maxBytes) {
-        return input;
-    }
-
-    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(input.c_str());
-    size_t cut = maxBytes;
-
-    // Si cut tombe sur un octet de continuation (0x80..0xBF), remonter jusqu'à l'octet de début
-    while (cut > 0 && (bytes[cut] & 0xC0) == 0x80) {
-        cut--;
-    }
-
-    // Si bytes[cut] est un octet de tête multioctet (0xC0..0xFF)
-    if (cut < input.length() && (bytes[cut] & 0x80) != 0) {
-        size_t seqLen = 1;
-        uint8_t b0 = bytes[cut];
-        if ((b0 & 0xE0) == 0xC0) seqLen = 2;
-        else if ((b0 & 0xF0) == 0xE0) seqLen = 3;
-        else if ((b0 & 0xF8) == 0xF0) seqLen = 4;
-
-        if (cut + seqLen > maxBytes) {
-            // La séquence ne peut pas être complète dans maxBytes -> couper avant
-        } else {
-            cut += seqLen;
-        }
-    }
-
-    String truncated = input.substring(0, cut);
-    // Assainissement final de précaution
-    return Utf8Utils::sanitizeUtf8(truncated);
+    return Utf8Utils::truncateUtf8(input, maxBytes);
 }
 
 bool ReplyMemory::addReply(const String& reply) {

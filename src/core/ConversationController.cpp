@@ -236,14 +236,13 @@ void ConversationController::handleUserTranscription(const String& text, bool is
 }
 
 void ConversationController::handleAssistantTranscription(const String& text) {
+    handleAssistantTranscription(text, false);
+}
+
+void ConversationController::handleAssistantTranscription(const String& text, bool isFinal) {
+    (void)isFinal;
     if (text.isEmpty()) return;
-    if (_metrics.assistantText.isEmpty() || text.startsWith(_metrics.assistantText)) {
-        _metrics.assistantText = text;
-    } else if (_metrics.assistantText.endsWith(text) || _metrics.assistantText == text) {
-        // Déjà présent dans le texte accumulé
-    } else {
-        _metrics.assistantText += text;
-    }
+    _metrics.assistantText = text;
     _lastAssistantText = _metrics.assistantText;
     if (_onAssistantText) {
         _onAssistantText(_metrics.assistantText);

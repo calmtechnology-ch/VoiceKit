@@ -26,6 +26,7 @@ public:
     using AudioCallback = std::function<void(const int16_t* pcm, size_t samples)>;
     using TranscriptionCallback = std::function<void(const String& text, bool isFinal)>;
     using OutputTranscriptionCallback = std::function<void(const String& text)>;
+    using OutputTranscriptionWithFinalCallback = std::function<void(const String& text, bool isFinal)>;
     using ErrorCallback = std::function<void(const String&)>;
 
     virtual ~IVoiceProvider() = default;
@@ -154,6 +155,7 @@ public:
     virtual void setOnText(TextCallback cb) = 0;
     virtual void setOnInputTranscription(TranscriptionCallback cb) = 0;
     virtual void setOnOutputTranscription(OutputTranscriptionCallback cb) = 0;
+    virtual void setOnOutputTranscriptionWithFinal(OutputTranscriptionWithFinalCallback cb) { (void)cb; }
     virtual void setOnTurnComplete(VoidCallback cb) = 0;
     virtual void setOnInterrupted(VoidCallback cb) = 0;
     virtual void setOnError(ErrorCallback cb) = 0;

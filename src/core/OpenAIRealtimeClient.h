@@ -91,6 +91,7 @@ public:
     void setOnText(TextCallback cb) override { _onText = std::move(cb); }
     void setOnInputTranscription(TranscriptionCallback cb) override { _onInputTranscription = std::move(cb); }
     void setOnOutputTranscription(OutputTranscriptionCallback cb) override { _onOutputTranscription = std::move(cb); }
+    void setOnOutputTranscriptionWithFinal(OutputTranscriptionWithFinalCallback cb) override { _onOutputTranscriptionWithFinal = std::move(cb); }
     void setOnTurnComplete(VoidCallback cb) override { _onTurnComplete = std::move(cb); }
     void setOnInterrupted(VoidCallback cb) override { _onInterrupted = std::move(cb); }
     void setOnError(ErrorCallback cb) override { _onError = std::move(cb); }
@@ -169,6 +170,8 @@ private:
     TextCallback _onText;
     TranscriptionCallback _onInputTranscription;
     OutputTranscriptionCallback _onOutputTranscription;
+    OutputTranscriptionWithFinalCallback _onOutputTranscriptionWithFinal;
+    String _lastDoneTranscript;
     VoidCallback _onTurnComplete;
     VoidCallback _onInterrupted;
     ErrorCallback _onError;

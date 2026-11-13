@@ -28,6 +28,36 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.5.2] - 2026-11-13 (Transcription Assembly & OpenAI Realtime Finalization)
+
+Correctif ciblé fiabilisant l'assemblage et la consolidation des transcriptions de sortie de l'assistant observés sur matériel M5Stack CoreS3 avec OpenAI Realtime (`gpt-realtime-2.1-mini`), sans aucune régression sur Google Gemini Live ni rupture de l'API publique (`VoxCoreVoice`, `IVoiceProvider`, mocks de test).
+
+### 1. Préservation des Espaces Significatifs (`LiveSessionController::appendTranscriptionFragment`)
+- **Préservation des deltas d'espaces isolés** : Le tokenizer OpenAI (`o200k_base`) émettant l'espace précédant un nombre sous forme de delta audio transcript dédié contenant uniquement `" "`, correction du test d'élagage (`fTrim.isEmpty()`) pour insérer un espace unique `' '` lorsque la cible ne se termine pas déjà par un blanc au lieu de jeter le delta.
+- **Résolution du collage numérique** : Élimination du collage de mots et de nombres (ex: `"Nous sommes en2026"` $\to$ `"Nous sommes en 2026"`).
+- **Anti-double espace** : Coalescence préventive des espaces consécutifs à la frontière entre deux fragments disjoints lorsque la cible se termine déjà par un espace et que le delta en débute par un.
+
+### 2. Sécurisation de la Déduplication et de l'Overlap
+- **Protection anti-fusion des chiffres consécutifs** : Interdiction formelle de tout chevauchement suffixe/préfixe portant sur des chiffres ASCII (`'0'` à `'9'`), empêchant la fusion erronée de nombres consécutifs (ex: `"20"` + `"06"` $\to$ `"2006"` au lieu de `"206"`, `"11"` + `"11"` $\to$ `"1111"` au lieu de `"111"`).
+- **Seuil minimal d'overlap (k >= 3) et frontière de mot** : La recherche de chevauchement partiel requiert désormais une longueur minimale de 3 caractères et une frontière de mot dans la cible (`target`), interdisant l'amputation de lettres légitimes en bordure de token.
+- **Troncature UTF-8 conforme RFC 3629** : Centralisation de `truncateUtf8` dans `Utf8Utils` pour garantir qu'aucune troncature sur `maxLength` ne coupe au milieu d'un codepoint UTF-8 multi-octets français (`é`, `è`, `à`, `œ`, etc.).
+
+### 3. Distinction Propre entre Deltas Incrémentaux et Transcription Finale Faisant Foi
+- **Nouveau callback rétrocompatible** : Ajout de `setOnOutputTranscriptionWithFinal(OutputTranscriptionWithFinalCallback cb)` dans `IVoiceProvider` avec implémentation par défaut vide, préservant 100% de compatibilité avec les mocks et implémentations tierces existantes.
+- **Remplacement autoritaire sans duplication** : Dans `LiveSessionController` et `ConversationController`, la transcription finale issue de `response.output_audio_transcript.done` / `response.done` remplace directement le texte partiel consolidé du tour courant au lieu d'exécuter une concaténation aveugle `+=` en cas de divergence minime (espace, casse, ponctuation).
+- **Idempotence des événements OpenAI Realtime** : Déduplication de `_lastDoneTranscript` dans `OpenAIRealtimeClient` pour interdire toute émission redondante entre `.done` et `response.done`.
+
+### 4. Tests et Validation Automatisés (Suite 148)
+- **Suite de Tests 148 (v0.6.5.2)** : 6 tests obligatoires couvrant :
+  1. Reproduction exacte de la séquence OpenAI Realtime sur CoreS3 (`["Nous", " sommes", " en", " ", "202", "6", " cette", " année", "."]`, `.done`, `response.done`), validant l'absence de `"en2026"` et de répétition de phrase.
+  2. Correction finale divergente avec remplacement propre autoritaire.
+  3. Nombres et tokens courts consécutifs (`"Il est 20h00"`, `"En 2006"`, `"1111"`, bordures de lettres).
+  4. Espaces multiples, deltas `" "` consécutifs et coalescence de frontières.
+  5. Troncature UTF-8 exhaustive sur caractères accentués français.
+  6. Non-régression Gemini Live (transcription cumulative et fragments partiels).
+
+---
+
 ## [0.6.5.1] - 2026-11-11 (Integrated Pipeline Corrective & Stabilisation)
 
 Version corrective et de stabilisation majeure de l'orchestrateur `IntegratedVoicePipeline` et de son exemple de référence `IntegratedVoiceDemo` sur M5Stack CoreS3 (ESP32-S3).

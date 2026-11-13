@@ -168,6 +168,7 @@ void OpenAIRealtimeClient::resetTurnRxMetrics() {
     _postTurnCompletePcmBlocks.store(0, std::memory_order_relaxed);
     _firstResponseReceivedMs.store(0, std::memory_order_relaxed);
     _firstAudioReceivedMs.store(0, std::memory_order_relaxed);
+    _lastDoneTranscript = "";
 }
 
 bool OpenAIRealtimeClient::connect() {
@@ -485,6 +486,7 @@ bool OpenAIRealtimeClient::sendInterruption() {
     if (!isConnected()) return false;
 
     _waitingForResponse.store(false, std::memory_order_release);
+    _lastDoneTranscript = "";
     if (_currentResponseId.length() > 0) {
         addCancelledResponseId(_currentResponseId);
         _currentResponseId = "";
@@ -578,6 +580,7 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
         }
 
         if (respId) {
+            _lastDoneTranscript = "";
             if (!_waitingForResponse.load(std::memory_order_acquire)) {
                 // Reçu alors qu'aucune réponse n'est attendue (annulée avant réception de response.created)
                 addCancelledResponseId(respId);
@@ -665,7 +668,8 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
         cJSON* deltaItem = cJSON_GetObjectItemCaseSensitive(root, "delta");
         if (deltaItem && cJSON_IsString(deltaItem) && deltaItem->valuestring) {
             String textFragment(deltaItem->valuestring);
-            if (_onOutputTranscription) _onOutputTranscription(textFragment);
+            if (_onOutputTranscriptionWithFinal) _onOutputTranscriptionWithFinal(textFragment, false);
+            else if (_onOutputTranscription) _onOutputTranscription(textFragment);
             if (_onText) _onText(textFragment);
         }
     }
@@ -680,8 +684,12 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
         cJSON* transItem = cJSON_GetObjectItemCaseSensitive(root, "transcript");
         if (transItem && cJSON_IsString(transItem) && transItem->valuestring) {
             String fullText(transItem->valuestring);
-            if (_onOutputTranscription) _onOutputTranscription(fullText);
-            if (_onText) _onText(fullText);
+            if (fullText != _lastDoneTranscript) {
+                _lastDoneTranscript = fullText;
+                if (_onOutputTranscriptionWithFinal) _onOutputTranscriptionWithFinal(fullText, true);
+                else if (_onOutputTranscription) _onOutputTranscription(fullText);
+                if (_onText) _onText(fullText);
+            }
         }
     }
     // 6. Transcription de l'entrée microphone utilisateur (whisper-1)
@@ -744,8 +752,12 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
                             cJSON* trItem = cJSON_GetObjectItemCaseSensitive(contentItem, "transcript");
                             if (trItem && cJSON_IsString(trItem) && trItem->valuestring && strlen(trItem->valuestring) > 0) {
                                 String fullText(trItem->valuestring);
-                                if (_onOutputTranscription) _onOutputTranscription(fullText);
-                                if (_onText) _onText(fullText);
+                                if (fullText != _lastDoneTranscript) {
+                                    _lastDoneTranscript = fullText;
+                                    if (_onOutputTranscriptionWithFinal) _onOutputTranscriptionWithFinal(fullText, true);
+                                    else if (_onOutputTranscription) _onOutputTranscription(fullText);
+                                    if (_onText) _onText(fullText);
+                                }
                             }
                         }
                     }

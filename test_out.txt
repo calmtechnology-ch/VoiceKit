@@ -376,16 +376,159 @@
 --- TEST P0 : stopListening() nominal, echecs et idempotence ---
 
 --- TEST P1-CONFIRM : Tests A, B, C, D, E confirmation sensible ---
-  [FAIL] Conf.C.1 WAITING_CONFIRMATION (tests/test_pipeline_suites.h:1834)
-  [FAIL] Conf.C.2 Nouvelle ecoute acceptee (tests/test_pipeline_suites.h:1838)
-  [FAIL] Conf.C.3 Etat LISTENING (tests/test_pipeline_suites.h:1839)
-  [FAIL] Conf.C.4 Tour statut termine (tests/test_pipeline_suites.h:1849)
-  [FAIL] Conf.D.1 WAITING_CONFIRMATION (tests/test_pipeline_suites.h:1857)
+[CONF-DIAG] Test=A-BEFORE
+[CONF-DIAG] PipelineState=1
+[CONF-DIAG] VoiceState=4
+[CONF-DIAG] VoiceReady=true
+[CONF-DIAG] VoiceBusy=false
+[CONF-DIAG] IsListening=false
+[CONF-DIAG] IsTranscribing=false
+[CONF-DIAG] IsSpeaking=false
+[CONF-DIAG] ActiveTurnId=0
+[CONF-DIAG] PendingToolId=
+[CONF-DIAG] HasPendingConfirmation=false
+[CONF-DIAG] MicReservation=false
+[CONF-DIAG] LastError=
+[CONF-DIAG] Test=A-AFTER
+[CONF-DIAG] PipelineState=1
+[CONF-DIAG] VoiceState=4
+[CONF-DIAG] VoiceReady=true
+[CONF-DIAG] VoiceBusy=false
+[CONF-DIAG] IsListening=false
+[CONF-DIAG] IsTranscribing=false
+[CONF-DIAG] IsSpeaking=false
+[CONF-DIAG] ActiveTurnId=1
+[CONF-DIAG] PendingToolId=
+[CONF-DIAG] HasPendingConfirmation=false
+[CONF-DIAG] MicReservation=false
+[CONF-DIAG] LastError=
+[CONF-DIAG] Test=B-BEFORE
+[CONF-DIAG] PipelineState=1
+[CONF-DIAG] VoiceState=4
+[CONF-DIAG] VoiceReady=true
+[CONF-DIAG] VoiceBusy=false
+[CONF-DIAG] IsListening=false
+[CONF-DIAG] IsTranscribing=false
+[CONF-DIAG] IsSpeaking=false
+[CONF-DIAG] ActiveTurnId=0
+[CONF-DIAG] PendingToolId=
+[CONF-DIAG] HasPendingConfirmation=false
+[CONF-DIAG] MicReservation=false
+[CONF-DIAG] LastError=
+[CONF-DIAG] Test=B-AFTER
+[CONF-DIAG] PipelineState=1
+[CONF-DIAG] VoiceState=4
+[CONF-DIAG] VoiceReady=true
+[CONF-DIAG] VoiceBusy=false
+[CONF-DIAG] IsListening=false
+[CONF-DIAG] IsTranscribing=false
+[CONF-DIAG] IsSpeaking=false
+[CONF-DIAG] ActiveTurnId=3
+[CONF-DIAG] PendingToolId=
+[CONF-DIAG] HasPendingConfirmation=false
+[CONF-DIAG] MicReservation=false
+[CONF-DIAG] LastError=
+[CONF-DIAG] Test=C-BEFORE
+[CONF-DIAG] PipelineState=1
+[CONF-DIAG] VoiceState=4
+[CONF-DIAG] VoiceReady=true
+[CONF-DIAG] VoiceBusy=false
+[CONF-DIAG] IsListening=false
+[CONF-DIAG] IsTranscribing=false
+[CONF-DIAG] IsSpeaking=false
+[CONF-DIAG] ActiveTurnId=0
+[CONF-DIAG] PendingToolId=
+[CONF-DIAG] HasPendingConfirmation=false
+[CONF-DIAG] MicReservation=false
+[CONF-DIAG] LastError=
+[CONF-DIAG] Test=C-AFTER
+[CONF-DIAG] PipelineState=1
+[CONF-DIAG] VoiceState=4
+[CONF-DIAG] VoiceReady=true
+[CONF-DIAG] VoiceBusy=false
+[CONF-DIAG] IsListening=false
+[CONF-DIAG] IsTranscribing=false
+[CONF-DIAG] IsSpeaking=false
+[CONF-DIAG] ActiveTurnId=2
+[CONF-DIAG] PendingToolId=
+[CONF-DIAG] HasPendingConfirmation=false
+[CONF-DIAG] MicReservation=false
+[CONF-DIAG] LastError=
+[CONF-DIAG] Test=D-BEFORE
+[CONF-DIAG] PipelineState=1
+[CONF-DIAG] VoiceState=4
+[CONF-DIAG] VoiceReady=true
+[CONF-DIAG] VoiceBusy=false
+[CONF-DIAG] IsListening=false
+[CONF-DIAG] IsTranscribing=false
+[CONF-DIAG] IsSpeaking=false
+[CONF-DIAG] ActiveTurnId=0
+[CONF-DIAG] PendingToolId=
+[CONF-DIAG] HasPendingConfirmation=false
+[CONF-DIAG] MicReservation=false
+[CONF-DIAG] LastError=
+[CONF-DIAG] Test=D-AFTER
+[CONF-DIAG] PipelineState=1
+[CONF-DIAG] VoiceState=4
+[CONF-DIAG] VoiceReady=true
+[CONF-DIAG] VoiceBusy=false
+[CONF-DIAG] IsListening=false
+[CONF-DIAG] IsTranscribing=false
+[CONF-DIAG] IsSpeaking=false
+[CONF-DIAG] ActiveTurnId=1
+[CONF-DIAG] PendingToolId=
+[CONF-DIAG] HasPendingConfirmation=false
+[CONF-DIAG] MicReservation=false
+[CONF-DIAG] LastError=
+[CONF-DIAG] Test=E-BEFORE
+[CONF-DIAG] PipelineState=1
+[CONF-DIAG] VoiceState=4
+[CONF-DIAG] VoiceReady=true
+[CONF-DIAG] VoiceBusy=false
+[CONF-DIAG] IsListening=false
+[CONF-DIAG] IsTranscribing=false
+[CONF-DIAG] IsSpeaking=false
+[CONF-DIAG] ActiveTurnId=0
+[CONF-DIAG] PendingToolId=
+[CONF-DIAG] HasPendingConfirmation=false
+[CONF-DIAG] MicReservation=false
+[CONF-DIAG] LastError=
+[CONF-DIAG] Test=E-AFTER
+[CONF-DIAG] PipelineState=1
+[CONF-DIAG] VoiceState=4
+[CONF-DIAG] VoiceReady=true
+[CONF-DIAG] VoiceBusy=false
+[CONF-DIAG] IsListening=false
+[CONF-DIAG] IsTranscribing=false
+[CONF-DIAG] IsSpeaking=false
+[CONF-DIAG] ActiveTurnId=1
+[CONF-DIAG] PendingToolId=
+[CONF-DIAG] HasPendingConfirmation=false
+[CONF-DIAG] MicReservation=false
+[CONF-DIAG] LastError=
 
 --- TEST P1-LATE : Tests A -> E reponses IA tardives OpenAI Realtime ---
 
 [TEST SUITE 147] SUCCES INTEGRAL DES TESTS CORRECTIFS (v0.6.5.1 Final)
 
 ===========================================================
-  BILAN FINAL DES TESTS : 3157 REUSSIS, 5 ECHECS
+  [TEST SUITE 148] VoiceKit v0.6.5.2 — Transcription Assembly
+===========================================================
+
+--- TEST 1 (v0.6.5.2) : Reproduction exacte OpenAI Realtime ---
+
+--- TEST 2 (v0.6.5.2) : Correction finale divergente ---
+
+--- TEST 3 (v0.6.5.2) : Nombres et tokens courts consecutifs ---
+
+--- TEST 4 (v0.6.5.2) : Espaces multiples et doublons ---
+
+--- TEST 5 (v0.6.5.2) : Troncature UTF-8 sur maxLength ---
+
+--- TEST 6 (v0.6.5.2) : Non-regression Gemini Live ---
+
+[TEST SUITE 148] SUCCES INTEGRAL DES TESTS (v0.6.5.2)
+
+===========================================================
+  BILAN FINAL DES TESTS : 3387 REUSSIS, 0 ECHECS
 ===========================================================

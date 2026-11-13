@@ -254,7 +254,13 @@ bool IntegratedVoicePipeline::startListening() {
     if (_voice != nullptr) {
         if (!_voice->startListening()) {
             // Une confirmation annulée reste annulée : ne jamais restaurer de jeton invalidé
-            setState(PipelineState::READY);
+            if (_voice->getState() == VoiceState::ERROR_STATE) {
+                if (_state != PipelineState::ERROR) {
+                    setState(PipelineState::ERROR);
+                }
+            } else {
+                setState(PipelineState::READY);
+            }
             return false;
         }
         _activeTurnId = _voice->getActiveCaptureTurnId();

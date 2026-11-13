@@ -73,6 +73,7 @@ public:
     // Gestionnaires d'événements internes
     void handleUserTranscription(const String& text, bool isFinal);
     void handleAssistantTranscription(const String& text);
+    void handleAssistantTranscription(const String& text, bool isFinal);
     void handleTurnFinished(uint64_t turnId);
 
 private:

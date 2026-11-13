@@ -119,6 +119,7 @@ public:
     using VoidCallback = std::function<void()>;
     using ErrorCallback = std::function<void(const String& err)>;
     using TranscriptionCallback = std::function<void(const String& text)>;
+    using OutputTranscriptionWithFinalCallback = std::function<void(const String& text, bool isFinal)>;
     using NetworkCheckCallback = std::function<bool()>;
 
     void setOnStateChanged(StateCallback cb) { _onStateChanged = std::move(cb); }
@@ -128,6 +129,7 @@ public:
     void setOnPlaybackFinishedWithId(std::function<void(uint32_t)> cb) { _onPlaybackFinishedWithId = std::move(cb); }
     void setOnError(ErrorCallback cb) { _onError = std::move(cb); }
     void setOnOutputTranscription(TranscriptionCallback cb) { _onOutputTranscription = std::move(cb); }
+    void setOnOutputTranscriptionWithFinal(OutputTranscriptionWithFinalCallback cb) { _onOutputTranscriptionWithFinal = std::move(cb); }
     void setNetworkCheck(NetworkCheckCallback cb) { _networkCheck = std::move(cb); }
     bool isNetworkReady() const { return _networkCheck ? _networkCheck() : true; }
 
@@ -138,6 +140,7 @@ public:
 
 private:
     void resetTurnSessionMetrics();
+    void handleIncomingAssistantTranscription(const String &text, bool isFinal);
 
     IVoiceProvider* _provider = nullptr;
     GeminiLiveClient* _legacyClient = nullptr;
@@ -195,6 +198,7 @@ private:
     std::function<void(uint32_t)> _onPlaybackFinishedWithId;
     ErrorCallback _onError;
     TranscriptionCallback _onOutputTranscription;
+    OutputTranscriptionWithFinalCallback _onOutputTranscriptionWithFinal;
     NetworkCheckCallback _networkCheck;
 
     uint32_t _reconnectCount = 0;
