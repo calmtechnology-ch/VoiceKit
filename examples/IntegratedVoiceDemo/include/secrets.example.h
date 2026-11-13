@@ -5,17 +5,26 @@
 // Copiez ce fichier sous le nom "secrets.h" et renseignez vos identifiants réels.
 // =============================================================================
 
+// =============================================================================
+// 1. CONFIGURATION RÉSEAU WI-FI
+// =============================================================================
 #define WIFI_SSID     "VOTRE_SSID_WIFI"
 #define WIFI_PASSWORD "VOTRE_MOT_DE_PASSE_WIFI"
 
-// Clé API Google Gemini Live (utilisée par défaut si présente)
-#define GEMINI_API_KEY "VOTRE_CLE_API_GEMINI"
+// =============================================================================
+// 2. SÉLECTION FACILE DU FOURNISSEUR IA VOCAL
+//    (Décommentez une seule ligne pour choisir le moteur actif)
+// =============================================================================
+#define USE_GEMINI      // <-- Google Gemini Live (Actif par défaut)
+// #define USE_OPENAI   // <-- OpenAI Realtime (Décommenter pour basculer sur OpenAI)
 
-// Clé API OpenAI Realtime (utilisée si sélectionnée ou si clé Gemini absente)
+// =============================================================================
+// 3. CLÉS D'AUTHENTIFICATION API
+// =============================================================================
+
+// Clé API Google Gemini Live (débutant par AQ...)
+#define GEMINI_KEY    "VOTRE_CLE_API_GEMINI"
+#define GEMINI_API_KEY GEMINI_KEY
+
+// Clé API OpenAI Realtime (débutant par sk-proj-...)
 #define OPENAI_API_KEY "VOTRE_CLE_API_OPENAI"
-
-// Choix optionnel du fournisseur vocal IA (décommenter pour forcer) :
-// 0 = Google Gemini Live
-// 1 = OpenAI Realtime
-// #define VOICE_PROVIDER 0
-

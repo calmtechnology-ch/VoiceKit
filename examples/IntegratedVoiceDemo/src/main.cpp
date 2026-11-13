@@ -465,16 +465,24 @@ void setup() {
 
     // 1. Détermination du Fournisseur Vocal IA et Configuration
     VoiceKitConfig vcfg;
-#if defined(VOICE_PROVIDER) && (VOICE_PROVIDER == 1)
+#if defined(USE_GEMINI) && defined(USE_OPENAI)
+    #error "Conflit dans secrets.h : Décommentez soit USE_GEMINI, soit USE_OPENAI, mais pas les deux !"
+#elif defined(USE_OPENAI)
+    vcfg.provider = VoiceProviderType::OPENAI;
+    vcfg.apiKey = OPENAI_API_KEY;
+#elif defined(USE_GEMINI)
+    vcfg.provider = VoiceProviderType::GEMINI;
+    vcfg.apiKey = GEMINI_API_KEY;
+#elif defined(VOICE_PROVIDER) && (VOICE_PROVIDER == 1)
     vcfg.provider = VoiceProviderType::OPENAI;
     vcfg.apiKey = OPENAI_API_KEY;
 #elif defined(VOICE_PROVIDER) && (VOICE_PROVIDER == 0)
     vcfg.provider = VoiceProviderType::GEMINI;
     vcfg.apiKey = GEMINI_API_KEY;
 #else
-    // Sélection automatique basée sur la présence effective des clés API
-    bool hasGeminiKey = (strlen(GEMINI_API_KEY) > 0 && strcmp(GEMINI_API_KEY, "VOTRE_CLE_ICI") != 0);
-    bool hasOpenAiKey = (strlen(OPENAI_API_KEY) > 0 && strcmp(OPENAI_API_KEY, "VOTRE_CLE_ICI") != 0);
+    // Sélection automatique basée sur la présence effective des clés API si aucune macro explicite
+    bool hasGeminiKey = (strlen(GEMINI_API_KEY) > 0 && strcmp(GEMINI_API_KEY, "VOTRE_CLE_ICI") != 0 && strcmp(GEMINI_API_KEY, "VOTRE_CLE_API_GEMINI") != 0);
+    bool hasOpenAiKey = (strlen(OPENAI_API_KEY) > 0 && strcmp(OPENAI_API_KEY, "VOTRE_CLE_ICI") != 0 && strcmp(OPENAI_API_KEY, "VOTRE_CLE_API_OPENAI") != 0);
 
     if (hasGeminiKey) {
         vcfg.provider = VoiceProviderType::GEMINI;
