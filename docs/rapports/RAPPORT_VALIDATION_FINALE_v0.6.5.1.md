@@ -258,3 +258,4 @@ flowchart TD
 > [!IMPORTANT]
 > **Verdict : VALIDÉ POUR TEST SUR MATÉRIEL RÉEL (VALIDÉ SOUS RÉSERVES DE CONFIRMATION PHYSIQUE)**.
 > Le code de VoiceKit v0.6.5.1 est parfaitement stabilisé, robuste face aux événements asynchrones et prêt pour le déploiement physique sur M5Stack CoreS3.
+
