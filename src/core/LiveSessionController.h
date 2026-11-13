@@ -61,6 +61,7 @@ public:
     bool pollDeactivate();
     bool isDeactivating() const { return _deactivating; }
     void abortTurnLocally();
+    void markPendingSessionUpdate();
 
     // Boucle de traitement principale
     void tick();

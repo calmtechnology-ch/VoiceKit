@@ -64,6 +64,7 @@ public:
     using SpeechFinishedCallback = VoxCoreVoice::SpeechFinishedCallback;
     using TranscriptionWithTurnCallback = VoxCoreVoice::TranscriptionWithTurnCallback;
     using ListeningTurnCallback = VoxCoreVoice::ListeningTurnCallback;
+    using ProfileAppliedCallback = VoxCoreVoice::ProfileAppliedCallback;
 
     VoiceKit();
     ~VoiceKit();
@@ -489,7 +490,7 @@ public:
     const WakeWordConversationController& getWakeWordConversationController() const { return _voice.getWakeWordConversationController(); }
 
     // =========================================================================
-    // Configuration Vocale & Profils (v0.4.1)
+    // Configuration Vocale & Profils Universels (v0.4.1 / v0.6.6)
     // =========================================================================
 
     /**
@@ -500,6 +501,33 @@ public:
                          VoiceStyle style = VoiceStyle::NATURAL,
                          VoiceTone tone = VoiceTone::NEUTRAL,
                          const String& accent = "");
+
+    bool applyVoiceProfile(const VoiceProfile& profile, bool connectIfDisconnected = false);
+    bool setVoiceProfile(const VoiceProfile& profile) { return applyVoiceProfile(profile, false); }
+    VoiceProfile getVoiceProfile() const { return _voice.getVoiceProfile(); }
+
+    bool setProvider(VoiceProviderType provider, const String& voiceId = "");
+    VoiceProviderType getProviderType() const { return _voice.getProviderType(); }
+
+    void setPreferredGender(VoiceGender gender) { _voice.setPreferredGender(gender); }
+    VoiceGender getPreferredGender() const { return _voice.getPreferredGender(); }
+
+    void setProviderApiKey(VoiceProviderType provider, const String& apiKey) { _voice.setProviderApiKey(provider, apiKey); }
+    String getProviderApiKey(VoiceProviderType provider) const { return _voice.getProviderApiKey(provider); }
+    bool hasProviderApiKey(VoiceProviderType provider) const { return _voice.hasProviderApiKey(provider); }
+
+    VoiceProfileManager& getProfileManager() { return _voice.getProfileManager(); }
+    const VoiceProfileManager& getProfileManager() const { return _voice.getProfileManager(); }
+
+    bool saveVoiceProfile(const char* nvsNamespace = nullptr) { return _voice.saveVoiceProfile(nvsNamespace); }
+    bool loadVoiceProfile(bool applyImmediately = true, const char* nvsNamespace = nullptr);
+    bool resetVoiceProfile(bool applyDefault = true, const char* nvsNamespace = nullptr);
+    bool hasSavedVoiceProfile(const char* nvsNamespace = nullptr) const { return _voice.hasSavedVoiceProfile(nvsNamespace); }
+    bool saveFavoriteProfile(uint8_t slot, const char* nvsNamespace = nullptr) { return _voice.saveFavoriteProfile(slot, nvsNamespace); }
+    bool loadFavoriteProfile(uint8_t slot, bool applyImmediately = true, const char* nvsNamespace = nullptr);
+
+    bool isProfileChangePending() const { return _voice.isProfileChangePending(); }
+    bool isConnecting() const { return _voice.isConnecting(); }
 
     bool setVoice(const String& voice);
     bool setLanguage(const String& language);
@@ -569,6 +597,8 @@ public:
     void onListeningFinished(VoidCallback cb) { _onListeningFinished = std::move(cb); }
     void onStateChanged(StateCallback cb) { _onStateChanged = std::move(cb); }
     void onConversationTurnMetrics(TurnFinishedCallback cb) { _onConversationTurnMetrics = std::move(cb); }
+    void onProfileApplied(ProfileAppliedCallback cb) { _onProfileApplied = std::move(cb); }
+    void onProfileError(ErrorCallback cb) { _onProfileError = std::move(cb); }
 
     /**
      * @brief Identifiants de corrélation STT / TTS exposés par la façade (v0.6.4.3.2)
@@ -622,5 +652,7 @@ private:
     VoidCallback _onListeningFinished;
     StateCallback _onStateChanged;
     TurnFinishedCallback _onConversationTurnMetrics;
+    ProfileAppliedCallback _onProfileApplied;
+    ErrorCallback _onProfileError;
     AudioChunkCallback _userAudioChunk;
 };

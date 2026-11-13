@@ -1,14 +1,41 @@
-# Matrice de Tests Matériels M5Stack CoreS3 — VoiceKit v0.6.5.2
+# Matrice de Tests Matériels M5Stack CoreS3 — VoiceKit v0.6.6
 
 ## Protocole de Test Matériel sur Carte Réelle M5Stack CoreS3
 
 - **Matériel cible** : M5Stack CoreS3 (ESP32-S3FN8, 8 Mo PSRAM, 16 Mo Flash).
 - **Date de préparation** : Novembre 2026.
-- **Règle stricte** : Conformément aux exigences du cahier des charges VoiceKit v0.6.5.2, tout test qui n'a pas été effectivement exécuté sur un banc matériel physique actif pendant cette session doit rester annoté **`NOT TESTED`**.
+- **Règle stricte** : Conformément aux exigences du cahier des charges VoiceKit v0.6.6, tout test qui n'a pas été effectivement exécuté sur un banc matériel physique CoreS3 actif pendant cette session reste explicitement annoté **`NOT TESTED` (À exécuter sur CoreS3)**.
 
 ---
 
-## Matrice des 14 Tests Matériels Fondamentaux
+## Matrice v0.6.6 — 20 Scénarios Obligatoires Universal Voice Profiles
+
+| # | Scénario | Validation Hôte (Suite 150) | Procédure Matérielle sur CoreS3 (`VoiceSettingsDemo`) | Statut Matériel CoreS3 |
+|:---:|---|:---:|---|:---:|
+| **01** | Gemini, français (`fr-FR`), voix `Aoede` | **PASS** | Écran 1 : Gemini + `fr-FR`, Écran 2 : `Aoede` -> *Tester*. Vérifier clarté et accents français. | **NOT TESTED** |
+| **02** | Gemini, allemand (`de-DE`), voix `Charon` | **PASS** | Écran 1 : `de-DE`, Écran 2 : `Charon` -> *Tester*. Vérifier prononciation allemande native. | **NOT TESTED** |
+| **03** | Gemini, anglais (`en-US`), voix `Puck` | **PASS** | Écran 1 : `en-US`, Écran 2 : `Puck` -> *Tester*. Vérifier prononciation anglaise fluide. | **NOT TESTED** |
+| **04** | OpenAI, français (`fr-FR`), voix `alloy` | **PASS** | Écran 1 : OpenAI + `fr-FR`, Écran 2 : `alloy` -> *Tester*. Vérifier bascule TLS et rendu français. | **NOT TESTED** |
+| **05** | OpenAI, anglais (`en-US`), voix `marin` | **PASS** | Écran 1 : OpenAI + `en-US`, Écran 2 : `marin` -> *Tester*. Vérifier timbre *marin*. | **NOT TESTED** |
+| **06** | OpenAI, italien (`it-IT`), voix `cedar` | **PASS** | Après l'essai précédent, choisir `it-IT` + `cedar` -> *Tester*. Vérifier reconnexion propre et italien. | **NOT TESTED** |
+| **07** | Modification du style vocal | **PASS** | Écran 3 : passer de *Naturel* à *Narratif* puis *Appliquer* et *Écouter*. | **NOT TESTED** |
+| **08** | Modification du ton | **PASS** | Écran 3 : passer de *Neutre* à *Enjoué* ou *Sérieux* puis *Appliquer* et *Écouter*. | **NOT TESTED** |
+| **09** | Modification de l'accent | **PASS** | Écran 3 : choisir *Suisse romand* ou *Méridional* puis *Appliquer* et *Écouter*. | **NOT TESTED** |
+| **10** | Sélection d'une voix inexistante | **PASS** | Appel C++ `voice.setVoice("Inconnue")` : vérifier rejet immédiat et message d'erreur. | **NOT TESTED** |
+| **11** | Sélection d'une voix Gemini pour OpenAI | **PASS** | Appel C++ `applyVoiceProfile(OPENAI, "Aoede")` : vérifier rejet strict sans coupure de session. | **NOT TESTED** |
+| **12** | Changement pendant une réponse audio | **PASS** | Appuyer sur *Appliquer* pendant une lecture audio : vérifier refus propre sans coupure brutale. | **NOT TESTED** |
+| **13** | Changement de profil au repos | **PASS** | Au repos (`PRET`), changer de profil : vérifier attente confirmation serveur avant *« Profil appliqué »*. | **NOT TESTED** |
+| **14** | Déconnexion réseau pendant le changement | **PASS** | Couper le point d'accès Wi-Fi juste au moment d'appuyer sur *Appliquer* : vérifier restauration de l'ancien profil. | **NOT TESTED** |
+| **15** | Reconnexion après une erreur | **PASS** | Rétablir le point d'accès Wi-Fi puis appuyer sur *Appliquer* : vérifier reconnexion nominale. | **NOT TESTED** |
+| **16** | Sauvegarde NVS | **PASS** | Écran 3 : appuyer sur *Enregistrer dans la mémoire NVS*. Vérifier message de confirmation. | **NOT TESTED** |
+| **17** | Restauration après redémarrage | **PASS** | Redémarrer électriquement le CoreS3 : vérifier que le profil sauvegardé est restauré dès `setup()`. | **NOT TESTED** |
+| **18** | Absence de clé API | **PASS** | Compiler avec `OPENAI_API_KEY ""` et sélectionner OpenAI -> *Appliquer* : vérifier erreur claire sans crash. | **NOT TESTED** |
+| **19** | Conservation des callbacks | **PASS** | Alterner 5 fois Gemini <-> OpenAI et vérifier le maintien des retours d'état UI et fin de parole. | **NOT TESTED** |
+| **20** | Absence de régression du PTT | **PASS** | Tester `MinimalSTT` et `IntegratedVoiceDemo` sur CoreS3 : vérifier cycle PTT, micro unique et outils locaux. | **NOT TESTED** |
+
+---
+
+## Matrice des 14 Tests Matériels Fondamentaux (Socle v0.6.5.2)
 
 | ID | Domaine / Fonction | Procédure de Test | Résultat Attendu | Résultat Observé | Statut |
 |:---:|---|---|---|---|:---:|

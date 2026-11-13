@@ -100,6 +100,18 @@ bool VoiceKit::begin(const VoiceKitConfig& config) {
         }
     });
 
+    _voice.onProfileApplied([this](const VoiceProfile& p) {
+        if (_onProfileApplied) {
+            _onProfileApplied(p);
+        }
+    });
+
+    _voice.onProfileError([this](const String& err) {
+        if (_onProfileError) {
+            _onProfileError(err);
+        }
+    });
+
     // Branchement audio non bloquant dans la tâche FreeRTOS audio
     _voice.onAudioChunk([this](const int16_t* samples, size_t count, uint32_t rms) {
         if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING) {
@@ -406,6 +418,41 @@ bool VoiceKit::setVoiceProfile(const String& voice, const String& language,
         return false;
     }
     return _voice.setVoiceProfile(voice, language, style, tone, accent);
+}
+
+bool VoiceKit::applyVoiceProfile(const VoiceProfile& profile, bool connectIfDisconnected) {
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+        return false;
+    }
+    return _voice.applyVoiceProfile(profile, connectIfDisconnected);
+}
+
+bool VoiceKit::setProvider(VoiceProviderType provider, const String& voiceId) {
+    if (_mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+        return false;
+    }
+    return _voice.setProvider(provider, voiceId);
+}
+
+bool VoiceKit::loadVoiceProfile(bool applyImmediately, const char* nvsNamespace) {
+    if (applyImmediately && _mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+        return false;
+    }
+    return _voice.loadVoiceProfile(applyImmediately, nvsNamespace);
+}
+
+bool VoiceKit::resetVoiceProfile(bool applyDefault, const char* nvsNamespace) {
+    if (applyDefault && _mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+        return false;
+    }
+    return _voice.resetVoiceProfile(applyDefault, nvsNamespace);
+}
+
+bool VoiceKit::loadFavoriteProfile(uint8_t slot, bool applyImmediately, const char* nvsNamespace) {
+    if (applyImmediately && _mode.load(std::memory_order_relaxed) == VoiceKitMode::CONTINUOUS_LISTENING && _continuousController.isBusy()) {
+        return false;
+    }
+    return _voice.loadFavoriteProfile(slot, applyImmediately, nvsNamespace);
 }
 
 bool VoiceKit::setVoice(const String& voice) {

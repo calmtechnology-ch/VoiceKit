@@ -1,13 +1,36 @@
-# VoiceKit v0.6.5.2 — Examples Cleanup & Validation
+# VoiceKit v0.6.6 — Universal Voice Profiles
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
 [![ESP32-S3](https://img.shields.io/badge/Target-M5Stack%20CoreS3%20(ESP32--S3)-blue.svg)](https://docs.m5stack.com/en/core/CoreS3)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **pipeline vocal intégré autonome (`IntegratedVoicePipeline`)**, de **conversation vocale bidirectionnelle native (Mode B)**, de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** et de **registre local d'outils (Local Tool Registry)** pour **M5Stack CoreS3** (ESP32-S3).
+Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **profils vocaux universels multi-fournisseurs (`VoiceProfileManager`)**, de **pipeline vocal intégré autonome (`IntegratedVoicePipeline`)**, de **conversation vocale bidirectionnelle native (Mode B)**, de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** et de **registre local d'outils (Local Tool Registry)** pour **M5Stack CoreS3** (ESP32-S3).
 
 Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)** supportant à la fois **Google Gemini Live** (moteur par défaut, 100% rétrocompatible) et **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`), construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
+
+---
+
+### Nouveautés majeures de la v0.6.6 (Universal Voice Profiles)
+
+La version **v0.6.6** introduit la gestion unifiée, dynamique et persistante des **Profils Vocaux Universels** pour Gemini Live et OpenAI Realtime, utilisable aussi bien depuis du code C++ applicatif que depuis une interface tactile **LVGL 9** :
+
+1. **Module Centralisé `VoiceProfileManager` (`src/VoiceProfileManager.h`)** :
+   - Structure `VoiceProfile` regroupant fournisseur (`GEMINI` / `OPENAI`), langue BCP-47, identifiant de voix, genre vocal perçu indicatif (`VoiceGender` : `ANY`, `FEMININE`, `MASCULINE`, `NEUTRAL`), style (`VoiceStyle`), tonalité (`VoiceTone`) et accent.
+   - Catalogues intégrés et extensibles : **10 voix Gemini Live** (`Aoede`, `Kore`, `Puck`, `Charon`, `Fenrir`, `Leda`, `Zephyr`, `Orus`, `Autonoe`, `Umbriel`) et **10 voix OpenAI Realtime** (`alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`).
+   - Support multilingue cohérent (`fr-FR`, `fr-CH`, `en-US`, `en-GB`, `de-DE`, `it-IT`, `es-ES` + tout code BCP-47 valide) sans imposer le français par défaut lorsqu'une autre langue est choisie et sans traduire automatiquement les textes TTS.
+
+2. **Changement Dynamique Sécurisé & Bascule Inter-Fournisseurs (`GEMINI <-> OPENAI`)** :
+   - Refus explicite lorsque le moteur est occupé ; zéro interruption brutale ni double session WebSocket concurrente.
+   - Respect strict du verrouillage de voix OpenAI Realtime (mise à jour `session.update` en place tant que permise, reconnexion propre automatique dès qu'un changement de voix intervient après émission audio).
+   - Confirmation effective du serveur (`setupComplete` / `session.updated`) exigée avant `onProfileApplied()`, et **restauration atomique (rollback)** de l'ancien profil en cas d'erreur ou de coupure réseau (`onProfileError()`).
+   - Préservation intégrale des callbacks, du Push-to-Talk, des outils locaux (`ToolRegistry`) et du Wake Word.
+
+3. **Sauvegarde et Restauration NVS (`Preferences` ESP32-S3)** :
+   - Sauvegarde du profil actif et jusqu'à 4 favoris avec version de schéma (`v1`) et somme de contrôle **CRC32**, repli automatique vers le profil par défaut en cas de données corrompues, et **exclusion stricte des clés API**.
+
+4. **Exemple Tactile `VoiceSettingsDemo` v0.6.6 (LVGL 9 — 320 × 240)** :
+   - 4 écrans tactiles fluides (*Fournisseur & langue*, *Choix de la voix + essai audio réel*, *Style / Tonalité / Accent + Enregistrer NVS*, *Validation / Appliquer / Réinitialiser*) avec polices UTF-8 françaises intégrées.
 
 ---
 

@@ -37,6 +37,16 @@ inline const char* voiceProviderTypeToString(VoiceProviderType p) {
         default:                        return "GEMINI";
     }
 }
+inline VoiceProviderType stringToVoiceProviderType(const String& str) {
+    String s = str;
+    s.toLowerCase();
+    s.trim();
+    if (s == "openai" || s == "openai_realtime" || s == "realtime") {
+        return VoiceProviderType::OPENAI;
+    }
+    return VoiceProviderType::GEMINI;
+}
+
 /**
  * @brief Etats operationnels de VoxCoreVoice.
  */
@@ -95,6 +105,27 @@ enum class VoiceTone : uint8_t {
     CHEERFUL,          ///< Tonalité enjouée, dynamique et souriante
     SERIOUS            ///< Tonalité sérieuse, formelle et rigoureuse
 };
+
+inline const char* voiceStyleToFrenchLabel(VoiceStyle style) {
+    switch (style) {
+        case VoiceStyle::PROFESSIONAL: return "Professionnel";
+        case VoiceStyle::EXPRESSIVE:   return "Expressif";
+        case VoiceStyle::NARRATIVE:    return "Narratif";
+        case VoiceStyle::NATURAL:
+        default:                       return "Naturel";
+    }
+}
+
+inline const char* voiceToneToFrenchLabel(VoiceTone tone) {
+    switch (tone) {
+        case VoiceTone::CALM:     return "Calme";
+        case VoiceTone::WARM:     return "Chaleureux";
+        case VoiceTone::CHEERFUL: return "Enjoué";
+        case VoiceTone::SERIOUS:  return "Sérieux";
+        case VoiceTone::NEUTRAL:
+        default:                  return "Neutre";
+    }
+}
 
 inline const char* voiceStyleToString(VoiceStyle style) {
     switch (style) {
@@ -386,24 +417,33 @@ struct ConnectionMetrics {
 };
 
 /**
- * @brief Configuration d'initialisation de VoxCore VoiceKit v0.6.0.
+ * @brief Configuration d'initialisation de VoxCore VoiceKit v0.6.6.
  */
 struct VoiceKitConfig {
-    // Fournisseur d'IA vocale (v0.6.0) : GEMINI (par défaut) ou OPENAI
+    // Fournisseur d'IA vocale (v0.6.0 / v0.6.6) : GEMINI (par défaut) ou OPENAI
     VoiceProviderType provider = VoiceProviderType::GEMINI;
 
-    // Cle d'API (Google Gemini ou OpenAI selon le fournisseur actif)
+    // Cle d'API active (Google Gemini ou OpenAI selon le fournisseur actif)
     String apiKey = "";
 
-    // Modele et voix Gemini Live centralises
+    // Cles d'API dediees optionnelles permettant le changement dynamique GEMINI <-> OPENAI (v0.6.6)
+    String geminiApiKey = "";
+    String openAiApiKey = "";
+
+    // Modele et voix Gemini Live / OpenAI centralises
     String model = VOICEKIT_DEFAULT_MODEL;
     String voice = VOICEKIT_DEFAULT_VOICE;
 
-    // Configuration vocale et linguistique (v0.4.1)
+    // Configuration vocale et linguistique (v0.4.1 / v0.6.6)
     String language = "fr-FR";                 ///< Code de langue BCP-47 (défaut : fr-FR)
+    String inputTranscriptionLanguage = "";    ///< Code langue optionnel pour transcription STT (vide = dérivé de language, "auto" = autodétection)
     VoiceStyleWrapper style = VoiceStyle::NATURAL;   ///< Style d'élocution (natural, professional, expressive, narrative)
     VoiceToneWrapper tone = VoiceTone::NEUTRAL;      ///< Tonalité vocale (neutral, calm, warm, cheerful, serious)
     String accent = "";                        ///< Orientation de prononciation / accent optionnel
+
+    // Restauration automatique du profil vocal depuis la NVS au demarrage si souhaité (v0.6.6)
+    bool restoreSavedProfileOnBoot = false;
+    String profileNvsNamespace = "vk_vprof";
 
     // Instructions systeme strictes pour TTS mot a mot fidele
     String systemInstruction = VOICEKIT_DEFAULT_TTS_INSTRUCTION;
@@ -478,7 +518,162 @@ struct VoiceKitConfig {
     uint32_t autoDisconnectIdleMs = 0;
 
     /**
-     * @brief Formate les directives vocales (langue, style, ton, accent) en consignes textuelles.
+     * @brief Retourne la cle API effective pour un fournisseur donne (v0.6.6).
+     *        Respecte geminiApiKey / openAiApiKey si renseignees, sinon apiKey si le fournisseur correspond.
+     */
+    String getApiKeyForProvider(VoiceProviderType targetProvider) const {
+        if (targetProvider == VoiceProviderType::OPENAI) {
+            String k = openAiApiKey;
+            k.trim();
+            if (!k.isEmpty()) return k;
+            if (provider == VoiceProviderType::OPENAI) {
+                String defK = apiKey;
+                defK.trim();
+                return defK;
+            }
+            return "";
+        } else {
+            String k = geminiApiKey;
+            k.trim();
+            if (!k.isEmpty()) return k;
+            if (provider == VoiceProviderType::GEMINI) {
+                String defK = apiKey;
+                defK.trim();
+                return defK;
+            }
+            return "";
+        }
+    }
+
+    static bool isFrenchLanguageTag(const String& bcp47) {
+        String l = bcp47;
+        l.trim();
+        l.toLowerCase();
+        return l == "fr" || l.startsWith("fr-") || l.startsWith("fr_");
+    }
+
+    static String extractPrimaryIso2(const String& bcp47) {
+        String l = bcp47;
+        l.trim();
+        l.toLowerCase();
+        if (l.length() == 2 && l[0] >= 'a' && l[0] <= 'z' && l[1] >= 'a' && l[1] <= 'z') {
+            return l;
+        }
+        if (l.length() >= 3 && (l[2] == '-' || l[2] == '_') &&
+            l[0] >= 'a' && l[0] <= 'z' && l[1] >= 'a' && l[1] <= 'z') {
+            return l.substring(0, 2);
+        }
+        return "";
+    }
+
+    /**
+     * @brief Resout l'instruction systeme unitaire (TTS / STT / Integre) en preservant strictement
+     *        toute regle metier personnalisee, tout en adaptant les instructions par defaut a la langue choisie (v0.6.6).
+     */
+    String resolveSystemInstruction() const {
+        if (isFrenchLanguageTag(language)) {
+            return systemInstruction;
+        }
+        String iso = extractPrimaryIso2(language);
+        if (systemInstruction == VOICEKIT_DEFAULT_TTS_INSTRUCTION) {
+            if (iso == "en") {
+                return "You are a pure verbatim TTS speech synthesis engine. Your sole role is to speak aloud the exact text provided word for word, without translating it, and without any commentary, introduction, or conclusion.";
+            } else if (iso == "de") {
+                return "Du bist eine reine wortgetreue TTS-Sprachsynthese. Deine einzige Aufgabe ist es, den bereitgestellten Text exakt Wort für Wort vorzulesen, ohne ihn zu übersetzen und ohne Einleitung oder Kommentar.";
+            } else if (iso == "it") {
+                return "Sei un motore puro di sintesi vocale TTS parola per parola. Il tuo unico ruolo è pronunciare esattamente il testo fornito senza tradurlo, senza introduzioni né commenti.";
+            } else if (iso == "es") {
+                return "Eres un motor puro de síntesis de voz TTS palabra por palabra. Tu única función es pronunciar exactamente el texto proporcionado sin traducirlo, sin introducción ni comentarios.";
+            }
+            return String("You are a pure verbatim TTS engine (target voice language: ") + language +
+                   "). Speak aloud the exact text provided word for word without translating it and without any commentary.";
+        }
+        if (systemInstruction == VOICEKIT_DEFAULT_STT_INSTRUCTION) {
+            if (iso == "en") {
+                return "You are a high-precision real-time speech transcriber. Transcribe faithfully and word for word everything spoken by the user without commentary, without answering dictated questions, and remain strictly silent.";
+            } else if (iso == "de") {
+                return "Du bist ein hochpräziser Echtzeit-Sprachtranskriptor. Transkribiere wortgetreu alles Gesprochene ohne Kommentar, beantworte keine Fragen und bleibe akustisch vollkommen stumm.";
+            } else if (iso == "it") {
+                return "Sei un trascrittore vocale ad alta precisione in tempo reale. Trascrivi fedelmente parola per parola senza commenti, senza rispondere alle domande e restando rigorosamente silenzioso.";
+            } else if (iso == "es") {
+                return "Eres un transcriptor de voz en tiempo real de alta precisión. Transcribe fielmente palabra por palabra sin comentarios, sin responder preguntas y permaneciendo en estricto silencio.";
+            }
+            return "You are a high-precision real-time speech transcriber. Transcribe faithfully word for word without commentary and remain silent.";
+        }
+        if (systemInstruction == VOICEKIT_DEFAULT_INTEGRATED_INSTRUCTION) {
+            if (iso == "en") {
+                return "You are a versatile and concise voice assistant in English. When asked to speak a text verbatim, pronounce only that exact text without translating or adding commentary. Otherwise, answer directly and briefly in natural English in one or two sentences maximum.";
+            } else if (iso == "de") {
+                return "Du bist ein vielseitiger und präziser Sprachassistent auf Deutsch. Wenn ein Text wortgetreu vorgelesen werden soll, sprich exakt diesen Text ohne Übersetzung oder Kommentar. Beantworte Fragen ansonsten direkt und kurz auf Deutsch in maximal ein bis zwei Sätzen.";
+            } else if (iso == "it") {
+                return "Sei un assistente vocale versatile e conciso in italiano. Se viene chiesto di pronunciare un testo alla lettera, pronuncia solo quel testo senza tradurlo né commentarlo. Altrimenti rispondi brevemente e direttamente in italiano in una o due frasi al massimo.";
+            } else if (iso == "es") {
+                return "Eres un asistente de voz versátil y conciso en español. Si se pide pronunciar un texto literalmente, pronuncia exactamente ese texto sin traducirlo ni añadir comentarios. De lo contrario, responde breve y directamente en español en una o dos frases como máximo.";
+            }
+            return String("You are a versatile and concise voice assistant. When asked to repeat verbatim, speak only the exact text without translating it. Otherwise, reply briefly in ") + language + " in one or two sentences.";
+        }
+        // Toute instruction métier personnalisée fournie par l'application reste strictement intacte
+        return systemInstruction;
+    }
+
+    /**
+     * @brief Resout l'instruction conversationnelle en preservant toute instruction personnalisee
+     *        et en adaptant l'instruction par defaut a la langue choisie (v0.6.6).
+     */
+    String resolveConversationInstruction() const {
+        if (isFrenchLanguageTag(language)) {
+            return conversationInstruction;
+        }
+        if (conversationInstruction == VOICEKIT_DEFAULT_CONVERSATION_INSTRUCTION) {
+            String iso = extractPrimaryIso2(language);
+            if (iso == "en") {
+                return String("You are a helpful, intelligent, and concise voice assistant. Always reply naturally and directly in English (") + language + ") in one or two sentences maximum.";
+            } else if (iso == "de") {
+                return String("Du bist ein freundlicher, intelligenter und präziser Sprachassistent. Antworte immer natürlich und direkt auf Deutsch (") + language + ") in maximal ein bis zwei Sätzen.";
+            } else if (iso == "it") {
+                return String("Sei un assistente vocale cortese, intelligente e conciso. Rispondi sempre in modo naturale e diretto in italiano (") + language + ") in una o due frasi al massimo.";
+            } else if (iso == "es") {
+                return String("Eres un asistente de voz amable, inteligente y conciso. Responde siempre de forma natural y directa en español (") + language + ") en una o dos frases como máximo.";
+            }
+            return String("You are a helpful and concise voice assistant. Always reply naturally and directly in ") + language + " in one or two sentences maximum.";
+        }
+        return conversationInstruction;
+    }
+
+    /**
+     * @brief Resout le prefixe TTS mot a mot sans traduction automatique (v0.6.6).
+     */
+    String resolvePromptPrefix() const {
+        static const char* kDefaultFrPrefix = "Prononce exactement et uniquement ce texte : ";
+        if (isFrenchLanguageTag(language) || promptPrefix != kDefaultFrPrefix) {
+            return promptPrefix;
+        }
+        String iso = extractPrimaryIso2(language);
+        if (iso == "en") return "Speak aloud strictly and verbatim this exact text without translating it: ";
+        if (iso == "de") return "Sprich ausschließlich und exakt Wort für Wort diesen Text ohne Übersetzung aus: ";
+        if (iso == "it") return "Pronuncia esclusivamente e parola per parola questo testo esatto senza tradurlo: ";
+        if (iso == "es") return "Pronuncia única y exactamente palabra por palabra este texto sin traducirlo: ";
+        return "Speak aloud strictly verbatim without translating: ";
+    }
+
+    /**
+     * @brief Resout le prefixe de requete IA selon la langue choisie (v0.6.6).
+     */
+    String resolveAiPromptPrefix() const {
+        static const char* kDefaultFrAiPrefix = "Reponds brievement et directement en francais en une ou deux phrases : ";
+        if (isFrenchLanguageTag(language) || aiPromptPrefix != kDefaultFrAiPrefix) {
+            return aiPromptPrefix;
+        }
+        String iso = extractPrimaryIso2(language);
+        if (iso == "en") return "Reply briefly and directly in English in one or two sentences: ";
+        if (iso == "de") return "Antworte kurz und direkt auf Deutsch in ein bis zwei Sätzen: ";
+        if (iso == "it") return "Rispondi brevemente e direttamente in italiano in una o due frasi: ";
+        if (iso == "es") return "Responde brevemente y directamente en español en una o dos frases: ";
+        return String("Reply briefly and directly in ") + language + " in one or two sentences: ";
+    }
+
+    /**
+     * @brief Formate les directives vocales (langue, style, ton, accent) en consignes textuelles coherentes.
      */
     String buildVoiceDirectives() const {
         String directives;
@@ -487,16 +682,27 @@ struct VoiceKitConfig {
         lang.trim();
         if (!lang.isEmpty()) {
             directives += "Langue d'expression : ";
-            if (lang.equalsIgnoreCase("fr-FR") || lang.equalsIgnoreCase("fr")) {
+            String iso = extractPrimaryIso2(lang);
+            if (lang.equalsIgnoreCase("fr-CH")) {
+                directives += "francais suisse (fr-CH).";
+            } else if (lang.equalsIgnoreCase("fr-FR") || lang.equalsIgnoreCase("fr")) {
                 directives += "francais (fr-FR).";
-            } else if (lang.equalsIgnoreCase("en-US") || lang.equalsIgnoreCase("en-GB") || lang.equalsIgnoreCase("en")) {
+            } else if (iso == "fr") {
+                directives += "francais (" + lang + ").";
+            } else if (iso == "en") {
                 directives += "anglais (" + lang + ").";
             } else if (lang.equalsIgnoreCase("de-DE") || lang.equalsIgnoreCase("de")) {
                 directives += "allemand (de-DE).";
+            } else if (iso == "de") {
+                directives += "allemand (" + lang + ").";
             } else if (lang.equalsIgnoreCase("es-ES") || lang.equalsIgnoreCase("es")) {
                 directives += "espagnol (es-ES).";
+            } else if (iso == "es") {
+                directives += "espagnol (" + lang + ").";
             } else if (lang.equalsIgnoreCase("it-IT") || lang.equalsIgnoreCase("it")) {
                 directives += "italien (it-IT).";
+            } else if (iso == "it") {
+                directives += "italien (" + lang + ").";
             } else {
                 directives += lang + ".";
             }

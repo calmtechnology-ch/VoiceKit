@@ -5,6 +5,7 @@
 #include <vector>
 #include <memory>
 #include "VoiceKitConfig.h"
+#include "VoiceProfileManager.h"
 #include "hal/IAudioOutput.h"
 #include "hal/M5AudioOutput.h"
 #include "hal/IAudioInput.h"
@@ -49,6 +50,7 @@ public:
     using WakeWordCallback = WakeWordManager::WakeWordDetectedCallback;
     using WakeWordEventCallback = WakeWordManager::WakeWordEventCallback;
     using WakeWordStateCallback = WakeWordManager::WakeWordStateCallback;
+    using ProfileAppliedCallback = std::function<void(const VoiceProfile& profile)>;
 
 
     VoxCoreVoice();
@@ -163,6 +165,50 @@ public:
                          VoiceStyle style = VoiceStyle::NATURAL,
                          VoiceTone tone = VoiceTone::NEUTRAL,
                          const String& accent = "");
+
+    /**
+     * @brief Applique de manière atomique un profil vocal universel multi-fournisseurs (v0.6.6).
+     * @param profile Profil complet (fournisseur GEMINI/OPENAI, langue, voix, genre perçu, style, ton, accent).
+     * @param connectIfDisconnected Si true, exige une clé API valide et établit/confirme la session serveur
+     *                              avant d'émettre onProfileApplied().
+     * @return true si accepté / appliqué, false si refusé (profil invalide, clé absente ou moteur occupé).
+     */
+    bool applyVoiceProfile(const VoiceProfile& profile, bool connectIfDisconnected = false);
+    bool setVoiceProfile(const VoiceProfile& profile) { return applyVoiceProfile(profile, false); }
+
+    /**
+     * @brief Retourne le profil vocal actuellement actif et confirmé (v0.6.6).
+     */
+    VoiceProfile getVoiceProfile() const;
+
+    /**
+     * @brief Change le fournisseur vocal actif (GEMINI <-> OPENAI) de manière sécurisée (v0.6.6).
+     * @param provider Nouveau fournisseur cible.
+     * @param voiceId Voix optionnelle compatible (si vide, sélectionne la voix par défaut du fournisseur).
+     */
+    bool setProvider(VoiceProviderType provider, const String& voiceId = "");
+    VoiceProviderType getProviderType() const { return _config.provider; }
+
+    void setPreferredGender(VoiceGender gender) { _preferredGender = gender; }
+    VoiceGender getPreferredGender() const { return _preferredGender; }
+
+    void setProviderApiKey(VoiceProviderType provider, const String& apiKey);
+    String getProviderApiKey(VoiceProviderType provider) const { return _config.getApiKeyForProvider(provider); }
+    bool hasProviderApiKey(VoiceProviderType provider) const { return !_config.getApiKeyForProvider(provider).isEmpty(); }
+
+    VoiceProfileManager& getProfileManager() { return _profileManager; }
+    const VoiceProfileManager& getProfileManager() const { return _profileManager; }
+
+    // Sauvegarde et restauration NVS (v0.6.6 — ne stocke jamais aucune clé API)
+    bool saveVoiceProfile(const char* nvsNamespace = nullptr);
+    bool loadVoiceProfile(bool applyImmediately = true, const char* nvsNamespace = nullptr);
+    bool resetVoiceProfile(bool applyDefault = true, const char* nvsNamespace = nullptr);
+    bool hasSavedVoiceProfile(const char* nvsNamespace = nullptr) const;
+    bool saveFavoriteProfile(uint8_t slot, const char* nvsNamespace = nullptr);
+    bool loadFavoriteProfile(uint8_t slot, bool applyImmediately = true, const char* nvsNamespace = nullptr);
+
+    void onProfileApplied(ProfileAppliedCallback cb) { _onProfileApplied = std::move(cb); }
+    void onProfileError(ErrorCallback cb) { _onProfileError = std::move(cb); }
 
     /**
      * @brief Modifie la voix Gemini Live (Aoede, Charon, Fenrir, Kore, Puck).
@@ -533,6 +579,9 @@ private:
     void setState(VoiceState newState);
     bool dispatchSpeech(const String& text);
     bool dispatchAiQuestion(const String& question);
+    bool bindProviderForConfig(const VoiceKitConfig& targetCfg, String* outError = nullptr);
+    void rollbackPendingProfileChange(const String& reason, bool notifyProfileError = true);
+    const char* resolveProfileNvsNamespace(const char* customNs) const;
 
     VoiceKitConfig _config;
     VoiceState _state = VoiceState::UNINITIALIZED;
@@ -591,8 +640,14 @@ private:
     String _lastInterimText = "";
     String _lastFinalText = "";
 
-    // Suivi sécurisé des changements de profil vocal (v0.4.1.1)
+    // Suivi sécurisé des changements de profil vocal et fournisseur (v0.4.1.1 / v0.6.6)
+    VoiceProfileManager _profileManager;
+    VoiceGender _preferredGender = VoiceGender::ANY;
     bool _profileChangePending = false;
+    bool _pendingProviderSwitch = false;
+    VoiceProfile _pendingProfile;
+    VoiceKitConfig _rollbackConfig;
+    VoiceGender _rollbackPreferredGender = VoiceGender::ANY;
     String _pendingVoice;
     String _pendingLanguage;
     VoiceStyle _pendingStyle = VoiceStyle::NATURAL;
@@ -619,5 +674,7 @@ private:
     AssistantTextCallback _onAssistantText;
     VoidCallback _onConversationFinished;
     TurnFinishedCallback _onConversationTurnMetrics;
+    ProfileAppliedCallback _onProfileApplied;
+    ErrorCallback _onProfileError;
 };
 

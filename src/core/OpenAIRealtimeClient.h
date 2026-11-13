@@ -71,9 +71,21 @@ public:
     const String& getVoice() const override { return _voice; }
     void setLanguage(const String& language) override { _language = language; }
     const String& getLanguage() const override { return _language; }
+    void setInputTranscriptionLanguage(const String& lang) { _inputTranscriptionLanguage = lang; }
+    const String& getInputTranscriptionLanguage() const { return _inputTranscriptionLanguage; }
     void setVoiceDirectives(const String& directives) override { _voiceDirectives = directives; }
     void setConversationMode(bool enable) override { _conversationMode = enable; }
     bool isConversationMode() const override { return _conversationMode; }
+
+    // Contraintes de session OpenAI Realtime pour changement dynamique de profil (v0.6.6)
+    bool hasAudioEmittedInSession() const { return _audioEmittedInSession.load(std::memory_order_acquire); }
+    const String& getConfirmedSessionVoice() const { return _confirmedSessionVoice; }
+    bool canUpdateVoiceInCurrentSession(const String& targetVoice) const {
+        if (!isConnected()) return false;
+        if (!_audioEmittedInSession.load(std::memory_order_acquire)) return true;
+        return !_confirmedSessionVoice.isEmpty() && targetVoice == _confirmedSessionVoice;
+    }
+    bool requestSessionUpdate();
 
     // Émission audio et textuelle
     bool sendTextMessage(const String& text) override;
@@ -142,10 +154,13 @@ private:
     String _apiKey;
     String _model = OPENAI_REALTIME_DEFAULT_MODEL;
     String _voice = OPENAI_REALTIME_DEFAULT_VOICE;
+    String _confirmedSessionVoice = "";
     String _language = "fr-FR";
+    String _inputTranscriptionLanguage = "";
     String _systemInstruction;
     String _voiceDirectives;
     String _lastError;
+    std::atomic<bool> _audioEmittedInSession{false};
     std::atomic<uint32_t> _jsonErrorCount{0};
     String _lastParseErrorCategory;
 

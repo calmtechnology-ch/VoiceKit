@@ -38,6 +38,13 @@ public:
                LiveAudioStreamer* streamer, LiveAudioPlayer* player,
                const VoiceKitConfig& config);
 
+    void setProviderAndConfig(IVoiceProvider* provider, const VoiceKitConfig& config) {
+        if (provider) {
+            _provider = provider;
+        }
+        _config = config;
+    }
+
     // Démarrage d'un tour de parole utilisateur (appui PARLER)
     bool startTurn();
 

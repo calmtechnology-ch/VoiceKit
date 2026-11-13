@@ -42,6 +42,8 @@ VoxCoreVoice::~VoxCoreVoice() {
     _onAssistantText = nullptr;
     _onConversationFinished = nullptr;
     _onConversationTurnMetrics = nullptr;
+    _onProfileApplied = nullptr;
+    _onProfileError = nullptr;
     stop();
     if (HardwareManager::getInstance().getAudioOutput() == _audioOutput) {
         HardwareManager::getInstance().setAudioOutput(nullptr);
@@ -125,6 +127,47 @@ void VoxCoreVoice::setState(VoiceState newState) {
 
 bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _config = config;
+    _profileChangePending = false;
+    _pendingProviderSwitch = false;
+    _modeSwitchPending = false;
+
+    // Synchronisation bidirectionnelle des clés API dédiées (v0.6.6)
+    if (_config.provider == VoiceProviderType::OPENAI) {
+        if (_config.openAiApiKey.isEmpty() && !_config.apiKey.isEmpty()) {
+            _config.openAiApiKey = _config.apiKey;
+        }
+        if (_config.apiKey.isEmpty() && !_config.openAiApiKey.isEmpty()) {
+            _config.apiKey = _config.openAiApiKey;
+        }
+    } else {
+        if (_config.geminiApiKey.isEmpty() && !_config.apiKey.isEmpty()) {
+            _config.geminiApiKey = _config.apiKey;
+        }
+        if (_config.apiKey.isEmpty() && !_config.geminiApiKey.isEmpty()) {
+            _config.apiKey = _config.geminiApiKey;
+        }
+    }
+
+    // Restauration optionnelle du profil vocal sauvegardé en NVS (v0.6.6 — sans clé API)
+    if (_config.restoreSavedProfileOnBoot) {
+        VoiceProfile restored;
+        bool wasRestored = false;
+        _profileManager.loadActiveProfile(restored, _config.provider, &wasRestored, resolveProfileNvsNamespace(nullptr));
+        if (wasRestored) {
+            VoiceProfileManager::applyToConfig(restored, _config);
+            _preferredGender = restored.preferredGender;
+            _config.apiKey = _config.getApiKeyForProvider(_config.provider);
+            Serial.printf("[VoiceKit] Profil vocal restaure depuis NVS : Fournisseur=%s | Voix=%s | Langue=%s\n",
+                          voiceProviderTypeToString(_config.provider), _config.voice.c_str(), _config.language.c_str());
+        }
+    }
+
+    // Ajustement automatique de la voix par défaut si OpenAI est sélectionné avec la voix Gemini par défaut
+    if (_config.provider == VoiceProviderType::OPENAI &&
+        (_config.voice.isEmpty() || _config.voice == VOICEKIT_DEFAULT_VOICE)) {
+        _config.voice = OPENAI_REALTIME_DEFAULT_VOICE;
+    }
+
     _lastError = "";
     _initStartTimeMs = millis();
     _totalReadyMs = 0;
@@ -140,7 +183,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
 #endif
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.6.3.1 — Multi-Fournisseurs & Wake ");
+    Serial.println("  VoxCore VoiceKit v0.6.6 — Universal Voice Profiles    ");
     Serial.printf("  Fournisseur : %s | Mode Audio : %s | FastConnect : %s\n",
                   (_config.provider == VoiceProviderType::OPENAI) ? "OPENAI REALTIME" : "GEMINI LIVE",
                   (LiveAudioPlayer::getCompiledAudioMode() == 1) ? "MODE 1 (REACTIVE_CALLBACK)" : "MODE 2 (DEDICATED_AUDIO_TASK)",
@@ -222,53 +265,8 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         }
     });
 
-    // 5. Initialisation du fournisseur vocal actif (Gemini Live ou OpenAI Realtime, ou mode hors ligne sans clé API)
-    if (_config.provider == VoiceProviderType::OPENAI) {
-        _activeProvider = &_openaiClient;
-        if (!_config.apiKey.isEmpty()) {
-            if (!_openaiClient.begin(_config)) {
-                _lastError = _openaiClient.getLastError();
-                Serial.printf("[VoiceKit] ERREUR : %s\n", _lastError.c_str());
-                setState(VoiceState::ERROR_STATE);
-                if (_onError) _onError(_lastError);
-                return false;
-            }
-        } else {
-            Serial.println("[VoiceKit] Mode hors ligne (aucune cle API OpenAI) : capture audio locale active.");
-        }
-    } else {
-        _geminiProvider.setClient(&_client);
-        _activeProvider = &_geminiProvider;
-        if (!_config.apiKey.isEmpty()) {
-            if (!_client.begin(_config.apiKey.c_str(), _config.model.c_str(), _config.voice.c_str())) {
-                _lastError = _client.getLastError();
-                Serial.printf("[VoiceKit] ERREUR : %s\n", _lastError.c_str());
-                setState(VoiceState::ERROR_STATE);
-                if (_onError) _onError(_lastError);
-                return false;
-            }
-        } else {
-            Serial.println("[VoiceKit] Mode hors ligne (aucune cle API Gemini) : capture audio locale active.");
-        }
-        _client.setLanguage(_config.language);
-        _client.setVoiceDirectives(_config.buildVoiceDirectives());
-        _client.setSystemInstruction(_config.enableConversation ? _config.conversationInstruction : _config.systemInstruction);
-    }
-
-    // Enregistrement de l'écouteur de transcriptions entrantes utilisateur
-    _activeProvider->setOnInputTranscription([this](const String& text, bool isFinal) {
-        if (_conversationEnabled) {
-            _conversationController.handleUserTranscription(text, isFinal);
-        }
-        if (_wakeWordConversationController.isEnabled()) {
-            _wakeWordConversationController.notifyUserTranscription(text, isFinal);
-        }
-        handleIncomingTranscription(text, isFinal);
-    });
-
-    // 6. Initialisation du contrôleur de session LiveSessionController
-    if (!_session.begin(_activeProvider, &_player)) {
-        _lastError = "Echec initialisation LiveSessionController";
+    // 5 & 6. Initialisation du fournisseur vocal actif et liaison au contrôleur de session
+    if (!bindProviderForConfig(_config, &_lastError)) {
         Serial.printf("[VoiceKit] ERREUR : %s\n", _lastError.c_str());
         setState(VoiceState::ERROR_STATE);
         if (_onError) _onError(_lastError);
@@ -341,17 +339,37 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         }
 
         switch (s) {
-            case LiveSessionState::CONNECTED:
+            case LiveSessionState::CONNECTED: {
                 _cancelledCaptureTurnId = 0;
-                // Validation définitive du nouveau profil vocal après setupComplete (v0.4.1.1)
+                bool notifyProfileNow = false;
+                // Validation définitive du nouveau profil vocal après setupComplete / session.updated (v0.4.1.1 / v0.6.6)
                 if (_profileChangePending) {
+                    _config.provider = _pendingProfile.provider;
+                    String keyForNewProv = _config.getApiKeyForProvider(_pendingProfile.provider);
+                    if (!keyForNewProv.isEmpty()) {
+                        _config.apiKey = keyForNewProv;
+                    }
+                    if (_pendingProviderSwitch) {
+                        if (_config.provider == VoiceProviderType::OPENAI &&
+                            (_config.model.isEmpty() || _config.model.indexOf("gemini") >= 0)) {
+                            _config.model = OPENAI_REALTIME_DEFAULT_MODEL;
+                        } else if (_config.provider == VoiceProviderType::GEMINI &&
+                                   (_config.model.isEmpty() || _config.model.indexOf("gpt-") >= 0 || _config.model.indexOf("realtime") >= 0)) {
+                            _config.model = VOICEKIT_DEFAULT_MODEL;
+                        }
+                    }
                     _config.voice = _pendingVoice;
                     _config.language = _pendingLanguage;
                     _config.style = _pendingStyle;
                     _config.tone = _pendingTone;
                     _config.accent = _pendingAccent;
+                    _preferredGender = _pendingProfile.preferredGender;
+                    _conversationController.setProviderAndConfig(_activeProvider, _config);
                     _profileChangePending = false;
-                    Serial.printf("[VoiceKit] Profil vocal confirme par setupComplete : Voix=%s | Langue=%s\n",
+                    _pendingProviderSwitch = false;
+                    notifyProfileNow = true;
+                    Serial.printf("[VoiceKit] Profil vocal confirme par le fournisseur (%s) : Voix=%s | Langue=%s\n",
+                                  voiceProviderTypeToString(_config.provider),
                                   _config.voice.c_str(), _config.language.c_str());
                 }
                 // Confirmation de la transition de mode après setupComplete (v0.4.1.1)
@@ -363,8 +381,26 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
                 // Si on n'est pas déjà en train d'écouter ou de transcrire
                 if (_state != VoiceState::LISTENING && _state != VoiceState::TRANSCRIBING) {
                     setState(VoiceState::READY);
+                    if (notifyProfileNow && _onProfileApplied) {
+                        _onProfileApplied(getVoiceProfile());
+                    }
                     if (_onReady) {
                         _onReady();
+                    }
+                } else if (notifyProfileNow && _onProfileApplied) {
+                    _onProfileApplied(getVoiceProfile());
+                }
+                break;
+            }
+            case LiveSessionState::RECONNECTING:
+                if (_profileChangePending) {
+                    String dropErr = "Deconnexion reseau pendant le changement de profil vocal";
+                    _session.deactivate();
+                    rollbackPendingProfileChange(dropErr, true);
+                    _lastError = dropErr;
+                    setState(VoiceState::ERROR_STATE);
+                    if (_onError) {
+                        _onError(_lastError);
                     }
                 }
                 break;
@@ -378,29 +414,28 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
                     setState(VoiceState::SPEAKING);
                 }
                 break;
-            case LiveSessionState::ERROR:
-                // Restauration cohérente en cas d'erreur de reconnexion (v0.4.1.1)
-                if (_profileChangePending && _activeProvider) {
-                    _activeProvider->setVoice(_config.voice);
-                    _activeProvider->setLanguage(_config.language);
-                    _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
-                    _profileChangePending = false;
-                    Serial.println("[VoiceKit] Echec reconnexion profil : profil precedent restaure");
+            case LiveSessionState::ERROR: {
+                String sessErr = _session.getLastError();
+                if (_profileChangePending) {
+                    rollbackPendingProfileChange(
+                        sessErr.isEmpty() ? String("Echec reconnexion profil vocal") : sessErr, true);
                 }
                 if (_modeSwitchPending && _activeProvider) {
                     _conversationEnabled = _previousConversationMode;
                     _config.enableConversation = _previousConversationMode;
-                    _activeProvider->setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+                    _activeProvider->setSystemInstruction(
+                        _conversationEnabled ? _config.resolveConversationInstruction() : _config.resolveSystemInstruction());
                     _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
                     _modeSwitchPending = false;
                     Serial.println("[VoiceKit] Echec reconnexion mode : mode precedent restaure");
                 }
-                _lastError = _session.getLastError();
+                _lastError = sessErr;
                 setState(VoiceState::ERROR_STATE);
                 if (_onError) {
                     _onError(_lastError);
                 }
                 break;
+            }
             default:
                 break;
         }
@@ -467,17 +502,13 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     });
 
     _session.setOnError([this](const String& err) {
-        if (_profileChangePending && _activeProvider) {
-            _activeProvider->setVoice(_config.voice);
-            _activeProvider->setLanguage(_config.language);
-            _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
-            _profileChangePending = false;
-            Serial.println("[VoiceKit] Erreur session : profil vocal precedent restaure");
+        if (_profileChangePending) {
+            rollbackPendingProfileChange(err, true);
         }
         if (_modeSwitchPending && _activeProvider) {
             _conversationEnabled = _previousConversationMode;
             _config.enableConversation = _previousConversationMode;
-            _activeProvider->setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+            _activeProvider->setSystemInstruction(_conversationEnabled ? _config.resolveConversationInstruction() : _config.resolveSystemInstruction());
             _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
             _modeSwitchPending = false;
             Serial.println("[VoiceKit] Erreur session : mode precedent restaure");
@@ -552,7 +583,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         _conversationEnabled = true;
         _config.enableConversation = true;
         if (_activeProvider) {
-            _activeProvider->setSystemInstruction(_config.conversationInstruction);
+            _activeProvider->setSystemInstruction(_config.resolveConversationInstruction());
             _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
             _activeProvider->setConversationMode(true);
         }
@@ -609,12 +640,14 @@ void VoxCoreVoice::update() {
     }
     _lastUpdateCallMs = now;
 
+    const String activeApiKey = _config.getApiKeyForProvider(_config.provider);
+
     // 1. Mise à jour réseau Wi-Fi / SNTP si en mode MANAGED_WIFI
     if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
         _wifi.tick();
         _connectionMetrics.lastWifiTickDurationUs = _wifi.getLastTickDurationUs();
         _connectionMetrics.maxWifiTickDurationUs = _wifi.getMaxTickDurationUs();
-        if (!_config.connectOnDemand && !_wakeWordConversationController.isEnabled() && _wifi.isConnected() && _wifi.isTimeSynced() && !_config.apiKey.isEmpty()) {
+        if (!_config.connectOnDemand && !_wakeWordConversationController.isEnabled() && _wifi.isConnected() && _wifi.isTimeSynced() && !activeApiKey.isEmpty()) {
             if (_state == VoiceState::CONNECTING_WIFI || _state == VoiceState::IDLE || _state == VoiceState::DISCONNECTED || _state == VoiceState::ERROR_STATE) {
                 if ((!_activeProvider || !_activeProvider->isConnected()) && (_session.getState() == LiveSessionState::DISCONNECTED || _session.getState() == LiveSessionState::ERROR)) {
                     Serial.println("[VoiceKit] Wi-Fi et NTP valides -> Connexion au service vocal...");
@@ -624,6 +657,10 @@ void VoxCoreVoice::update() {
                 }
             }
         } else if (!_wifi.isConnected() && !_config.wifiSSID.isEmpty()) {
+            if (_profileChangePending) {
+                _session.deactivate();
+                rollbackPendingProfileChange("Perte Wi-Fi pendant changement de profil vocal", true);
+            }
             if (_state != VoiceState::CONNECTING_WIFI && _state != VoiceState::DISCONNECTED && _state != VoiceState::ERROR_STATE) {
                 Serial.println("[VoiceKit] Perte Wi-Fi detectee -> transition CONNECTING_WIFI");
                 setState(VoiceState::CONNECTING_WIFI);
@@ -632,7 +669,7 @@ void VoxCoreVoice::update() {
     } else {
         // En mode EXTERNAL_WIFI : connexion automatique dès que l'application hôte a établi le réseau (si une clé API est fournie)
         if (_state == VoiceState::IDLE || _state == VoiceState::CONNECTING_WIFI || _state == VoiceState::DISCONNECTED || _state == VoiceState::ERROR_STATE) {
-            if (!_config.connectOnDemand && !_wakeWordConversationController.isEnabled() && !_config.apiKey.isEmpty() && WiFi.status() == WL_CONNECTED && isSystemTimeValid()) {
+            if (!_config.connectOnDemand && !_wakeWordConversationController.isEnabled() && !activeApiKey.isEmpty() && WiFi.status() == WL_CONNECTED && isSystemTimeValid()) {
                 if ((!_activeProvider || !_activeProvider->isConnected()) && (_session.getState() == LiveSessionState::DISCONNECTED || _session.getState() == LiveSessionState::ERROR)) {
                     Serial.println("[VoiceKit] Reseau hote & NTP valides -> Connexion au service vocal...");
                     setState(VoiceState::CONNECTING_SERVICE);
@@ -643,6 +680,10 @@ void VoxCoreVoice::update() {
         }
         if (_state == VoiceState::CONNECTING_SERVICE && WiFi.status() != WL_CONNECTED) {
             _lastError = "Perte Wi-Fi pendant connexion";
+            if (_profileChangePending) {
+                _session.deactivate();
+                rollbackPendingProfileChange("Perte Wi-Fi pendant changement de profil vocal", true);
+            }
             _pendingText = "";
             _connectingStartTimeMs = 0;
             setState(VoiceState::CONNECTING_WIFI);
@@ -719,20 +760,18 @@ void VoxCoreVoice::update() {
 
     // 6. Surveillance des timeouts de connexion initiale
     if (_state == VoiceState::CONNECTING_SERVICE) {
-        uint32_t timeoutLimit = (_config.provider == VoiceProviderType::OPENAI) ? 15000 : (GEMINI_LIVE_CONNECT_TIMEOUT_MS + 2000);
+        VoiceProviderType targetProv = _profileChangePending ? _pendingProfile.provider : _config.provider;
+        uint32_t timeoutLimit = (targetProv == VoiceProviderType::OPENAI) ? 15000 : (GEMINI_LIVE_CONNECT_TIMEOUT_MS + 2000);
         if (_connectingStartTimeMs > 0 && (millis() - _connectingStartTimeMs > timeoutLimit)) {
             Serial.println("[VoiceKit] ERREUR : Delai de connexion depasse vers service vocal");
-            if (_profileChangePending && _activeProvider) {
-                _activeProvider->setVoice(_config.voice);
-                _activeProvider->setLanguage(_config.language);
-                _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
-                _profileChangePending = false;
-                Serial.println("[VoiceKit] Timeout reconnexion profil : profil vocal precedent restaure");
+            if (_profileChangePending) {
+                _session.deactivate();
+                rollbackPendingProfileChange("Timeout connexion service vocal lors du changement de profil", true);
             }
             if (_modeSwitchPending && _activeProvider) {
                 _conversationEnabled = _previousConversationMode;
                 _config.enableConversation = _previousConversationMode;
-                _activeProvider->setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+                _activeProvider->setSystemInstruction(_conversationEnabled ? _config.resolveConversationInstruction() : _config.resolveSystemInstruction());
                 _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
                 _modeSwitchPending = false;
                 Serial.println("[VoiceKit] Timeout reconnexion mode : mode precedent restaure");
@@ -772,6 +811,10 @@ bool VoxCoreVoice::say(const String& text) {
         _lastError = "Texte vide";
         return false;
     }
+    if (_state == VoiceState::UNINITIALIZED) {
+        _lastError = "VoiceKit non initialise";
+        return false;
+    }
 
     _lastError = "";
     uint32_t speechId = ++_speechGeneration;
@@ -800,6 +843,14 @@ bool VoxCoreVoice::say(const String& text) {
                               (unsigned)_textQueue.size(), (unsigned)speechId);
                 return true;
         }
+    }
+
+    // Vérification de la présence de clé API avant ouverture de session en ligne (v0.6.6)
+    if (_session.getState() != LiveSessionState::CONNECTED &&
+        _config.getApiKeyForProvider(_config.provider).isEmpty()) {
+        _lastError = String("Cle API manquante pour le fournisseur ") + voiceProviderTypeToString(_config.provider);
+        if (_onError) _onError(_lastError);
+        return false;
     }
 
     // Vérification des prérequis réseau
@@ -873,7 +924,7 @@ bool VoxCoreVoice::say(const String& text) {
 }
 
 bool VoxCoreVoice::dispatchSpeech(const String& text) {
-    String prompt = _config.promptPrefix + text;
+    String prompt = _config.resolvePromptPrefix() + text;
     Serial.printf("[VoiceKit] Prononciation : \"%s\"\n", text.c_str());
     _latencyMetrics.reset();
     _latencyMetrics.turnStartedMs = millis();
@@ -898,6 +949,10 @@ bool VoxCoreVoice::askAi(const String& question) {
         _lastError = "Question vide";
         return false;
     }
+    if (_state == VoiceState::UNINITIALIZED) {
+        _lastError = "VoiceKit non initialise";
+        return false;
+    }
 
     _lastError = "";
     uint32_t speechId = ++_speechGeneration;
@@ -916,6 +971,14 @@ bool VoxCoreVoice::askAi(const String& question) {
                 stop();
                 break;
         }
+    }
+
+    // Verification de la presence de cle API avant ouverture de session en ligne (v0.6.6)
+    if (_session.getState() != LiveSessionState::CONNECTED &&
+        _config.getApiKeyForProvider(_config.provider).isEmpty()) {
+        _lastError = String("Cle API manquante pour le fournisseur ") + voiceProviderTypeToString(_config.provider);
+        if (_onError) _onError(_lastError);
+        return false;
     }
 
     // Verification des prerequis reseau
@@ -990,8 +1053,9 @@ bool VoxCoreVoice::askAi(const String& question) {
 
 bool VoxCoreVoice::dispatchAiQuestion(const String& question) {
     String prompt = question;
-    if (!_conversationEnabled && _config.aiPromptPrefix.length() > 0) {
-        prompt = _config.aiPromptPrefix + question;
+    String resolvedAiPrefix = _config.resolveAiPromptPrefix();
+    if (!_conversationEnabled && resolvedAiPrefix.length() > 0) {
+        prompt = resolvedAiPrefix + question;
     }
     Serial.printf("[VoiceKit] Requete IA transmise : \"%s\"\n", question.c_str());
     _latencyMetrics.reset();
@@ -1036,17 +1100,13 @@ void VoxCoreVoice::stop() {
     } else {
         _cancelledCaptureTurnId = 0;
     }
-    if (_profileChangePending && _activeProvider) {
-        _activeProvider->setVoice(_config.voice);
-        _activeProvider->setLanguage(_config.language);
-        _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
-        _profileChangePending = false;
-        Serial.println("[VoiceKit] stop() : profil vocal precedent restaure");
+    if (_profileChangePending) {
+        rollbackPendingProfileChange("Interruption manuelle (stop)", false);
     }
     if (_modeSwitchPending && _activeProvider) {
         _conversationEnabled = _previousConversationMode;
         _config.enableConversation = _previousConversationMode;
-        _activeProvider->setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+        _activeProvider->setSystemInstruction(_conversationEnabled ? _config.resolveConversationInstruction() : _config.resolveSystemInstruction());
         _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
         _modeSwitchPending = false;
         Serial.println("[VoiceKit] stop() : mode conversationnel precedent restaure");
@@ -1107,102 +1167,395 @@ uint8_t VoxCoreVoice::getVolume() const {
 }
 
 // =============================================================================
-// Implémentation Configuration Vocale & Profils (v0.4.1 / v0.4.1.1)
+// Implémentation Configuration Vocale & Profils Universels (v0.4.1 / v0.6.6)
 // =============================================================================
 
-bool VoxCoreVoice::setVoiceProfile(const String& voice, const String& language,
-                                   VoiceStyle style, VoiceTone tone,
-                                   const String& accent) {
-    if (voice.isEmpty()) {
-        _lastError = "Nom de voix invalide (vide)";
-        Serial.printf("[VoiceKit] %s\n", _lastError.c_str());
+const char* VoxCoreVoice::resolveProfileNvsNamespace(const char* customNs) const {
+    if (customNs && customNs[0] != '\0') {
+        return customNs;
+    }
+    if (!_config.profileNvsNamespace.isEmpty()) {
+        return _config.profileNvsNamespace.c_str();
+    }
+    return VOICEKIT_PROFILE_NVS_NAMESPACE;
+}
+
+bool VoxCoreVoice::bindProviderForConfig(const VoiceKitConfig& targetCfg, String* outError) {
+    IVoiceProvider* nextProvider = (targetCfg.provider == VoiceProviderType::OPENAI)
+        ? static_cast<IVoiceProvider*>(&_openaiClient)
+        : static_cast<IVoiceProvider*>(&_geminiProvider);
+
+    if (_activeProvider && _activeProvider != nextProvider) {
+        if (_activeProvider->isConnected()) {
+            _activeProvider->disconnect();
+        }
+        _activeProvider->setOnInputTranscription(nullptr);
+    }
+
+    const String effectiveKey = targetCfg.getApiKeyForProvider(targetCfg.provider);
+    const bool convActive = _conversationEnabled || targetCfg.enableConversation;
+
+    if (targetCfg.provider == VoiceProviderType::OPENAI) {
+        String resolvedModel = targetCfg.model;
+        if (resolvedModel.isEmpty() || resolvedModel.indexOf("gemini") >= 0) {
+            resolvedModel = OPENAI_REALTIME_DEFAULT_MODEL;
+        }
+        VoiceKitConfig cfgCopy = targetCfg;
+        cfgCopy.apiKey = effectiveKey;
+        cfgCopy.model = resolvedModel;
+        cfgCopy.enableConversation = convActive;
+        if (cfgCopy.voice.isEmpty() || !_profileManager.isValidVoiceForProvider(VoiceProviderType::OPENAI, cfgCopy.voice)) {
+            cfgCopy.voice = OPENAI_REALTIME_DEFAULT_VOICE;
+        }
+        if (!effectiveKey.isEmpty()) {
+            if (!_openaiClient.begin(cfgCopy)) {
+                if (outError) *outError = _openaiClient.getLastError();
+                return false;
+            }
+        } else {
+            _openaiClient.setModel(resolvedModel);
+            _openaiClient.setVoice(cfgCopy.voice);
+            _openaiClient.setLanguage(cfgCopy.language);
+            _openaiClient.setInputTranscriptionLanguage(cfgCopy.inputTranscriptionLanguage);
+            _openaiClient.setConversationMode(convActive);
+            _openaiClient.setVoiceDirectives(cfgCopy.buildVoiceDirectives());
+            _openaiClient.setSystemInstruction(convActive
+                ? cfgCopy.resolveConversationInstruction()
+                : cfgCopy.resolveSystemInstruction());
+        }
+    } else {
+        String resolvedModel = targetCfg.model;
+        if (resolvedModel.isEmpty() || resolvedModel.indexOf("gpt-") >= 0 || resolvedModel.indexOf("realtime") >= 0) {
+            resolvedModel = VOICEKIT_DEFAULT_MODEL;
+        }
+        String voiceToUse = targetCfg.voice;
+        if (voiceToUse.isEmpty() || !_profileManager.isValidVoiceForProvider(VoiceProviderType::GEMINI, voiceToUse)) {
+            voiceToUse = VOICEKIT_DEFAULT_VOICE;
+        }
+        if (!effectiveKey.isEmpty()) {
+            if (!_client.begin(effectiveKey.c_str(), resolvedModel.c_str(), voiceToUse.c_str())) {
+                if (outError) *outError = _client.getLastError();
+                return false;
+            }
+        } else {
+            _client.setModel(resolvedModel);
+            _client.setVoice(voiceToUse);
+        }
+        _client.setLanguage(targetCfg.language);
+        _client.setVoiceDirectives(targetCfg.buildVoiceDirectives());
+        _client.setSystemInstruction(convActive
+            ? targetCfg.resolveConversationInstruction()
+            : targetCfg.resolveSystemInstruction());
+        _geminiProvider.setClient(&_client);
+        _geminiProvider.setConversationMode(convActive);
+    }
+
+    _activeProvider = nextProvider;
+    _activeProvider->setOnInputTranscription([this](const String& text, bool isFinal) {
+        if (_conversationEnabled) {
+            _conversationController.handleUserTranscription(text, isFinal);
+        } else {
+            handleIncomingTranscription(text, isFinal);
+        }
+    });
+
+    _session.begin(_activeProvider, &_player);
+    _conversationController.setProviderAndConfig(_activeProvider, targetCfg);
+    _wakeWordConversationController.setProvider(_activeProvider, targetCfg.provider);
+    return true;
+}
+
+void VoxCoreVoice::rollbackPendingProfileChange(const String& reason, bool notifyProfileError) {
+    if (!_profileChangePending) {
+        return;
+    }
+
+    _config = _rollbackConfig;
+    _preferredGender = _rollbackPreferredGender;
+    _profileChangePending = false;
+    _pendingProviderSwitch = false;
+
+    bindProviderForConfig(_config, nullptr);
+
+    Serial.printf("[VoiceKit] Echec changement de profil (%s) -> restauration du profil precedent (%s / %s / %s)\n",
+                  reason.c_str(),
+                  voiceProviderTypeToString(_config.provider),
+                  _config.voice.c_str(),
+                  _config.language.c_str());
+
+    if (notifyProfileError && _onProfileError) {
+        _onProfileError(reason);
+    }
+}
+
+VoiceProfile VoxCoreVoice::getVoiceProfile() const {
+    return VoiceProfileManager::fromConfig(_config, _preferredGender);
+}
+
+bool VoxCoreVoice::applyVoiceProfile(const VoiceProfile& profile, bool connectIfDisconnected) {
+    // 1. Validation stricte du profil (fournisseur, voix du catalogue, code langue BCP-47)
+    String validationError;
+    if (!_profileManager.validateProfile(profile, &validationError)) {
+        _lastError = validationError;
+        Serial.printf("[VoiceKit] Profil vocal refuse : %s\n", _lastError.c_str());
+        if (_onProfileError) _onProfileError(_lastError);
         return false;
     }
 
-    // 1. Refus strict si le moteur est occupé
-    if (isBusy()) {
+    // 2. Refus strict si le moteur est occupé (TTS, STT, conversation ou session Wake Word)
+    if (isBusy() || _wakeWordConversationController.isSessionInProgress()) {
         _lastError = "Impossible de modifier le profil vocal pendant une activite vocale active";
         Serial.printf("[VoiceKit] %s\n", _lastError.c_str());
+        if (_onProfileError) _onProfileError(_lastError);
         return false;
     }
 
-    // 2. Refus strict si une connexion ou reconnexion est déjà en cours
+    // 3. Refus strict si une connexion ou reconnexion est déjà en cours
     if (isConnecting()) {
         _lastError = "Connexion ou reconnexion deja en cours, modification de profil refusee";
         Serial.printf("[VoiceKit] %s\n", _lastError.c_str());
+        if (_onProfileError) _onProfileError(_lastError);
         return false;
     }
 
-    // 3. Cas hors-ligne / session non-connectée : application directe pour la future session
-    if (!_activeProvider || !_activeProvider->isConnected() || _session.getState() == LiveSessionState::DISCONNECTED) {
-        _config.voice = voice;
-        _config.language = language;
-        _config.style = style;
-        _config.tone = tone;
-        _config.accent = accent;
+    const bool providerChanged = (profile.provider != _config.provider);
+    const bool currentlyOnline = (_activeProvider && _activeProvider->isConnected() &&
+                                  _session.getState() != LiveSessionState::DISCONNECTED &&
+                                  _session.getState() != LiveSessionState::ERROR);
+    const String targetKey = _config.getApiKeyForProvider(profile.provider);
 
-        if (_activeProvider) {
-            _activeProvider->setVoice(voice);
-            _activeProvider->setLanguage(language);
-            _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
-            _activeProvider->setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+    // 4. Vérification de clé API si changement de fournisseur, session active ou connexion exigée
+    if ((providerChanged || currentlyOnline || connectIfDisconnected) && targetKey.isEmpty()) {
+        _lastError = String("Cle API manquante pour le fournisseur ") + voiceProviderTypeToString(profile.provider);
+        Serial.printf("[VoiceKit] %s\n", _lastError.c_str());
+        if (_onProfileError) _onProfileError(_lastError);
+        if (connectIfDisconnected && _onError) _onError(_lastError);
+        return false;
+    }
+
+    // 5. Cas hors-ligne sans demande d'ouverture de session réseau immédiate
+    if (!currentlyOnline && !connectIfDisconnected) {
+        VoiceKitConfig nextCfg = _config;
+        VoiceProfileManager::applyToConfig(profile, nextCfg);
+        if (!targetKey.isEmpty()) {
+            nextCfg.apiKey = targetKey;
         }
+        String bindErr;
+        if (!bindProviderForConfig(nextCfg, &bindErr)) {
+            _lastError = bindErr;
+            if (_onProfileError) _onProfileError(_lastError);
+            return false;
+        }
+        _config = nextCfg;
+        _preferredGender = profile.preferredGender;
 
-        Serial.printf("[VoiceKit] Profil vocal configure (hors ligne) : Voix=%s | Langue=%s | Style=%s | Ton=%s%s%s\n",
-                      voice.c_str(), language.c_str(), voiceStyleToString(style), voiceToneToString(tone),
-                      accent.isEmpty() ? "" : " | Accent=", accent.isEmpty() ? "" : accent.c_str());
+        Serial.printf("[VoiceKit] Profil vocal configure (hors ligne) : Fournisseur=%s | Voix=%s | Langue=%s | Style=%s | Ton=%s%s%s\n",
+                      voiceProviderTypeToString(_config.provider),
+                      _config.voice.c_str(), _config.language.c_str(),
+                      voiceStyleToString(_config.style), voiceToneToString(_config.tone),
+                      _config.accent.isEmpty() ? "" : " | Accent=",
+                      _config.accent.isEmpty() ? "" : _config.accent.c_str());
+        if (_onProfileApplied) {
+            _onProfileApplied(getVoiceProfile());
+        }
         return true;
     }
 
-    // 4. Session connectée et au repos : reconnexion sécurisée maîtrisée
-    // Conserver le profil précédent intact dans _config jusqu'à validation setupComplete
-    _profileChangePending = true;
-    _pendingVoice = voice;
-    _pendingLanguage = language;
-    _pendingStyle = style;
-    _pendingTone = tone;
-    _pendingAccent = accent;
-
-    // Prépare le fournisseur pour la nouvelle trame de configuration
-    VoiceKitConfig tempCfg = _config;
-    tempCfg.voice = voice;
-    tempCfg.language = language;
-    tempCfg.style = style;
-    tempCfg.tone = tone;
-    tempCfg.accent = accent;
-
-    if (_activeProvider) {
-        _activeProvider->setVoice(voice);
-        _activeProvider->setLanguage(language);
-        _activeProvider->setVoiceDirectives(tempCfg.buildVoiceDirectives());
-        _activeProvider->setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+    // 6. Vérification des prérequis réseau si une connexion immédiate est requise depuis l'état hors-ligne
+    if (!currentlyOnline && connectIfDisconnected) {
+        bool netOk = false;
+        if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
+            netOk = (_wifi.isConnected() && _wifi.isTimeSynced());
+        } else {
+            netOk = (WiFi.status() == WL_CONNECTED && isSystemTimeValid());
+        }
+        if (!netOk) {
+            _lastError = "Reseau Wi-Fi non connecte ou horloge NTP non synchronisee";
+            Serial.printf("[VoiceKit] %s\n", _lastError.c_str());
+            if (_onProfileError) _onProfileError(_lastError);
+            if (_onError) _onError(_lastError);
+            return false;
+        }
     }
 
-    Serial.printf("[VoiceKit] Demande de nouveau profil vocal : Voix=%s | Langue=%s | Style=%s | Ton=%s%s%s\n",
-                  voice.c_str(), language.c_str(), voiceStyleToString(style), voiceToneToString(tone),
-                  accent.isEmpty() ? "" : " | Accent=", accent.isEmpty() ? "" : accent.c_str());
-    Serial.println("[VoiceKit] Reconnexion securisee pour prise en compte du nouveau profil vocal...");
+    // 7. Optimisation : si la session est déjà connectée avec exactement la même configuration acoustique,
+    //    ne pas ouvrir ni couper inutilement la session WebSocket (règle 4 Section 8).
+    if (currentlyOnline && profile.hasSameAcousticConfig(getVoiceProfile())) {
+        _preferredGender = profile.preferredGender;
+        if (_onProfileApplied) {
+            _onProfileApplied(getVoiceProfile());
+        }
+        return true;
+    }
 
+    // 8. Sauvegarde de l'état de repli atomique avant toute mutation de session
+    _rollbackConfig = _config;
+    _rollbackPreferredGender = _preferredGender;
+    _pendingProfile = profile;
+    _pendingVoice = profile.voiceId;
+    _pendingLanguage = profile.language;
+    _pendingStyle = profile.style;
+    _pendingTone = profile.tone;
+    _pendingAccent = profile.accent;
+
+    VoiceKitConfig tempCfg = _config;
+    VoiceProfileManager::applyToConfig(profile, tempCfg);
+    tempCfg.apiKey = targetKey;
+
+    // 9. Cas OpenAI déjà connecté sans changement de fournisseur et où session.update en place est autorisé
+    //    (aucun audio encore émis sur la session OU voix inchangée : modification langue/style/ton/accent)
+    if (currentlyOnline && !providerChanged &&
+        profile.provider == VoiceProviderType::OPENAI &&
+        _openaiClient.canUpdateVoiceInCurrentSession(profile.voiceId)) {
+        _profileChangePending = true;
+        _pendingProviderSwitch = false;
+        _openaiClient.setVoice(profile.voiceId);
+        _openaiClient.setLanguage(profile.language);
+        _openaiClient.setInputTranscriptionLanguage(tempCfg.inputTranscriptionLanguage);
+        _openaiClient.setVoiceDirectives(tempCfg.buildVoiceDirectives());
+        _openaiClient.setSystemInstruction(_conversationEnabled
+            ? tempCfg.resolveConversationInstruction()
+            : tempCfg.resolveSystemInstruction());
+
+        _session.markPendingSessionUpdate();
+        setState(VoiceState::CONNECTING_SERVICE);
+        _connectingStartTimeMs = millis();
+
+        if (!_openaiClient.requestSessionUpdate()) {
+            String updErr = _openaiClient.getLastError();
+            if (updErr.isEmpty()) updErr = "Echec envoi session.update OpenAI";
+            rollbackPendingProfileChange(updErr, true);
+            _lastError = updErr;
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) _onError(_lastError);
+            return false;
+        }
+        return true;
+    }
+
+    // 10. Transition complète par fermeture propre de la session active puis reconnexion sécurisée
+    //     (garantit zéro double session WebSocket concurrente)
+    Serial.printf("[VoiceKit] Demande de nouveau profil vocal (%s) : Voix=%s | Langue=%s | Style=%s | Ton=%s%s%s\n",
+                  voiceProviderTypeToString(profile.provider),
+                  profile.voiceId.c_str(), profile.language.c_str(),
+                  voiceStyleToString(profile.style), voiceToneToString(profile.tone),
+                  profile.accent.isEmpty() ? "" : " | Accent=",
+                  profile.accent.isEmpty() ? "" : profile.accent.c_str());
+
+    // Désactivation intentionnelle de la session précédente avant d'armer _profileChangePending
+    // afin que la fermeture volontaire ne soit pas interprétée comme une coupure réseau accidentelle.
     _session.deactivate();
+
+    _profileChangePending = true;
+    _pendingProviderSwitch = providerChanged;
+
+    String bindErr;
+    if (!bindProviderForConfig(tempCfg, &bindErr)) {
+        if (bindErr.isEmpty()) bindErr = "Echec preparation du fournisseur vocal";
+        rollbackPendingProfileChange(bindErr, true);
+        _lastError = bindErr;
+        setState(VoiceState::ERROR_STATE);
+        if (_onError) _onError(_lastError);
+        return false;
+    }
+
     setState(VoiceState::CONNECTING_SERVICE);
     _connectingStartTimeMs = millis();
 
     bool ok = _session.activate();
     if (!ok) {
-        // En cas d'échec immédiat d'activation, restaurer immédiatement le profil actif
-        if (_activeProvider) {
-            _activeProvider->setVoice(_config.voice);
-            _activeProvider->setLanguage(_config.language);
-            _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
-        }
-        _profileChangePending = false;
-        _lastError = "Echec activation session pour reconnexion profil";
+        String actErr = _session.getLastError();
+        if (actErr.isEmpty()) actErr = "Echec activation session pour reconnexion profil";
+        rollbackPendingProfileChange(actErr, true);
+        _lastError = actErr;
         setState(VoiceState::ERROR_STATE);
         if (_onError) _onError(_lastError);
         return false;
     }
 
     return true;
+}
+
+bool VoxCoreVoice::setVoiceProfile(const String& voice, const String& language,
+                                   VoiceStyle style, VoiceTone tone,
+                                   const String& accent) {
+    VoiceProfile target = getVoiceProfile();
+    target.voiceId = voice;
+    target.language = language;
+    target.style = style;
+    target.tone = tone;
+    target.accent = accent;
+    return applyVoiceProfile(target, false);
+}
+
+bool VoxCoreVoice::setProvider(VoiceProviderType provider, const String& voiceId) {
+    VoiceProfile target = getVoiceProfile();
+    target.provider = provider;
+    if (!voiceId.isEmpty()) {
+        target.voiceId = voiceId;
+    } else if (!_profileManager.isValidVoiceForProvider(provider, target.voiceId)) {
+        target.voiceId = _profileManager.getDefaultVoiceForProvider(provider, _preferredGender);
+    }
+    return applyVoiceProfile(target, false);
+}
+
+void VoxCoreVoice::setProviderApiKey(VoiceProviderType provider, const String& apiKey) {
+    if (provider == VoiceProviderType::OPENAI) {
+        _config.openAiApiKey = apiKey;
+    } else {
+        _config.geminiApiKey = apiKey;
+    }
+    if (_config.provider == provider) {
+        _config.apiKey = apiKey;
+        if (!isBusy() && !isConnecting() && (!_activeProvider || !_activeProvider->isConnected())) {
+            bindProviderForConfig(_config, nullptr);
+        }
+    }
+}
+
+bool VoxCoreVoice::saveVoiceProfile(const char* nvsNamespace) {
+    return _profileManager.saveActiveProfile(getVoiceProfile(), resolveProfileNvsNamespace(nvsNamespace));
+}
+
+bool VoxCoreVoice::loadVoiceProfile(bool applyImmediately, const char* nvsNamespace) {
+    VoiceProfile loaded;
+    bool wasRestored = false;
+    _profileManager.loadActiveProfile(loaded, _config.provider, &wasRestored, resolveProfileNvsNamespace(nvsNamespace));
+    if (!wasRestored) {
+        return false;
+    }
+    if (!applyImmediately) {
+        return true;
+    }
+    return applyVoiceProfile(loaded, false);
+}
+
+bool VoxCoreVoice::resetVoiceProfile(bool applyDefault, const char* nvsNamespace) {
+    bool cleared = _profileManager.resetActiveProfile(resolveProfileNvsNamespace(nvsNamespace));
+    if (!applyDefault) {
+        return cleared;
+    }
+    VoiceProfile def = _profileManager.getDefaultProfile(_config.provider);
+    return applyVoiceProfile(def, false);
+}
+
+bool VoxCoreVoice::hasSavedVoiceProfile(const char* nvsNamespace) const {
+    return _profileManager.hasSavedActiveProfile(resolveProfileNvsNamespace(nvsNamespace));
+}
+
+bool VoxCoreVoice::saveFavoriteProfile(uint8_t slot, const char* nvsNamespace) {
+    return _profileManager.saveFavoriteProfile(slot, getVoiceProfile(), resolveProfileNvsNamespace(nvsNamespace));
+}
+
+bool VoxCoreVoice::loadFavoriteProfile(uint8_t slot, bool applyImmediately, const char* nvsNamespace) {
+    VoiceProfile fav;
+    if (!_profileManager.loadFavoriteProfile(slot, fav, resolveProfileNvsNamespace(nvsNamespace))) {
+        return false;
+    }
+    if (!applyImmediately) {
+        return true;
+    }
+    return applyVoiceProfile(fav, false);
 }
 
 bool VoxCoreVoice::setVoice(const String& voice) {
@@ -1228,13 +1581,13 @@ bool VoxCoreVoice::setAccent(const String& accent) {
 bool VoxCoreVoice::setSystemInstruction(const String& instruction) {
     _config.systemInstruction = instruction;
     if (_activeProvider && !_conversationEnabled) {
-        _activeProvider->setSystemInstruction(instruction);
+        _activeProvider->setSystemInstruction(_config.resolveSystemInstruction());
     }
     return true;
 }
 
 // =============================================================================
-// Implémentation Conversation Bidirectionnelle (v0.4.0 / v0.4.1.1 / v0.6.0)
+// Implémentation Conversation Bidirectionnelle (v0.4.0 / v0.4.1.1 / v0.6.0 / v0.6.6)
 // =============================================================================
 
 bool VoxCoreVoice::enableConversation(bool enable) {
@@ -1262,7 +1615,7 @@ bool VoxCoreVoice::enableConversation(bool enable) {
         _conversationEnabled = enable;
         _config.enableConversation = enable;
         if (_activeProvider) {
-            _activeProvider->setSystemInstruction(enable ? _config.conversationInstruction : _config.systemInstruction);
+            _activeProvider->setSystemInstruction(enable ? _config.resolveConversationInstruction() : _config.resolveSystemInstruction());
             _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
             _activeProvider->setConversationMode(enable);
         }
@@ -1277,7 +1630,7 @@ bool VoxCoreVoice::enableConversation(bool enable) {
     _conversationEnabled = enable;
     _config.enableConversation = enable;
     if (_activeProvider) {
-        _activeProvider->setSystemInstruction(enable ? _config.conversationInstruction : _config.systemInstruction);
+        _activeProvider->setSystemInstruction(enable ? _config.resolveConversationInstruction() : _config.resolveSystemInstruction());
         _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
         _activeProvider->setConversationMode(enable);
     }
@@ -1295,7 +1648,7 @@ bool VoxCoreVoice::enableConversation(bool enable) {
         _conversationEnabled = _previousConversationMode;
         _config.enableConversation = _previousConversationMode;
         if (_activeProvider) {
-            _activeProvider->setSystemInstruction(_conversationEnabled ? _config.conversationInstruction : _config.systemInstruction);
+            _activeProvider->setSystemInstruction(_conversationEnabled ? _config.resolveConversationInstruction() : _config.resolveSystemInstruction());
             _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
             _activeProvider->setConversationMode(_conversationEnabled);
         }
@@ -1377,7 +1730,14 @@ bool VoxCoreVoice::startListening() {
         }
     }
 
-    // 3. Vérification de la disponibilité du fournisseur vocal actif
+    // 3. Vérification de la clé API et de la disponibilité du fournisseur vocal actif
+    if (_config.getApiKeyForProvider(_config.provider).isEmpty()) {
+        _lastError = String("Cle API manquante pour le fournisseur ") + voiceProviderTypeToString(_config.provider);
+        Serial.printf("[VoiceKit] startListening() refuse : %s\n", _lastError.c_str());
+        if (_onError) _onError(_lastError);
+        return false;
+    }
+
     if (!_activeProvider || !_activeProvider->isConnected() || !_activeProvider->isSetupComplete()) {
         _lastError = "Session vocale non prete";
         Serial.printf("[VoiceKit] startListening() refuse : %s\n", _lastError.c_str());
@@ -1658,7 +2018,7 @@ bool VoxCoreVoice::enableWakeWordConversation(bool enable) {
     _conversationEnabled = true;
     _config.enableConversation = true;
     if (_activeProvider) {
-        _activeProvider->setSystemInstruction(_config.conversationInstruction);
+        _activeProvider->setSystemInstruction(_config.resolveConversationInstruction());
         _activeProvider->setVoiceDirectives(_config.buildVoiceDirectives());
         _activeProvider->setConversationMode(true);
     }

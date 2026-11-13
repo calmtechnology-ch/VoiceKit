@@ -119,11 +119,14 @@ bool OpenAIRealtimeClient::decodeBase64(const char* input, size_t inLen, std::ve
 }
 
 bool OpenAIRealtimeClient::begin(const VoiceKitConfig& config) {
-    _apiKey = config.apiKey;
-    _apiKey.trim();
+    _apiKey = config.getApiKeyForProvider(VoiceProviderType::OPENAI);
+    if (_apiKey.isEmpty()) {
+        _apiKey = config.apiKey;
+        _apiKey.trim();
+    }
 
     if (_apiKey.isEmpty()) {
-        _lastError = "Cle API OpenAI manquante (config.apiKey est vide)";
+        _lastError = "Cle API OpenAI manquante (config.apiKey / config.openAiApiKey est vide)";
         Serial.printf("[OpenAIClient] ERREUR : %s\n", _lastError.c_str());
         return false;
     }
@@ -135,7 +138,7 @@ bool OpenAIRealtimeClient::begin(const VoiceKitConfig& config) {
         _model = config.model;
     }
 
-    // Sélection de la voix Realtime : si non spécifiée ou voix Gemini, repli vers alloy
+    // Sélection de la voix Realtime : si non spécifiée ou voix Gemini par défaut, repli vers alloy
     if (config.voice.isEmpty() || config.voice == VOICEKIT_DEFAULT_VOICE) {
         _voice = OPENAI_REALTIME_DEFAULT_VOICE;
     } else {
@@ -143,10 +146,11 @@ bool OpenAIRealtimeClient::begin(const VoiceKitConfig& config) {
     }
 
     _language = config.language;
+    _inputTranscriptionLanguage = config.inputTranscriptionLanguage;
     _conversationMode = config.enableConversation;
     _voiceDirectives = config.buildVoiceDirectives();
 
-    String baseInst = _conversationMode ? config.conversationInstruction : config.systemInstruction;
+    String baseInst = _conversationMode ? config.resolveConversationInstruction() : config.resolveSystemInstruction();
     _systemInstruction = config.buildEffectiveInstruction(baseInst);
 
     Serial.printf("[OpenAIClient] Initialise : Modele=%s | Voix=%s | Langue=%s | Mode=%s (Cle masquee)\n",
@@ -172,8 +176,17 @@ void OpenAIRealtimeClient::resetTurnRxMetrics() {
 }
 
 bool OpenAIRealtimeClient::connect() {
-    disconnect();
+    if (_transport && _transport->isConnected()) {
+        // Fermeture silencieuse d'une éventuelle session résiduelle sans déclencher un événement
+        // de déconnexion parasite sur la nouvelle tentative en cours d'activation.
+        _transport->setHandlers(nullptr, nullptr, nullptr, nullptr);
+        _transport->disconnect();
+    }
+    _connected.store(false, std::memory_order_release);
+    _setupComplete.store(false, std::memory_order_release);
     resetTurnRxMetrics();
+    _audioEmittedInSession.store(false, std::memory_order_release);
+    _confirmedSessionVoice = "";
     _connectAttempts++;
     _lastError = "";
     _wsConnectStartTimeMs = millis();
@@ -244,6 +257,8 @@ void OpenAIRealtimeClient::disconnect() {
     _connected.store(false, std::memory_order_release);
     _setupComplete.store(false, std::memory_order_release);
     _waitingForResponse.store(false, std::memory_order_release);
+    _audioEmittedInSession.store(false, std::memory_order_release);
+    _confirmedSessionVoice = "";
     recordWsProcessDurationUs(micros() - t0Us);
 }
 
@@ -255,6 +270,8 @@ void OpenAIRealtimeClient::requestDisconnect() {
     _connected.store(false, std::memory_order_release);
     _setupComplete.store(false, std::memory_order_release);
     _waitingForResponse.store(false, std::memory_order_release);
+    _audioEmittedInSession.store(false, std::memory_order_release);
+    _confirmedSessionVoice = "";
     recordWsProcessDurationUs(micros() - t0Us);
 }
 
@@ -268,6 +285,8 @@ bool OpenAIRealtimeClient::pollDisconnect() {
         _connected.store(false, std::memory_order_release);
         _setupComplete.store(false, std::memory_order_release);
         _waitingForResponse.store(false, std::memory_order_release);
+        _audioEmittedInSession.store(false, std::memory_order_release);
+        _confirmedSessionVoice = "";
     }
     recordWsProcessDurationUs(micros() - t0Us);
     return done;
@@ -293,24 +312,61 @@ void OpenAIRealtimeClient::setTransport(ILiveTransport* transport) {
     }
 }
 
+bool OpenAIRealtimeClient::requestSessionUpdate() {
+    if (!isConnected()) {
+        _lastError = "Session OpenAI non connectee pour session.update";
+        return false;
+    }
+    if (!canUpdateVoiceInCurrentSession(_voice)) {
+        _lastError = "Modification de voix interdite sur une session OpenAI ayant deja emis de l'audio (reconnexion requise)";
+        Serial.printf("[OpenAIClient] %s\n", _lastError.c_str());
+        return false;
+    }
+    _setupComplete.store(false, std::memory_order_release);
+    sendSessionUpdate();
+    return true;
+}
+
 void OpenAIRealtimeClient::sendSessionUpdate() {
     if (!isConnected()) return;
 
     _setupStartTimeMs = millis();
 
-    String langHint = _language;
-    langHint.trim();
-    if (langHint.startsWith("fr")) langHint = "fr";
-    else if (langHint.startsWith("en")) langHint = "en";
-    else if (langHint.startsWith("es")) langHint = "es";
-    else if (langHint.startsWith("de")) langHint = "de";
-    else if (langHint.startsWith("it")) langHint = "it";
+    // 1. Construction cohérente de l'instruction système effective + directives vocales
+    String effectiveInst = _systemInstruction;
+    effectiveInst.trim();
+    if (!_voiceDirectives.isEmpty() && effectiveInst.indexOf("[Directives vocales]") < 0) {
+        if (!effectiveInst.isEmpty()) {
+            effectiveInst += " [Directives vocales] " + _voiceDirectives;
+        } else {
+            effectiveInst = _voiceDirectives;
+        }
+    }
+
+    // 2. Séparation stricte : langue de transcription d'entrée (ISO-639-1 whisper-1) vs langue de synthèse
+    String langHint = "";
+    String customInputLang = _inputTranscriptionLanguage;
+    customInputLang.trim();
+    if (customInputLang.equalsIgnoreCase("auto")) {
+        langHint = ""; // Autodétection Whisper explicite
+    } else if (!customInputLang.isEmpty()) {
+        langHint = VoiceKitConfig::extractPrimaryIso2(customInputLang);
+    } else {
+        langHint = VoiceKitConfig::extractPrimaryIso2(_language);
+    }
+
+    // 3. Protection protocole OpenAI Realtime : ne jamais transmettre une nouvelle voix
+    //    dans session.update si de l'audio a déjà été produit sur la session active.
+    String voiceForPayload = _voice;
+    if (_audioEmittedInSession.load(std::memory_order_acquire) && !_confirmedSessionVoice.isEmpty()) {
+        voiceForPayload = _confirmedSessionVoice;
+    }
 
     String payload = "{";
     payload += "\"type\":\"session.update\",";
     payload += "\"session\":{";
     payload += "\"type\":\"realtime\",";
-    payload += "\"instructions\":\"" + escapeJsonString(_systemInstruction) + "\",";
+    payload += "\"instructions\":\"" + escapeJsonString(effectiveInst) + "\",";
     payload += "\"audio\":{";
     payload += "\"input\":{";
     payload += "\"turn_detection\":null,";
@@ -322,14 +378,14 @@ void OpenAIRealtimeClient::sendSessionUpdate() {
     payload += "}";
     payload += "},";
     payload += "\"output\":{";
-    payload += "\"voice\":\"" + escapeJsonString(_voice) + "\"";
+    payload += "\"voice\":\"" + escapeJsonString(voiceForPayload) + "\"";
     payload += "}";
     payload += "}";
     payload += "}";
     payload += "}";
 
-    Serial.printf("[OpenAIClient] Envoi session.update GA (Voix=%s, turn_detection=null)...\n",
-                  _voice.c_str());
+    Serial.printf("[OpenAIClient] Envoi session.update GA (Voix=%s, TranscrISO=%s, turn_detection=null)...\n",
+                  voiceForPayload.c_str(), langHint.isEmpty() ? "auto" : langHint.c_str());
     _transport->send(payload.c_str(), payload.length());
 }
 
@@ -560,8 +616,11 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     // 2. Confirmation de mise à jour des paramètres de session
     else if (strcmp(evType, "session.updated") == 0) {
         _setupCompleteDurationMs = millis() - _setupStartTimeMs;
-        Serial.printf("[OpenAIClient] Session OpenAI Realtime prete (setupComplete en %u ms)\n",
-                      (unsigned)_setupCompleteDurationMs);
+        if (!_audioEmittedInSession.load(std::memory_order_acquire) || _confirmedSessionVoice.isEmpty()) {
+            _confirmedSessionVoice = _voice;
+        }
+        Serial.printf("[OpenAIClient] Session OpenAI Realtime prete (setupComplete en %u ms, Voix=%s)\n",
+                      (unsigned)_setupCompleteDurationMs, _confirmedSessionVoice.c_str());
         _setupComplete.store(true, std::memory_order_release);
         if (_onSetupComplete) _onSetupComplete();
     }
@@ -617,6 +676,7 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     }
     // 4. Paquet audio streaming PCM16 24 kHz (GA: response.output_audio.delta, Beta: response.audio.delta)
     else if (strcmp(evType, "response.output_audio.delta") == 0 || strcmp(evType, "response.audio.delta") == 0) {
+        _audioEmittedInSession.store(true, std::memory_order_release);
         cJSON* respIdItem = cJSON_GetObjectItemCaseSensitive(root, "response_id");
         if (respIdItem && cJSON_IsString(respIdItem) && respIdItem->valuestring) {
             if (isResponseCancelled(respIdItem->valuestring)) {

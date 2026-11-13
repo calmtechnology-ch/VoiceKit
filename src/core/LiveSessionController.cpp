@@ -336,6 +336,18 @@ void LiveSessionController::finishTurn() {
                                       LiveAudioPlayer *player) {
       if (!provider || !player)
         return false;
+      if (_provider && _provider != provider) {
+        _provider->setOnConnected(nullptr);
+        _provider->setOnDisconnected(nullptr);
+        _provider->setOnError(nullptr);
+        _provider->setOnAudioData(nullptr);
+        _provider->setOnOutputTranscription(nullptr);
+        _provider->setOnOutputTranscriptionWithFinal(nullptr);
+        _provider->setOnText(nullptr);
+        _provider->setOnTurnComplete(nullptr);
+        _provider->setOnInterrupted(nullptr);
+        _provider->setOnSetupComplete(nullptr);
+      }
       _provider = provider;
       _player = player;
 
@@ -678,6 +690,16 @@ void LiveSessionController::finishTurn() {
         transitionTo(LiveSessionState::CONNECTED,
                      "Cloture locale avant fin session");
       }
+    }
+
+    void LiveSessionController::markPendingSessionUpdate() {
+      _deactivating = false;
+      _lastError[0] = '\0';
+      _turnActive.store(false, std::memory_order_release);
+      _turnCancelled.store(false, std::memory_order_release);
+      _reconnectAttempts = 0;
+      transitionTo(LiveSessionState::CONNECTING,
+                   "Negociation session.update en cours");
     }
 
     void LiveSessionController::tick() {

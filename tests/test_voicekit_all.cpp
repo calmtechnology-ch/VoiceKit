@@ -4620,11 +4620,12 @@ void test_v0531_facade_modes_transitions_and_resilience() {
   cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
   vk.begin(cfg);
 
-  // 1. Constante de version alignée sur v0.6.5.2, v0.6.5.1 ou v0.6.5
-  TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.5.2") == 0 ||
+  // 1. Constante de version alignée sur v0.6.6 (ou versions 0.6.5.x précédentes)
+  TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.6") == 0 ||
+                  strcmp(VOICEKIT_VERSION, "v0.6.5.2") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.5.1") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.5") == 0,
-              "VOICEKIT_VERSION est v0.6.5.2, v0.6.5.1 ou v0.6.5");
+              "VOICEKIT_VERSION est v0.6.6");
 
   // 2. Mode par défaut IDLE
   TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode initial = IDLE");
@@ -10754,6 +10755,7 @@ void test_v06432_final_event_correlation_validation() {
 #include "test_pipeline_suites.h"
 #include "test_v0652_transcription_suites.h"
 #include "test_v0652_examples_corrective_suites.h"
+#include "test_v066_universal_voice_profiles_suites.h"
 
 // =============================================================================
 // MAIN TEST RUNNER
@@ -10976,6 +10978,9 @@ int main() {
 
   // Suite VoiceKit v0.6.5.2 — Examples Corrective (MinimalSTT & IntegratedVoiceDemo)
   run_examples_minimal_corrective_v0652_tests();
+
+  // Suite VoiceKit v0.6.6 — Universal Voice Profiles (Scénarios 1 à 20 & non-régression)
+  run_universal_voice_profiles_v066_tests();
 
   std::cout << "\n==========================================================="
             << std::endl;

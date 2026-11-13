@@ -7,6 +7,31 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.6] - 2026-11-13 (Universal Voice Profiles)
+
+Version fonctionnelle introduisant le système unifié de **Profils Vocaux Universels (`VoiceProfileManager` + `VoiceProfile`)** compatible avec **Google Gemini Live** et **OpenAI Realtime**, utilisable depuis C++ ou LVGL 9, sans création de second moteur vocal ni régression de l'existant.
+
+### Ajouté
+- **Module indépendant `VoiceProfileManager` (`src/VoiceProfileManager.h/.cpp`)** :
+  - Structure `VoiceProfile` (`provider`, `language`, `voiceId`, `preferredGender`, `style`, `tone`, `accent`) et énumération indicative `VoiceGender` (`ANY`, `FEMININE`, `MASCULINE`, `NEUTRAL`).
+  - Catalogue extensible de voix prédéfinies : Gemini Live (`Aoede`, `Kore`, `Leda`, `Autonoe`, `Puck`, `Charon`, `Fenrir`, `Orus`, `Zephyr`, `Umbriel`) et OpenAI Realtime (`alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`) + `registerCustomVoice()` sans réallocation dynamique en boucle.
+  - Catalogue multilingue BCP-47 (`fr-FR`, `fr-CH`, `en-US`, `en-GB`, `de-DE`, `it-IT`, `es-ES`) extensible via `registerCustomLanguage()` et validateur syntaxique RFC 5646 `isValidLanguageCode()`.
+  - Persistance NVS sur ESP32-S3 (`Preferences`) avec numéro de schéma (`VOICEKIT_PROFILE_SCHEMA_VERSION = 1`), somme de contrôle CRC32, repli automatique sans blocage en cas de corruption, 4 emplacements favoris (`0..3`), et **exclusion absolue des clés API**.
+- **Nouvelles API publiques dans `VoxCoreVoice` et la façade `VoiceKit`** :
+  - `applyVoiceProfile()`, `setVoiceProfile(const VoiceProfile&)`, `getVoiceProfile()`, `setProvider()`, `getProviderType()`, `setPreferredGender()`, `getPreferredGender()`.
+  - Gestion multi-clés : `geminiApiKey`, `openAiApiKey`, `setProviderApiKey()`, `getProviderApiKey()`, `hasProviderApiKey()`.
+  - Persistance directe : `saveVoiceProfile()`, `loadVoiceProfile()`, `resetVoiceProfile()`, `hasSavedVoiceProfile()`, `saveFavoriteProfile()`, `loadFavoriteProfile()`.
+  - Événements de confirmation et d'erreur : `onProfileApplied()` et `onProfileError()`.
+- **Suite de tests automatisés 150 (`tests/test_v066_universal_voice_profiles_suites.h`)** : validation des 20 scénarios obligatoires (Gemini, OpenAI, styles/tons/accents, rejets croisés, verrouillage de voix OpenAI après audio, coupure réseau + rollback, NVS + corruption CRC/schéma, non-régression PTT/callbacks/outils locaux).
+
+### Modifié
+- **`VoiceKitConfig` (`src/VoiceKitConfig.h`)** : instructions système, conversationnelles et préfixes d'invites multilingues cohérents avec la langue choisie (`resolveSystemInstruction()`, `resolveConversationInstruction()`, `resolvePromptPrefix()`, `resolveAiPromptPrefix()`) sans écraser les consignes métier personnalisées ni traduire les textes TTS verbatim ; prise en charge native de `fr-CH`, `en-GB`, `it-IT`, `es-ES` dans `buildVoiceDirectives()`.
+- **`OpenAIRealtimeClient` (`src/core/OpenAIRealtimeClient.h/.cpp`)** : fusion systématique des directives vocales lors des mises à jour dynamiques, séparation explicite entre langue de transcription d'entrée (`inputTranscriptionLanguage` ISO-639-1) et langue de synthèse, et suivi d'émission audio par session (`hasAudioEmittedInSession()`, `canUpdateVoiceInCurrentSession()`, `requestSessionUpdate()`) interdisant toute mutation de voix illégale sur une session ayant déjà produit de l'audio.
+- **`LiveSessionController` (`src/core/LiveSessionController.h/.cpp`)** : nettoyage des callbacks de l'ancien fournisseur lors d'une bascule et support de `markPendingSessionUpdate()`.
+- **`examples/VoiceSettingsDemo`** : migration vers une interface tactile **LVGL 9** (`320 × 240`, polices UTF-8 françaises) en 4 écrans (*Fournisseur & langue*, *Choix de la voix + Tester*, *Personnalisation + Enregistrer*, *Validation*).
+
+---
+
 ## [Non publié] - 2026-11-10 (Réorganisation du dépôt & mise à jour de la documentation)
 
 ### Modifié
