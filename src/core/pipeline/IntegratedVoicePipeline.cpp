@@ -81,6 +81,24 @@ bool IntegratedVoicePipeline::begin(VoxCoreVoice& voice, ToolRegistry& tools, Vo
     });
 
     _voice->onSpeechStarted([this]() {
+        if (_cancelledTurnId != 0 && _activeTurnId == _cancelledTurnId) {
+            return;
+        }
+
+        // Ne traiter que si un son est attendu dans le tour actif
+        if (_state != PipelineState::SPEAKING && 
+            _state != PipelineState::AI_PROCESSING && 
+            _state != PipelineState::WAITING_CONFIRMATION) {
+            return;
+        }
+
+        // Pour une restitution locale, corrélation speechId stricte si disponible
+        if (_activeSpeechId != 0 && _voice != nullptr && _voice->getActiveSpeechId() != 0) {
+            if (_voice->getActiveSpeechId() != _activeSpeechId) {
+                return;
+            }
+        }
+
         _speechWaitingStart = false;
         _speechStartTimeMs = millis();
         if (_state == PipelineState::WAITING_CONFIRMATION) {
@@ -91,13 +109,18 @@ bool IntegratedVoicePipeline::begin(VoxCoreVoice& voice, ToolRegistry& tools, Vo
             setState(PipelineState::SPEAKING);
         }
         if (_onSpeechStarted) {
-            _onSpeechStarted(_activeTurnId, _voice->getActiveSpeechId());
+            _onSpeechStarted(_activeTurnId, _voice ? _voice->getActiveSpeechId() : _activeSpeechId);
         }
     });
 
     _voice->onSpeechFinishedWithId([this](uint32_t finishedSpeechId) {
         if (_cancelledTurnId != 0 && _activeTurnId == _cancelledTurnId) {
             // Tour annulé : fin résiduelle ignorée
+            return;
+        }
+
+        if (_state != PipelineState::SPEAKING && _state != PipelineState::WAITING_CONFIRMATION) {
+            // Pas en train de restituer de l'audio : notification orpheline rejetée
             return;
         }
 
@@ -121,7 +144,7 @@ bool IntegratedVoicePipeline::begin(VoxCoreVoice& voice, ToolRegistry& tools, Vo
         if (_state == PipelineState::SPEAKING) {
             if (_isAiSpeechActive) {
                 // Pour une réponse IA, mémoriser dans ReplyMemory après restitution complète
-                if (_lastAiResponse.isEmpty()) {
+                if (_lastAiResponse.isEmpty() && _voice != nullptr) {
                     _lastAiResponse = _voice->getLastAssistantText();
                 }
                 if (_shouldRememberReply && _voiceUx != nullptr && !_lastAiResponse.isEmpty()) {
@@ -145,6 +168,15 @@ bool IntegratedVoicePipeline::begin(VoxCoreVoice& voice, ToolRegistry& tools, Vo
 
     _voice->onAssistantText([this](const String& text) {
         if (_cancelledTurnId != 0 && _activeTurnId == _cancelledTurnId) {
+            return;
+        }
+        if (!_isAiSpeechActive) {
+            return;
+        }
+        if (_state != PipelineState::AI_PROCESSING && _state != PipelineState::SPEAKING) {
+            return;
+        }
+        if (text.isEmpty() || text == _lastAiResponse) {
             return;
         }
         _lastAiResponse = text;
@@ -186,17 +218,56 @@ void IntegratedVoicePipeline::setState(PipelineState newState) {
 }
 
 bool IntegratedVoicePipeline::startListening() {
-    if (_state != PipelineState::READY && _state != PipelineState::WAITING_CONFIRMATION &&
-        _state != PipelineState::ERROR && !_isPaused) {
+    // 1. Validation stricte de l'état : capture autorisée uniquement depuis READY ou WAITING_CONFIRMATION
+    // Refus formel depuis LISTENING, TRANSCRIBING, ROUTING, LOCAL_PROCESSING,
+    // TOOL_EXECUTING, AI_PROCESSING, SPEAKING, STOPPING, ERROR et UNINITIALIZED.
+    if (_state != PipelineState::READY && _state != PipelineState::WAITING_CONFIRMATION) {
         return false;
     }
 
-    // Si une confirmation était en attente, l'annuler proprement
-    if (_state == PipelineState::WAITING_CONFIRMATION) {
-        rejectPendingAction();
+    // 2. Disponibilité réelle du moteur vocal et des ressources audio
+    if (_voice != nullptr) {
+        if (!_voice->isReady() || _voice->isBusy() ||
+            _voice->isSpeaking() || _voice->isListening() || _voice->isTranscribing() ||
+            _voice->getState() == VoiceState::ERROR_STATE || 
+            _voice->getState() == VoiceState::CONNECTING_WIFI) {
+            return false;
+        }
     }
 
-    _activeTurnId = ++_turnCounter;
+    // 3. Sauvegarde de l'état si confirmation en attente pour garantir l'atomicité
+    String prevTok = _pendingConfirmationToken;
+    String prevTool = _pendingToolId;
+    PipelineState prevState = _state;
+
+    if (_state == PipelineState::WAITING_CONFIRMATION) {
+        if (_tools != nullptr) {
+            _tools->cancelPending();
+        }
+        if (_voice != nullptr) {
+            _voice->stop();
+        }
+        _pendingConfirmationToken = "";
+        _pendingToolId = "";
+    }
+
+    // 4. Engagement transactionnel de la capture auprès du moteur vocal
+    if (_voice != nullptr) {
+        if (!_voice->startListening()) {
+            // Restauration exacte du tour et des jetons si la capture échoue
+            _state = prevState;
+            _pendingConfirmationToken = prevTok;
+            _pendingToolId = prevTool;
+            return false;
+        }
+        _activeTurnId = _voice->getActiveCaptureTurnId();
+        if (_activeTurnId == 0) {
+            _activeTurnId = ++_turnCounter;
+        }
+    } else {
+        _activeTurnId = ++_turnCounter;
+    }
+
     _cancelledTurnId = 0;
     _lastResult = PipelineResult::NONE;
     _lastDestination = PipelineDestination::NONE;
@@ -213,17 +284,6 @@ bool IntegratedVoicePipeline::startListening() {
 
     setState(PipelineState::LISTENING);
 
-    if (_voice != nullptr) {
-        if (!_voice->startListening()) {
-            setState(PipelineState::READY);
-            return false;
-        }
-        _activeTurnId = _voice->getActiveCaptureTurnId();
-        if (_activeTurnId == 0) {
-            _activeTurnId = _turnCounter;
-        }
-    }
-
     if (_onListeningStarted) {
         _onListeningStarted(_activeTurnId);
     }
@@ -235,15 +295,26 @@ bool IntegratedVoicePipeline::stopListening() {
         return false;
     }
 
-    setState(PipelineState::TRANSCRIBING);
+    if (_voice != nullptr) {
+        bool ok = _voice->stopListening();
+        if (!ok) {
+            if (!_voice->isListening()) {
+                finishTurn(PipelineResult::FAILED, "Echec arret capture micro");
+                setState(PipelineState::ERROR);
+            }
+            return false;
+        }
+    }
+
+    // Si un callback synchrone (ex: transcription reçue) n'a pas déjà fait progresser l'état
+    if (_state == PipelineState::LISTENING) {
+        setState(PipelineState::TRANSCRIBING);
+    }
 
     if (_onListeningFinished) {
         _onListeningFinished(_activeTurnId);
     }
 
-    if (_voice != nullptr) {
-        return _voice->stopListening();
-    }
     return true;
 }
 
@@ -252,6 +323,8 @@ void IntegratedVoicePipeline::cancel() {
     _isPaused = false;
     _speechWaitingStart = false;
     _shouldRememberReply = false;
+    _isAiSpeechActive = false;
+    _activeSpeechId = 0;
 
     if (_tools != nullptr) {
         _tools->cancelPending();
@@ -263,7 +336,6 @@ void IntegratedVoicePipeline::cancel() {
 
     _pendingConfirmationToken = "";
     _pendingToolId = "";
-    _isAiSpeechActive = false;
 
     if (_onStopped) {
         _onStopped(_cancelledTurnId);
@@ -316,6 +388,9 @@ void IntegratedVoicePipeline::update() {
             if (_config.confirmationTimeoutMs > 0 && (now - _confirmationStartTimeMs > _config.confirmationTimeoutMs)) {
                 if (_tools != nullptr) {
                     _tools->cancelPending();
+                }
+                if (_voice != nullptr) {
+                    _voice->stop();
                 }
                 _pendingConfirmationToken = "";
                 _pendingToolId = "";
@@ -713,6 +788,10 @@ bool IntegratedVoicePipeline::rejectPendingAction(const String& token) {
         _tools->cancelPending();
     }
 
+    if (_voice != nullptr) {
+        _voice->stop();
+    }
+
     _pendingConfirmationToken = "";
     _pendingToolId = "";
     _lastResult = PipelineResult::CANCELLED;
@@ -722,16 +801,29 @@ bool IntegratedVoicePipeline::rejectPendingAction(const String& token) {
 }
 
 bool IntegratedVoicePipeline::recoverFromError() {
-    if (_state == PipelineState::ERROR) {
-        _cancelledTurnId = 0;
-        _isAiSpeechActive = false;
-        _speechWaitingStart = false;
-        _shouldRememberReply = false;
-        _pendingConfirmationToken = "";
-        setState(PipelineState::READY);
-        return true;
+    if (_state != PipelineState::ERROR) {
+        return false;
     }
-    return false;
+
+    // Le moteur vocal doit être opérationnel, connecté et non occupé
+    if (_voice != nullptr) {
+        if (!_voice->isReady() || _voice->isBusy() ||
+            _voice->isListening() || _voice->isTranscribing() || _voice->isSpeaking()) {
+            return false;
+        }
+    }
+
+    _cancelledTurnId = 0;
+    _activeSpeechId = 0;
+    _isAiSpeechActive = false;
+    _speechWaitingStart = false;
+    _shouldRememberReply = false;
+    _pendingConfirmationToken = "";
+    _pendingToolId = "";
+    _finalTranscriptionReceivedForTurn = false;
+
+    setState(PipelineState::READY);
+    return true;
 }
 
 void IntegratedVoicePipeline::finishTurn(PipelineResult result, const String& summary) {

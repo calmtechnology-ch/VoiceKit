@@ -4620,10 +4620,7 @@ void test_v0531_facade_modes_transitions_and_resilience() {
   cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
   vk.begin(cfg);
 
-  // 1. Constante de version alignée sur v0.6.5
-  TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.5") == 0,
-              "VOICEKIT_VERSION est strictement v0.6.5");
-  // 1. Constante de version alignée sur v0.6.5 ou v0.6.5.1
+  // 1. Constante de version alignée sur v0.6.5.1 ou v0.6.5
   TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.5.1") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.5") == 0,
               "VOICEKIT_VERSION est v0.6.5.1 ou v0.6.5");
@@ -10963,6 +10960,10 @@ int main() {
   // Suite VoiceKit v0.6.5.1 — Integrated Pipeline Stabilization (Tests A, B, C,
   // D, E, F, G, H, I & J)
   run_pipeline_v0651_tests();
+
+  // Suite VoiceKit v0.6.5.1 — Final Corrective & Hardware Readiness (Tests A, B, C,
+  // D, E, F, G, H, I & J)
+  run_pipeline_v0651_final_stabilization_tests();
 
   std::cout << "\n==========================================================="
             << std::endl;

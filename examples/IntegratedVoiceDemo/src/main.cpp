@@ -62,6 +62,7 @@ static constexpr uint32_t DRAW_BUF_LINES = 20;
 alignas(4) static uint8_t s_drawBuf[SCREEN_WIDTH * DRAW_BUF_LINES * sizeof(uint16_t)];
 
 // Widgets UI
+static lv_obj_t* s_lblTitle         = nullptr;
 static lv_obj_t* s_lblStateBadge    = nullptr;
 static lv_obj_t* s_lblUserText      = nullptr;
 static lv_obj_t* s_lblResponseText  = nullptr;
@@ -70,6 +71,9 @@ static lv_obj_t* s_lblConfirmPrompt = nullptr;
 static lv_obj_t* s_btnPtt           = nullptr;
 static lv_obj_t* s_lblPtt           = nullptr;
 static lv_obj_t* s_btnStop          = nullptr;
+
+// Fournisseur vocal IA actif
+static VoiceProviderType s_activeProviderType = VoiceProviderType::GEMINI;
 
 // Tampons de texte pour découplage thread-safe
 static char s_userTextBuf[256]     = "Appuyez sur PARLER pour dicter une commande.";
@@ -128,19 +132,28 @@ static void updatePttUi(bool isListening, bool isSpeaking, bool isReady) {
 static void onPttButtonEvent(lv_event_t* e) {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_PRESSED) {
-        if (!s_voice.isReady()) {
-            Serial.println("[UI] PTT Pressé mais service vocal pas encore prêt.");
-            snprintf(s_userTextBuf, sizeof(s_userTextBuf), "Service vocal non prêt (connexion en cours)...");
+        if (!s_voice.isReady() || !s_pipeline.isReady()) {
+            Serial.printf("[UI] PTT Pressé mais non prêt (voiceReady=%d, pipeState=%s, paused=%d)\n",
+                          s_voice.isReady(), pipelineStateToString(s_pipeline.getState()), s_pipeline.isPaused());
+            snprintf(s_userTextBuf, sizeof(s_userTextBuf), "Système indisponible (%s)...",
+                     pipelineStateToString(s_pipeline.getState()));
             s_userTextDirty = true;
             updatePttUi(false, false, false);
             return;
         }
         Serial.println("[UI] PTT Pressed -> startListening()");
-        s_pipeline.startListening();
+        if (!s_pipeline.startListening()) {
+            Serial.println("[UI] startListening() refusé par le pipeline.");
+            snprintf(s_userTextBuf, sizeof(s_userTextBuf), "Écoute refusée (état incompatible)...");
+            s_userTextDirty = true;
+            updatePttUi(false, false, false);
+        }
     } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
         if (s_pipeline.getState() == PipelineState::LISTENING) {
             Serial.println("[UI] PTT Released -> stopListening()");
-            s_pipeline.stopListening();
+            if (!s_pipeline.stopListening()) {
+                Serial.println("[UI] Avertissement: stopListening() refusé.");
+            }
         }
     }
 }
@@ -188,11 +201,14 @@ static void createUi() {
     lv_obj_set_style_pad_all(header, 0, 0);
     lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t* lblTitle = lv_label_create(header);
-    lv_label_set_text(lblTitle, "VoiceKit v0.6.5.1 Pipeline");
-    lv_obj_set_style_text_font(lblTitle, &font_french_bold_16, 0);
-    lv_obj_set_style_text_color(lblTitle, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(lblTitle, LV_ALIGN_LEFT_MID, 6, 0);
+    s_lblTitle = lv_label_create(header);
+    char titleBuf[64];
+    snprintf(titleBuf, sizeof(titleBuf), "VoiceKit — %s",
+             (s_activeProviderType == VoiceProviderType::OPENAI) ? "OpenAI" : "Gemini");
+    lv_label_set_text(s_lblTitle, titleBuf);
+    lv_obj_set_style_text_font(s_lblTitle, &font_french_bold_16, 0);
+    lv_obj_set_style_text_color(s_lblTitle, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_align(s_lblTitle, LV_ALIGN_LEFT_MID, 6, 0);
 
     s_lblStateBadge = lv_label_create(header);
     lv_label_set_text(s_lblStateBadge, "CONNEXION...");
@@ -438,12 +454,53 @@ void setup() {
     Serial.begin(115200);
     delay(200);
 
-    Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.6.5 — Integrated Voice Pipeline Demo       ");
-    Serial.println("  M5Stack CoreS3 (ESP32-S3, 8 Mo PSRAM, LVGL 9)          ");
-    Serial.println("========================================================");
+    // 1. Détermination du Fournisseur Vocal IA et Configuration
+    VoiceKitConfig vcfg;
+#if defined(VOICE_PROVIDER) && (VOICE_PROVIDER == 1)
+    vcfg.provider = VoiceProviderType::OPENAI;
+    vcfg.apiKey = OPENAI_API_KEY;
+#elif defined(VOICE_PROVIDER) && (VOICE_PROVIDER == 0)
+    vcfg.provider = VoiceProviderType::GEMINI;
+    vcfg.apiKey = GEMINI_API_KEY;
+#else
+    // Sélection automatique basée sur la présence effective des clés API
+    bool hasGeminiKey = (strlen(GEMINI_API_KEY) > 0 && strcmp(GEMINI_API_KEY, "VOTRE_CLE_ICI") != 0);
+    bool hasOpenAiKey = (strlen(OPENAI_API_KEY) > 0 && strcmp(OPENAI_API_KEY, "VOTRE_CLE_ICI") != 0);
 
-    // 1. Initialisation Affichage M5GFX (Orientation Paysage 320x240) et LVGL 9
+    if (hasGeminiKey) {
+        vcfg.provider = VoiceProviderType::GEMINI;
+        vcfg.apiKey = GEMINI_API_KEY;
+    } else if (hasOpenAiKey) {
+        vcfg.provider = VoiceProviderType::OPENAI;
+        vcfg.apiKey = OPENAI_API_KEY;
+    } else {
+        // Repli par défaut sans clé
+        vcfg.provider = VoiceProviderType::GEMINI;
+        vcfg.apiKey = "";
+        Serial.println("[MAIN] AVERTISSEMENT : Aucune clé API valide trouvée dans secrets.h !");
+    }
+#endif
+    vcfg.wifiMode = WiFiMode::MANAGED_WIFI;
+    vcfg.wifiSSID = WIFI_SSID;
+    vcfg.wifiPassword = WIFI_PASSWORD;
+    vcfg.volume = 75;
+
+    s_activeProviderType = vcfg.provider;
+    const char* providerName = (s_activeProviderType == VoiceProviderType::OPENAI) ? "OpenAI Realtime" : "Google Gemini Live";
+
+    if (vcfg.apiKey.length() == 0 || vcfg.apiKey == "VOTRE_CLE_ICI") {
+        Serial.printf("[MAIN] AVERTISSEMENT : Clé API %s non configurée dans secrets.h\n", providerName);
+    }
+
+    Serial.println("\n========================================================");
+    Serial.println("  VoiceKit v0.6.5.1 — Integrated Voice Pipeline Demo     ");
+    Serial.printf ("  Moteur IA actif : %s\n", providerName);
+    Serial.println("========================================================\n");
+
+    // Message d'attente initial avec nom du fournisseur
+    snprintf(s_responseTextBuf, sizeof(s_responseTextBuf), "Fournisseur : %s\nEn attente de connexion...", providerName);
+
+    // 2. Initialisation Affichage M5GFX (Orientation Paysage 320x240) et LVGL 9
     // Sur M5Stack CoreS3, rotation 0 = 320x240 Paysage Normal (caméra en haut).
     M5.Display.waitDisplay();
     M5.Display.setRotation(0);
@@ -468,36 +525,7 @@ void setup() {
     createUi();
     lv_timer_handler();
 
-    // 2. Configuration du Moteur Vocal VoxCoreVoice en mode MANAGED_WIFI
-    VoiceKitConfig vcfg;
-#if defined(VOICE_PROVIDER) && (VOICE_PROVIDER == 1)
-    vcfg.provider = VoiceProviderType::OPENAI;
-    vcfg.apiKey = OPENAI_API_KEY;
-#elif defined(VOICE_PROVIDER) && (VOICE_PROVIDER == 0)
-    vcfg.provider = VoiceProviderType::GEMINI;
-    vcfg.apiKey = GEMINI_API_KEY;
-#else
-    // Sélection intelligente : si la clé Gemini commence par AIzaSy (format officiel), on l'utilise.
-    // Sinon, si une clé OpenAI valide est fournie, on bascule automatiquement sur OpenAI.
-    if (strncmp(GEMINI_API_KEY, "AIzaSy", 6) == 0) {
-        vcfg.provider = VoiceProviderType::GEMINI;
-        vcfg.apiKey = GEMINI_API_KEY;
-    } else if (strlen(OPENAI_API_KEY) > 0) {
-        vcfg.provider = VoiceProviderType::OPENAI;
-        vcfg.apiKey = OPENAI_API_KEY;
-    } else if (strlen(GEMINI_API_KEY) > 0) {
-        vcfg.provider = VoiceProviderType::GEMINI;
-        vcfg.apiKey = GEMINI_API_KEY;
-    }
-#endif
-    vcfg.wifiMode = WiFiMode::MANAGED_WIFI;
-    vcfg.wifiSSID = WIFI_SSID;
-    vcfg.wifiPassword = WIFI_PASSWORD;
-    vcfg.volume = 75;
-
-    Serial.printf("[MAIN] Fournisseur vocal configuré : %s\n",
-                  (vcfg.provider == VoiceProviderType::OPENAI) ? "OpenAI Realtime" : "Google Gemini Live");
-
+    // 3. Démarrage du Moteur Vocal VoxCoreVoice
     bool voiceOk = s_voice.begin(vcfg);
     if (!voiceOk) {
         Serial.println("[MAIN] ERREUR : Echec initialisation VoxCoreVoice !");
@@ -546,12 +574,15 @@ void setup() {
 
     // 5. Abonnements aux Événements du Pipeline & Moteur Vocal
     s_voice.onReady([]() {
-        Serial.println("[MAIN] VoiceKit service vocal connecté et PRÊT !");
+        const char* pName = (s_activeProviderType == VoiceProviderType::OPENAI) ? "OpenAI Realtime" : "Google Gemini Live";
+        Serial.printf("[MAIN] VoiceKit service vocal (%s) connecté et PRÊT !\n", pName);
         if (s_lblStateBadge && s_pipeline.getState() == PipelineState::READY) {
             lv_label_set_text(s_lblStateBadge, "PRÊT");
             lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0x00E676), 0);
             lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x003311), 0);
         }
+        snprintf(s_responseTextBuf, sizeof(s_responseTextBuf), "Connecté à %s.\nPrêt pour vos commandes ou questions !", pName);
+        s_responseTextDirty = true;
         updatePttUi(false, false, true);
     });
 
@@ -568,7 +599,7 @@ void setup() {
                         lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x4E2600), 0);
                         break;
                     case VoiceState::CONNECTING_SERVICE:
-                        lv_label_set_text(s_lblStateBadge, "CONNEXION IA...");
+                        lv_label_set_text(s_lblStateBadge, (s_activeProviderType == VoiceProviderType::OPENAI) ? "OPENAI..." : "GEMINI...");
                         lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFFEB3B), 0);
                         lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x4E4B00), 0);
                         break;
@@ -616,6 +647,16 @@ void setup() {
                     lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0x69F0AE), 0);
                     lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x00391E), 0);
                     updatePttUi(false, true, false);
+                    break;
+                case PipelineState::AI_PROCESSING:
+                    lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFFEB3B), 0);
+                    lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x4E4B00), 0);
+                    updatePttUi(false, false, false);
+                    break;
+                case PipelineState::STOPPING:
+                    lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFF7043), 0);
+                    lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x491800), 0);
+                    updatePttUi(false, false, false);
                     break;
                 case PipelineState::ERROR:
                     lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFF5252), 0);

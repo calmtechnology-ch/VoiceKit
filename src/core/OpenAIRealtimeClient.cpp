@@ -460,6 +460,8 @@ bool OpenAIRealtimeClient::sendInterruption() {
     if (!isConnected()) return false;
 
     _waitingForResponse.store(false, std::memory_order_release);
+    _cancelledResponseId = _currentResponseId;
+    _currentResponseId = "";
     Serial.println("[OpenAIClient] Interruption STOP -> response.cancel et input_audio_buffer.clear");
 
     // Annule la réponse en cours de génération / streaming
@@ -546,7 +548,10 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
         const char* respStatus = nullptr;
         if (respObj) {
             cJSON* idItem = cJSON_GetObjectItemCaseSensitive(respObj, "id");
-            if (idItem && cJSON_IsString(idItem) && idItem->valuestring) respId = idItem->valuestring;
+            if (idItem && cJSON_IsString(idItem) && idItem->valuestring) {
+                respId = idItem->valuestring;
+                _currentResponseId = String(respId);
+            }
             cJSON* stItem = cJSON_GetObjectItemCaseSensitive(respObj, "status");
             if (stItem && cJSON_IsString(stItem) && stItem->valuestring) respStatus = stItem->valuestring;
         }
@@ -569,6 +574,13 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     }
     // 4. Paquet audio streaming PCM16 24 kHz (GA: response.output_audio.delta, Beta: response.audio.delta)
     else if (strcmp(evType, "response.output_audio.delta") == 0 || strcmp(evType, "response.audio.delta") == 0) {
+        cJSON* respIdItem = cJSON_GetObjectItemCaseSensitive(root, "response_id");
+        if (respIdItem && cJSON_IsString(respIdItem) && respIdItem->valuestring) {
+            if (_cancelledResponseId.length() > 0 && _cancelledResponseId == respIdItem->valuestring) {
+                return;
+            }
+        }
+
         if (_waitingForResponse.load(std::memory_order_acquire)) {
             uint32_t nowMs = millis();
             if (nowMs == 0) nowMs = 1;
@@ -604,6 +616,12 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     }
     // 5. Transcription textuelle de la réponse assistant (GA: response.output_audio_transcript.delta, Beta: response.audio_transcript.delta)
     else if (strcmp(evType, "response.output_audio_transcript.delta") == 0 || strcmp(evType, "response.audio_transcript.delta") == 0) {
+        cJSON* respIdItem = cJSON_GetObjectItemCaseSensitive(root, "response_id");
+        if (respIdItem && cJSON_IsString(respIdItem) && respIdItem->valuestring) {
+            if (_cancelledResponseId.length() > 0 && _cancelledResponseId == respIdItem->valuestring) {
+                return;
+            }
+        }
         cJSON* deltaItem = cJSON_GetObjectItemCaseSensitive(root, "delta");
         if (deltaItem && cJSON_IsString(deltaItem) && deltaItem->valuestring) {
             String textFragment(deltaItem->valuestring);
@@ -613,6 +631,12 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     }
     // 5b. Transcription finale complète de l'assistant (GA: response.output_audio_transcript.done, Beta: response.audio_transcript.done)
     else if (strcmp(evType, "response.output_audio_transcript.done") == 0 || strcmp(evType, "response.audio_transcript.done") == 0) {
+        cJSON* respIdItem = cJSON_GetObjectItemCaseSensitive(root, "response_id");
+        if (respIdItem && cJSON_IsString(respIdItem) && respIdItem->valuestring) {
+            if (_cancelledResponseId.length() > 0 && _cancelledResponseId == respIdItem->valuestring) {
+                return;
+            }
+        }
         cJSON* transItem = cJSON_GetObjectItemCaseSensitive(root, "transcript");
         if (transItem && cJSON_IsString(transItem) && transItem->valuestring) {
             String fullText(transItem->valuestring);

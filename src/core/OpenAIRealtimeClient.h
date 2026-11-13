@@ -148,6 +148,9 @@ private:
     std::atomic<uint32_t> _jsonErrorCount{0};
     String _lastParseErrorCategory;
 
+    String _currentResponseId;
+    String _cancelledResponseId;
+
     bool _conversationMode = false;
     std::atomic<bool> _connected{false};
     std::atomic<bool> _setupComplete{false};

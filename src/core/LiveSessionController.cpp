@@ -64,86 +64,88 @@ void LiveSessionController::appendTranscriptionFragment(String &target,
     return;
   }
 
-    if (target == fragment)
-      return;
+  // 1. Fragment identique à la cible
+  if (target == fragment)
+    return;
 
-    // Déduplication intelligente insensible aux espaces et ponctuations de bord
-    String tTrim = target;
-    tTrim.trim();
-    String fTrim = fragment;
-    fTrim.trim();
-    if (tTrim.isEmpty() || fTrim.isEmpty())
-      return;
-    if (tTrim == fTrim)
-      return;
+  // 2. Déduplication de phrases complètes retransmises (avec ou sans ponctuation/espaces de bord)
+  String tTrim = target;
+  tTrim.trim();
+  String fTrim = fragment;
+  fTrim.trim();
 
-    // 1. Le nouveau fragment est un sur-ensemble cumulatif de la cible (début
-    // identique mais plus complet)
-    if (fragment.startsWith(target) || fTrim.startsWith(tTrim)) {
+  if (tTrim.isEmpty() || fTrim.isEmpty())
+    return;
+
+  if (tTrim == fTrim)
+    return;
+
+  auto stripPunct = [](const String &s) -> String {
+    size_t len = s.length();
+    while (len > 0 &&
+           (s[len - 1] == '.' || s[len - 1] == '!' || s[len - 1] == '?' ||
+            s[len - 1] == ',' || s[len - 1] == ';' || s[len - 1] == ' ')) {
+      len--;
+    }
+    return s.substring(0, len);
+  };
+
+  String tBase = stripPunct(tTrim);
+  String fBase = stripPunct(fTrim);
+
+  // Retransmission de phrase complète identique
+  if (!tBase.isEmpty() && tBase == fBase) {
+    // Si le fragment apporte une ponctuation finale que la cible n'avait pas
+    if (fTrim.length() > tTrim.length() && fTrim.startsWith(tBase)) {
       target = fragment;
       if (target.length() > maxLength) {
         target = target.substring(0, maxLength);
       }
+    }
+    return;
+  }
+
+  // 3. Transcription cumulative (le fragment commence par l'intégralité de la cible)
+  if (fragment.startsWith(target) || (!tTrim.isEmpty() && fTrim.startsWith(tTrim) && fTrim.length() > tTrim.length())) {
+    target = fragment;
+    if (target.length() > maxLength) {
+      target = target.substring(0, maxLength);
+    }
+    return;
+  }
+
+  // 4. Ponctuation isolée : élimination des doublons de fin
+  if (fTrim.length() == 1 && (fTrim[0] == '.' || fTrim[0] == '!' || fTrim[0] == '?' || fTrim[0] == ',' || fTrim[0] == ';')) {
+    if (target.endsWith(fTrim)) {
       return;
     }
+  }
 
-      // 2. Le fragment est déjà au début ou à la fin de la cible (répétition de
-      // phrase complète ou d'extrémité)
-      if (target.startsWith(fragment) || tTrim.startsWith(fTrim) ||
-          target.endsWith(fragment) || tTrim.endsWith(fTrim)) {
-        return;
-      }
+  // 5. Recherche du chevauchement partiel (syllabes ou mots coupés à la frontière de trame)
+  size_t targetLen = target.length();
+  size_t fragLen = fragment.length();
+  size_t maxOverlap = (targetLen < fragLen) ? targetLen : (fragLen - 1);
+  size_t bestOverlap = 0;
 
-      // 3. Déduplication tolérante aux variations de ponctuation finale (ex:
-      // "Texte." vs "Texte")
-      auto stripPunct = [](const String &s) -> String {
-        size_t len = s.length();
-        while (len > 0 &&
-               (s[len - 1] == '.' || s[len - 1] == '!' || s[len - 1] == '?' ||
-                s[len - 1] == ',' || s[len - 1] == ';' || s[len - 1] == ' ')) {
-          len--;
-        }
-        return s.substring(0, len);
-      };
-
-      String tBase = stripPunct(tTrim);
-      String fBase = stripPunct(fTrim);
-      if (!tBase.isEmpty() && !fBase.isEmpty()) {
-        if (tBase == fBase || tBase.endsWith(fBase) ||
-            tBase.startsWith(fBase)) {
-          // Si le fragment apporte une ponctuation finale que la cible n'avait
-          // pas
-          if (fTrim.length() > tTrim.length() && fTrim.startsWith(tBase)) {
-            target = fragment;
-          }
-          return;
-        }
-      }
-
-      size_t targetLen = target.length();
-      size_t fragLen = fragment.length();
-      size_t maxOverlap = (targetLen < fragLen) ? targetLen : fragLen;
-      size_t bestOverlap = 0;
-
-      for (size_t k = 1; k <= maxOverlap; ++k) {
-        String suffix = target.substring(targetLen - k);
-        String prefix = fragment.substring(0, k);
-        if (suffix == prefix) {
-          bestOverlap = k;
-        }
-      }
-
-      if (bestOverlap > 0) {
-        String toAppend = fragment.substring(bestOverlap);
-        target += toAppend;
-      } else {
-        target += fragment;
-      }
-
-      if (target.length() > maxLength) {
-        target = target.substring(0, maxLength);
-      }
+  for (size_t k = 1; k <= maxOverlap; ++k) {
+    String suffix = target.substring(targetLen - k);
+    String prefix = fragment.substring(0, k);
+    if (suffix == prefix) {
+      bestOverlap = k;
     }
+  }
+
+  if (bestOverlap > 0) {
+    String toAppend = fragment.substring(bestOverlap);
+    target += toAppend;
+  } else {
+    target += fragment;
+  }
+
+  if (target.length() > maxLength) {
+    target = target.substring(0, maxLength);
+  }
+}
 
     void LiveSessionController::finishTurn() {
       if (!_turnCompletedLogged &&
@@ -366,7 +368,8 @@ void LiveSessionController::appendTranscriptionFragment(String &target,
       });
 
       _provider->setOnOutputTranscription([this](const String &text) {
-        if (_turnCancelled.load(std::memory_order_acquire))
+        if (!_turnActive.load(std::memory_order_acquire) ||
+            _turnCancelled.load(std::memory_order_acquire))
           return;
         _lastActivityMs = millis();
         _hasOutputTranscription = true;
@@ -377,7 +380,8 @@ void LiveSessionController::appendTranscriptionFragment(String &target,
       });
 
       _provider->setOnText([this](const String &text) {
-        if (_turnCancelled.load(std::memory_order_acquire))
+        if (!_turnActive.load(std::memory_order_acquire) ||
+            _turnCancelled.load(std::memory_order_acquire))
           return;
         _lastActivityMs = millis();
         _hasModelTurnText = true;

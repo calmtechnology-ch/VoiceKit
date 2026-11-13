@@ -612,7 +612,7 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
         // Transcription vocale de sortie produite par Gemini (outputTranscription)
         bool hasOutputTrans = false;
         cJSON* outputTrans = cJSON_GetObjectItemCaseSensitive(serverContent, "outputTranscription");
-        if (outputTrans) {
+        if (outputTrans && _waitingForResponse.load(std::memory_order_acquire)) {
             cJSON* textItem = cJSON_GetObjectItemCaseSensitive(outputTrans, "text");
             if (textItem && cJSON_IsString(textItem) && textItem->valuestring) {
                 hasOutputTrans = true;

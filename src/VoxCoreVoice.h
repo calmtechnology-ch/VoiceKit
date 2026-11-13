@@ -519,6 +519,15 @@ public:
      */
     static bool isSystemTimeValid();
 
+    // Méthodes de simulation d'événements audio pour tests unitaires et validation
+    void triggerSpeechStartedForTesting() {
+        if (_onSpeechStarted) _onSpeechStarted();
+    }
+    void triggerSpeechFinishedForTesting(uint32_t speechId = 0) {
+        if (_onSpeechFinishedWithId && speechId > 0) _onSpeechFinishedWithId(speechId);
+        if (_onSpeechFinished) _onSpeechFinished();
+    }
+
 private:
     void updateConnectionMetrics();
     void setState(VoiceState newState);

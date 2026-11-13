@@ -487,6 +487,15 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         if (_conversationEnabled) {
             _conversationController.requestStop();
         }
+        if (_streamer.isStreaming() || isListening() || isTranscribing()) {
+            _streamer.cancel();
+            _cancelledCaptureTurnId = (_activeCaptureTurnId != 0) ? _activeCaptureTurnId : _pendingTranscriptionTurnId;
+            _activeCaptureTurnId = 0;
+            _pendingTranscriptionTurnId = 0;
+            _transcriptionPending = false;
+            _finalTranscriptionReceived = false;
+            _player.setPlaybackAllowed(true);
+        }
         setState(VoiceState::ERROR_STATE);
         if (_onError) {
             _onError(err);
@@ -1498,16 +1507,20 @@ void VoxCoreVoice::handleIncomingTranscription(const String& text, bool isFinal)
     uint32_t originTurnId = 0;
     bool isCancelledTurn = false;
 
-    if (_cancelledCaptureTurnId != 0) {
+    if (_pendingTranscriptionTurnId != 0) {
+        originTurnId = _pendingTranscriptionTurnId;
+    } else if (_cancelledCaptureTurnId != 0 && isFinal) {
+        originTurnId = _cancelledCaptureTurnId;
+        isCancelledTurn = true;
+        _cancelledCaptureTurnId = 0;
+    } else if (_activeCaptureTurnId != 0) {
+        originTurnId = _activeCaptureTurnId;
+    } else if (_cancelledCaptureTurnId != 0) {
         originTurnId = _cancelledCaptureTurnId;
         isCancelledTurn = true;
         if (isFinal) {
             _cancelledCaptureTurnId = 0;
         }
-    } else if (_pendingTranscriptionTurnId != 0) {
-        originTurnId = _pendingTranscriptionTurnId;
-    } else if (_activeCaptureTurnId != 0) {
-        originTurnId = _activeCaptureTurnId;
     }
 
     if (isCancelledTurn) {
