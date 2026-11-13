@@ -235,12 +235,10 @@ bool IntegratedVoicePipeline::startListening() {
         }
     }
 
-    // 3. Sauvegarde de l'état si confirmation en attente pour garantir l'atomicité
-    String prevTok = _pendingConfirmationToken;
-    String prevTool = _pendingToolId;
-    PipelineState prevState = _state;
-
-    if (_state == PipelineState::WAITING_CONFIRMATION) {
+    // 3. Annulation explicite de la confirmation en attente si présente
+    // Règle formelle : une confirmation annulée reste définitivement annulée.
+    bool wasWaitingConfirmation = (_state == PipelineState::WAITING_CONFIRMATION);
+    if (wasWaitingConfirmation) {
         if (_tools != nullptr) {
             _tools->cancelPending();
         }
@@ -249,15 +247,14 @@ bool IntegratedVoicePipeline::startListening() {
         }
         _pendingConfirmationToken = "";
         _pendingToolId = "";
+        finishTurn(PipelineResult::CANCELLED, "Confirmation annulee par nouvelle ecoute");
     }
 
     // 4. Engagement transactionnel de la capture auprès du moteur vocal
     if (_voice != nullptr) {
         if (!_voice->startListening()) {
-            // Restauration exacte du tour et des jetons si la capture échoue
-            _state = prevState;
-            _pendingConfirmationToken = prevTok;
-            _pendingToolId = prevTool;
+            // Une confirmation annulée reste annulée : ne jamais restaurer de jeton invalidé
+            setState(PipelineState::READY);
             return false;
         }
         _activeTurnId = _voice->getActiveCaptureTurnId();

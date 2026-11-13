@@ -456,12 +456,39 @@ bool OpenAIRealtimeClient::sendTurnComplete() {
     return true;
 }
 
+bool OpenAIRealtimeClient::isResponseCancelled(const char* respId) const {
+    if (!respId || strlen(respId) == 0) return false;
+    if (_cancelledResponseId.length() > 0 && _cancelledResponseId == respId) {
+        return true;
+    }
+    for (const auto& id : _cancelledResponseIds) {
+        if (id.length() > 0 && id == respId) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void OpenAIRealtimeClient::addCancelledResponseId(const String& respId) {
+    if (respId.length() == 0) return;
+    _cancelledResponseId = respId;
+    for (const auto& id : _cancelledResponseIds) {
+        if (id == respId) return;
+    }
+    _cancelledResponseIds.push_back(respId);
+    if (_cancelledResponseIds.size() > 16) {
+        _cancelledResponseIds.erase(_cancelledResponseIds.begin());
+    }
+}
+
 bool OpenAIRealtimeClient::sendInterruption() {
     if (!isConnected()) return false;
 
     _waitingForResponse.store(false, std::memory_order_release);
-    _cancelledResponseId = _currentResponseId;
-    _currentResponseId = "";
+    if (_currentResponseId.length() > 0) {
+        addCancelledResponseId(_currentResponseId);
+        _currentResponseId = "";
+    }
     Serial.println("[OpenAIClient] Interruption STOP -> response.cancel et input_audio_buffer.clear");
 
     // Annule la réponse en cours de génération / streaming
@@ -538,11 +565,6 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     }
     // 3. Début de réponse du modèle
     else if (strcmp(evType, "response.created") == 0) {
-        if (_waitingForResponse.load(std::memory_order_acquire) && _firstResponseReceivedMs.load(std::memory_order_relaxed) == 0) {
-            uint32_t nowMs = millis();
-            if (nowMs == 0) nowMs = 1;
-            _firstResponseReceivedMs.store(nowMs, std::memory_order_relaxed);
-        }
         cJSON* respObj = cJSON_GetObjectItemCaseSensitive(root, "response");
         const char* respId = nullptr;
         const char* respStatus = nullptr;
@@ -550,10 +572,28 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
             cJSON* idItem = cJSON_GetObjectItemCaseSensitive(respObj, "id");
             if (idItem && cJSON_IsString(idItem) && idItem->valuestring) {
                 respId = idItem->valuestring;
-                _currentResponseId = String(respId);
             }
             cJSON* stItem = cJSON_GetObjectItemCaseSensitive(respObj, "status");
             if (stItem && cJSON_IsString(stItem) && stItem->valuestring) respStatus = stItem->valuestring;
+        }
+
+        if (respId) {
+            if (!_waitingForResponse.load(std::memory_order_acquire)) {
+                // Reçu alors qu'aucune réponse n'est attendue (annulée avant réception de response.created)
+                addCancelledResponseId(respId);
+                return;
+            }
+            if (isResponseCancelled(respId)) {
+                // Identifiant explicitement obsolète : ne pas écraser l'identifiant de la réponse courante
+                return;
+            }
+            _currentResponseId = String(respId);
+        }
+
+        if (_waitingForResponse.load(std::memory_order_acquire) && _firstResponseReceivedMs.load(std::memory_order_relaxed) == 0) {
+            uint32_t nowMs = millis();
+            if (nowMs == 0) nowMs = 1;
+            _firstResponseReceivedMs.store(nowMs, std::memory_order_relaxed);
         }
         Serial.printf("[OpenAIClient] response.created : id=%s, status=%s\n",
                       respId ? respId : "none", respStatus ? respStatus : "in_progress");
@@ -576,7 +616,7 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     else if (strcmp(evType, "response.output_audio.delta") == 0 || strcmp(evType, "response.audio.delta") == 0) {
         cJSON* respIdItem = cJSON_GetObjectItemCaseSensitive(root, "response_id");
         if (respIdItem && cJSON_IsString(respIdItem) && respIdItem->valuestring) {
-            if (_cancelledResponseId.length() > 0 && _cancelledResponseId == respIdItem->valuestring) {
+            if (isResponseCancelled(respIdItem->valuestring)) {
                 return;
             }
         }
@@ -618,7 +658,7 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     else if (strcmp(evType, "response.output_audio_transcript.delta") == 0 || strcmp(evType, "response.audio_transcript.delta") == 0) {
         cJSON* respIdItem = cJSON_GetObjectItemCaseSensitive(root, "response_id");
         if (respIdItem && cJSON_IsString(respIdItem) && respIdItem->valuestring) {
-            if (_cancelledResponseId.length() > 0 && _cancelledResponseId == respIdItem->valuestring) {
+            if (isResponseCancelled(respIdItem->valuestring)) {
                 return;
             }
         }
@@ -633,7 +673,7 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     else if (strcmp(evType, "response.output_audio_transcript.done") == 0 || strcmp(evType, "response.audio_transcript.done") == 0) {
         cJSON* respIdItem = cJSON_GetObjectItemCaseSensitive(root, "response_id");
         if (respIdItem && cJSON_IsString(respIdItem) && respIdItem->valuestring) {
-            if (_cancelledResponseId.length() > 0 && _cancelledResponseId == respIdItem->valuestring) {
+            if (isResponseCancelled(respIdItem->valuestring)) {
                 return;
             }
         }
@@ -657,8 +697,8 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     }
     // 7. Fin de réponse du modèle (signal équivalent à turnComplete)
     else if (strcmp(evType, "response.done") == 0) {
-        _waitingForResponse.store(false, std::memory_order_release);
         cJSON* respObj = cJSON_GetObjectItemCaseSensitive(root, "response");
+        const char* respId = nullptr;
         const char* statusStr = nullptr;
         const char* statusDetailsType = nullptr;
         const char* statusDetailsReason = nullptr;
@@ -666,6 +706,14 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
         const char* statusDetailsErrCode = nullptr;
 
         if (respObj) {
+            cJSON* idItem = cJSON_GetObjectItemCaseSensitive(respObj, "id");
+            if (idItem && cJSON_IsString(idItem) && idItem->valuestring) {
+                respId = idItem->valuestring;
+                if (isResponseCancelled(respId)) {
+                    Serial.printf("[OpenAIClient] response.done ignore : response_id=%s annule\n", respId);
+                    return;
+                }
+            }
             cJSON* stItem = cJSON_GetObjectItemCaseSensitive(respObj, "status");
             if (stItem && cJSON_IsString(stItem) && stItem->valuestring) {
                 statusStr = stItem->valuestring;
@@ -705,6 +753,8 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
             }
         }
 
+        _waitingForResponse.store(false, std::memory_order_release);
+
         uint32_t decodedSamples = _pcmSamplesDispatchedTotal.load(std::memory_order_relaxed);
         bool hasAudio = (decodedSamples > 0);
 
@@ -723,6 +773,9 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
         Serial.printf(" | audio_ech=%u (%s)\n", (unsigned)decodedSamples, hasAudio ? "AVEC_AUDIO" : "SANS_AUDIO");
 
         if (statusStr && strcmp(statusStr, "cancelled") == 0) {
+            if (respId) {
+                addCancelledResponseId(respId);
+            }
             Serial.println("[OpenAIClient] Reponse annulee par le serveur (status: cancelled)");
             if (_onInterrupted) {
                 _onInterrupted();
@@ -747,6 +800,13 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
     }
     // 8. Annulation de réponse (suite à response.cancel / interruption STOP)
     else if (strcmp(evType, "response.cancelled") == 0) {
+        cJSON* respObj = cJSON_GetObjectItemCaseSensitive(root, "response");
+        if (respObj) {
+            cJSON* idItem = cJSON_GetObjectItemCaseSensitive(respObj, "id");
+            if (idItem && cJSON_IsString(idItem) && idItem->valuestring) {
+                addCancelledResponseId(idItem->valuestring);
+            }
+        }
         _waitingForResponse.store(false, std::memory_order_release);
         Serial.println("[OpenAIClient] Reponse annulee par le serveur (response.cancelled)");
         if (_onInterrupted) {

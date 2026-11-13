@@ -1,0 +1,391 @@
+===========================================================
+  SUITE COMPLETE DE TESTS AUTOMATISES — VoiceKit v0.6.4.1    
+  Local Tool Registry & Architecture Multi-Fournisseurs   
+  Cible logique C++14 / C++17                             
+===========================================================
+
+[TEST SUITE 1] Formatage de l'heure en francais naturel
+
+[TEST SUITE 2] LiveAudioPlayer : Integrite du tampon PCM 24 kHz et vidage
+
+[TEST SUITE 3] Scenarios de duree : 10s, 30s, alpha-tango et 2 annonces consecutives
+
+[TEST SUITE 4] API VoxCoreVoice : Politiques de file, non-blocage et erreurs
+
+[TEST SUITE 5] Coordination Wi-Fi : Verrou keepalive pour empecher la coupure
+
+[TEST SUITE 6] Propriete du haut-parleur (Correction C)
+
+[TEST SUITE 7] Coherence heure affichee et annoncee (Correction D)
+
+[TEST SUITE 8] Gestion robuste requetes asynchrones et resilience (Correction E)
+
+[TEST SUITE 9] Cycle de vie du verrou Wi-Fi et maintien 15s (Correction F)
+
+[TEST SUITE 10] LiveAudioStreamer : Etats des tampons circulaires et file d'emission
+
+[TEST SUITE 11] GeminiLiveClient : Extraction des erreurs JSON renvoyees par le serveur
+
+[TEST SUITE 12] GeminiLiveClient : Trame de fermeture serveur (Close code 1007/1008 & raison)
+
+[TEST SUITE 13] Normalisation automatique du nom de modele Gemini
+
+[TEST SUITE 14] VoxCoreVoice : Deconnexion intentionnelle vs erreur de cloture
+
+[TEST SUITE 15] GoogleRoots : Integrite du bundle TLS et recuperation apres erreur
+
+[TEST SUITE 16] Initialisation microphone et arbitrage materiel HAL
+
+[TEST SUITE 17] Acquisition PCM 16 kHz, double-buffering et streaming
+
+[TEST SUITE 18] Cycle Push-to-Talk (startListening -> stopListening)
+
+[TEST SUITE 19] Scenarios de dictee courte et longue
+
+[TEST SUITE 20] Transcriptions partielles (interim) et finales
+
+[TEST SUITE 21] Enchainement de dictees consecutives
+
+[TEST SUITE 22] Interruption et annulation pendant l'ecoute
+
+[TEST SUITE 23] Perte Wi-Fi / transport pendant la dictee
+
+[TEST SUITE 24] Absence de parole et timeout de transcription finale (Zero invention)
+
+[TEST SUITE 25] Coexistence TTS et STT sans interferences mutuelles
+
+[TEST SUITE 26] Activation mode conversationnel et instructions systeme (Mode B)
+
+[TEST SUITE 27] Cycle conversationnel complet (READY -> LISTENING -> PROCESSING -> SPEAKING -> READY)
+
+[TEST SUITE 28] Transcriptions utilisateur (interim + final) et transcription assistant
+
+[TEST SUITE 29] Restitution audio native 24 kHz et preservation derniere syllabe
+
+[TEST SUITE 30] Enchainement de 10 tours conversationnels successifs
+
+[TEST SUITE 31] Interruption STOP prioritaire pendant l'ecoute et pendant la reponse
+
+[TEST SUITE 32] Resilience : Deconnexion Wi-Fi pendant un tour et reprise propre
+
+[TEST SUITE 33] Absence de parole et gestion du cycle a vide
+
+[TEST SUITE 34] Metriques diagnostiques completes du tour de conversation
+
+[TEST SUITE 35] Non-regression integrale : TTS pur et STT pur preserves
+
+[TEST SUITE 36] Chaine UTF-8 integrale : accents francais, ligatures et ponctuation
+
+[TEST SUITE 37] Parametres VoiceKitConfig : voix, langue, style, ton et accent
+
+[TEST SUITE 38] Trame de setup Gemini Live : speechConfig, voix et directives
+
+[TEST SUITE 39] Changement dynamique de profil vocal et securite d'interruption
+
+[TEST SUITE 40] Securisation des profils vocaux, reconnexions et refus stricts
+
+[TEST SUITE 41] Transitions fiabilisees TTS <-> Conversation et non-interference
+
+[TEST SUITE 42] Chaine UTF-8 integrale, accents francais et compatibilite linguistique
+
+[TEST SUITE 43] VAD : Algorithme, seuils adaptatifs, hysteresis et transitions
+
+[TEST SUITE 44] VAD : Scenarios temporels avances (pauses, 30s max, silence prolonge, PCM)
+
+[TEST SUITE 45] Flux ContinuousSTT complet : Ecoute continue, streaming et segments
+
+[TEST SUITE 46] Resilience ContinuousSTT : Timeout sans invention, pause et accents
+
+[TEST SUITE 47] Facade VoiceKit : Initialisation, cycle de vie, modes et delegation transparente
+
+[TEST SUITE 48] Facade VoiceKit : Validation des operations TTS, STT manuel, ContinuousSTT et Conversation
+
+[TEST SUITE 49] Facade VoiceKit : Refus stricts des operations incompatibles et transitions de modes
+
+[TEST SUITE 50] ContinuousListeningController : VAD integre, silence, timeout sans hallucination, pause et reprise
+
+[TEST SUITE 51] Integrite des evenements : Absence de duplication des callbacks de fin et unicite
+
+[TEST SUITE 52] Compatibilite ascendante integrale : Coexistence VoxCoreVoice et VoiceKit sans regression
+
+[TEST SUITE 53] Concurrence FreeRTOS : Blocs audio asynchrones, pause/reprise et contexte
+
+[TEST SUITE 54] Fiabilisation ContinuousSTT : Identifiant de segment, unicite et rejet callbacks tardifs
+
+[TEST SUITE 55] Facade VoiceKit : Transitions de modes, echecs de reconnexion et non-regressions
+
+[TEST SUITE 56] WiFiManager : FastConnect, repli automatique et backoff progressif
+
+[TEST SUITE 57] Synchronisation SNTP : Detection horloge valide vs securite TLS
+
+[TEST SUITE 58] Gemini Live : Conditionnement strict de la reconnexion au reseau
+
+[TEST SUITE 59] Instrumentation des 5 temps de demarrage
+
+[TEST SUITE 60] Facade VoiceKit v0.5.2 : Exposition ConnectionMetrics et non-regression
+
+[TEST SUITE 61] VoiceLatencyMetrics : Calculs des durees et gestion des valeurs non observees
+
+[TEST SUITE 62] Optimisation Base64 : Encodage direct et conformite RFC 4648
+
+[TEST SUITE 63] VAD : Experimentation controlee des seuils de silence (800, 1000, 1200 ms)
+
+[TEST SUITE 64] Pipeline de latence en tour de conversation (Mode B)
+
+[TEST SUITE 65] Facade VoiceKit v0.5.3 : Exposition VoiceLatencyMetrics et integrite audio
+
+[TEST SUITE 66] VoiceLatencyMetrics : Audit des 7 jalons, ordre chronologique et cas limites
+
+[TEST SUITE 67] VAD : Validation approfondie des 3 seuils, valeurs incorrectes et switch a chaud
+
+[TEST SUITE 68] Facade VoiceKit v0.5.3.1 : Non-regression des 4 modes et resilience
+
+[TEST SUITE 69] Multi-Provider VoiceKitConfig & Enum Selection
+
+[TEST SUITE 70] AudioResampler 16 kHz vers 24 kHz
+
+[TEST SUITE 71] IVoiceProvider & GeminiVoiceProvider Adapter
+
+[TEST SUITE 72] OpenAIRealtimeClient : Connexion & Handshake WebSocket TLS
+
+[TEST SUITE 73] OpenAIRealtimeClient : Negociation de Session (session.update)
+
+[TEST SUITE 74] OpenAIRealtimeClient : Emission Audio TX (input_audio_buffer.append)
+
+[TEST SUITE 75] OpenAIRealtimeClient : Reception Audio Streaming RX & Drain
+
+[TEST SUITE 76] OpenAIRealtimeClient : Transcriptions Utilisateur & Assistant
+
+[TEST SUITE 77] OpenAIRealtimeClient : Interruption STOP Prioritaire
+
+[TEST SUITE 78] OpenAIRealtimeClient : Gestion des Erreurs et Reconnexion
+
+[TEST SUITE 79] VoxCoreVoice & VoiceKit : Integration OpenAI & Non-Regression Gemini
+
+[TEST SUITE 80] Correction A (v0.6.1) : Metriques PCM multi-tours & detection reelle hors-ordre
+
+[TEST SUITE 81] Correction B (v0.6.1) : Ordonnancement FreeRTOS TLS, memoire & intervalles boucle
+
+[TEST SUITE 82] Correction C (v0.6.1) : 10 scenarios Wi-Fi FastConnect, repli non-bloquant & durees
+
+[TEST SUITE 83] v0.6.2 : Initialisation sans reseau et capture audio locale partagee
+
+[TEST SUITE 84] v0.6.2 : WakeWordAudioBridge (file bornee, ordre FIFO, saturation DROP_NEWEST/DROP_OLDEST)
+
+[TEST SUITE 85] v0.6.2 : WakeNetEngine (honnetete API sous IDF 4.4 et adaptateur de trames 512->480)
+
+[TEST SUITE 86] v0.6.2 : TestWakeWordEngine, cycle complet d'etats et gestion des erreurs
+
+[TEST SUITE 87] v0.6.2 : Suspension automatique (TTS, STT, ContinuousSTT, Conversation) et reprise controlee
+
+[TEST SUITE 88] v0.6.2 : Communication LVGL sans dependance (pollWakeWordEvent) et diagnostics
+
+[TEST SUITE 89] v0.6.2.1 : WakeWordAudioBridge (securite peekFrame, 7 scenarios de concurrence et integrite PCM)
+
+[TEST SUITE 90] v0.6.2.1 : Budget de traitement CPU borne (setMaxFramesPerUpdate / setProcessingBudgetUs)
+
+[TEST SUITE 91] v0.6.2.1 : Verification de stopLocalCapture(), refus sur echec et transitions completes
+
+[TEST SUITE 92] v0.6.2.1 : Machine a etats, callbacks reentrants, appels repetes et surete memoire
+
+[TEST SUITE 93] v0.6.2.1 : WakeNetEngine (continuite 512->480, reset, liberation ressources, confiance 0.0f, 4 niveaux)
+
+[TEST SUITE 94] v0.6.2.1 : Capture locale ES7210, RMS authentique du signal et non-interference ContinuousSTT
+
+[TEST SUITE 95] v0.6.3 : Scenarios 1 & 2 — Cycle complet Wake->Conversation->ARMED et 10 cycles consecutifs
+
+[TEST SUITE 96] v0.6.3 : Scenarios 3 & 4 — Detections concurrentes ignorees et Timeout de silence (30 s)
+
+[TEST SUITE 97] v0.6.3 : Scenario 5 — Conversation multi-tours sans repeter « Bonjour ESP » et fermeture vocale
+
+[TEST SUITE 98] v0.6.3 : Scenarios 6 & 11 — Arret pendant reponse audio et conservation des derniers echantillons
+
+[TEST SUITE 99] v0.6.3 : Scenarios 7, 8, 9 & 10 — Perte Wi-Fi, Deconnexion WS, Echec micro et Rearmement
+
+[TEST SUITE 100] v0.6.3 : Scenario 12, OpenAI Realtime & Diagnostics — Non-blocage LVGL et multi-fournisseurs
+
+[TEST SUITE 101] v0.6.3.1 : Section 1 & 5 — Instrumentation de latence et arret non bloquant de session WebSocket
+
+[TEST SUITE 102] v0.6.3.1 : Section 2 — Consolidation des transitions audio et concurrence du microphone
+
+[TEST SUITE 103] v0.6.3.1 : Section 3 — Selection du modele WakeNet, verification 4 niveaux et modele absent
+
+[TEST SUITE 104] v0.6.3.1 : Section 4 — Stabilite conversationnelle et distinction fin de tour / fin de session
+
+[TEST SUITE 105] v0.6.3.1 : Section 6 — Visibilite immediate des 7 transitions UI pilotees par evenements
+
+[TEST SUITE 106] v0.6.3.2.1 : Correction A - Filtrage Control Frames & Diagnostics JSON
+
+[TEST SUITE 107] v0.6.3.2.1 : Correction B - Decoupage Mots & UTF-8 Francais
+
+[TEST SUITE 108] v0.6.3.2.1 : Correction B & D - Conservation Bilan & Tags Dynamiques
+
+[TEST SUITE 109] v0.6.3.2.2 : Diagnostics PTT, Causes de Rejet et Consigne Concise
+
+[TEST SUITE 110] v0.6.3.2.2 : Protection Annulations Tardives et Reprise Erreur
+
+[TEST SUITE 111] v0.6.3.2.2 : Reponse Sans Audio et Watchdog Non-Bloquant
+
+[TEST SUITE 112] v0.1.0.1 : OpenAI Realtime Events, Reponse Echouee, Sans Audio & PTT
+
+[TEST SUITE 113] v0.6.4 : Enregistrement valide et decouverte
+
+[TEST SUITE 114] v0.6.4 : Rejet d'identifiant duplique et declarations invalides
+
+[TEST SUITE 115] v0.6.4 : Capacite maximale configurable et rejet de depassement
+
+[TEST SUITE 116] v0.6.4 : Recherche et execution d'une commande inexistante
+
+[TEST SUITE 117] v0.6.4 : Execution reussie avec arguments et types
+
+[TEST SUITE 118] v0.6.4 : Parametre obligatoire manquant
+
+[TEST SUITE 119] v0.6.4 : Parametre de type incorrect (INT, FLOAT, BOOLEAN)
+
+[TEST SUITE 120] v0.6.4 : Valeur hors limites minimales et maximales
+
+[TEST SUITE 121] v0.6.4 : Rejet des parametres inconnus sauf autorisation explicite
+
+[TEST SUITE 122] v0.6.4 : Politique d'autorisation et commande non autorisee
+
+[TEST SUITE 123] v0.6.4 : Commande SENSITIVE et cycle de confirmation explicite
+
+[TEST SUITE 124] v0.6.4 : Protection anti-rejeu et expiration du jeton de confirmation
+
+[TEST SUITE 125] v0.6.4 : Erreur de fonction d'execution et remontee structuree
+
+[TEST SUITE 126] v0.6.4 : Double demande d'execution et statut BUSY
+
+[TEST SUITE 127] v0.6.4 : Ordre correct des evenements du registre
+
+[TEST SUITE 128] v0.6.4 : Liberation des ressources et reinitialisation
+
+[TEST SUITE 129] v0.6.4 : Verification des 3 commandes de demonstration et parseur JSON
+
+[TEST SUITE 130] v0.6.4.1 : TextGate (Vide, Hesitations, Commandes courtes, Accents & Incomplet)
+
+[TEST SUITE 131] v0.6.4.1 : VoiceIntentRouter (Intentions, Politesse, Casse, Accents & Faux positifs)
+
+[TEST SUITE 132] v0.6.4.1 : ReplyMemory (Capacite 5, FIFO, Recul, Clear, Troncature UTF-8)
+
+[TEST SUITE 133] v0.6.4.1 : VoiceUxController (Façade, Callbacks, Neutralite audio, Statut)
+
+[TEST SUITE 134] v0.6.4.1 : Performance (Temps microsecondes, 100 requetes, Stabilite RAM)
+  [METRIQUES REELLES] Latence traitement unitaire : REPEAT=1 us, Phrase complexe=2 us, Hesitation=1 us
+
+[TEST SUITE 135] v0.6.4.2 : VoiceUxLiveBridge (Transmission STT, Filtrage interim & REPEAT/PREVIOUS/STOP)
+
+[TEST SUITE 136] v0.6.4.2 : VoiceUxLiveBridge (Gestion de la pause, commandes en pause et reprise)
+
+[TEST SUITE 137] v0.6.4.2 : VoiceUxLiveBridge (Securite, concurrence, dedoublonnage, evenements tardifs & annulations)
+
+[TEST SUITE 138] v0.6.4.2 : VoiceUxLiveBridge (Machine a etats, cycle TTS complet, gestion des erreurs & resilience)
+
+[TEST SUITE 139] v0.6.4.3 : ToolRegistry (Immuabilite, Rejeu, Auth, Busy & Capacite)
+
+[TEST SUITE 140] v0.6.4.3 : VoiceUxLiveBridge (Metadonnees TTS, Deduplication, Refus, STOP & Statuts)
+
+[TEST SUITE 141] v0.6.4.3.1 : Securite Evenementielle Corrective (Scenarios A, B, C, D, E & STOP)
+
+[TEST SUITE 142] v0.6.4.3.2 : Correlation Reelle des Evenements Asynchrones (Tests A, B, C, D, E & F)
+
+[TEST SUITE 143] VoiceKit v0.6.4.3.2 — Final Event Correlation Validation
+
+===========================================================
+  [TEST SUITE 144] VoiceKit v0.6.5 — Integrated Voice Pipeline
+===========================================================
+
+--- TEST A : Tour local complet ---
+
+--- TEST B : Tour IA complet ---
+
+--- TEST C : Commande inconnue ---
+
+--- TEST D : STOP dans tous les etats ---
+
+--- TEST E : Transcription tardive ---
+
+--- TEST F : Ancienne fin TTS ---
+
+--- TEST G : Commande sensible ---
+
+--- TEST H : Erreur et recuperation ---
+
+--- TEST I : ReplyMemory non polluee ---
+
+--- TEST J : Normalisation VoiceCommandDispatcher ---
+
+[TEST SUITE 144] SUCCES INTEGRAL DES 10 TESTS OBLIGATOIRES A -> J (v0.6.5)
+
+===========================================================
+  [TEST SUITE 145] VoiceKit v0.6.5.1 — Integrated Pipeline Stabilization
+===========================================================
+
+--- TEST A (v0.6.5.1) : Commande locale complete & ReplyMemory ---
+
+--- TEST B (v0.6.5.1) : Question IA complete & restitution ---
+
+--- TEST C (v0.6.5.1) : Refus TTS & non-blocage SPEAKING ---
+
+--- TEST D (v0.6.5.1) : Idempotence stricte des terminaisons ---
+
+--- TEST E (v0.6.5.1) : PAUSE & RESUME effectifs ---
+
+--- TEST F (v0.6.5.1) : Routage ambigu & negations ---
+
+--- TEST G (v0.6.5.1) : Parametres numeriques entiers et decimaux ---
+
+--- TEST H (v0.6.5.1) : Confirmation sensible & securite ---
+
+--- TEST I (v0.6.5.1) : Echecs reseau et resilience ---
+
+--- TEST J (v0.6.5.1) : Endurance (30 tours successifs) ---
+
+[TEST SUITE 145] SUCCES INTEGRAL DES 10 TESTS OBLIGATOIRES A -> J (v0.6.5.1)
+
+===========================================================
+  [TEST SUITE 146] VoiceKit v0.6.5.1 — Final Corrective & Hardware Readiness
+===========================================================
+
+--- TEST A (v0.6.5.1 Final) : Refus startListening() etats incompatibles ---
+
+--- TEST B (v0.6.5.1 Final) : Ecoute PAUSE sans violation audio ---
+
+--- TEST C (v0.6.5.1 Final) : Gestion echec et idempotence stopListening() ---
+
+--- TEST D (v0.6.5.1 Final) : Protection SpeechStarted tardif apres STOP ---
+
+--- TEST E (v0.6.5.1 Final) : Rejet fin TTS tardive sur nouveau tour ---
+
+--- TEST F (v0.6.5.1 Final) : Rejet reponse IA tardive apres annulation ---
+
+--- TEST G (v0.6.5.1 Final) : Refus recoverFromError() si moteur deconnecte ---
+
+--- TEST H (v0.6.5.1 Final) : Succes recoverFromError() apres retablissement ---
+
+--- TEST I (v0.6.5.1 Final) : Reconstruction fragments francais ---
+
+--- TEST J (v0.6.5.1 Final) : Endurance 10 cycles complets mixtes ---
+
+[TEST SUITE 146] SUCCES INTEGRAL DES 10 TESTS OBLIGATOIRES A -> J (v0.6.5.1 Final)
+
+===========================================================
+  [TEST SUITE 147] VoiceKit v0.6.5.1 — Minimal Corrective Final
+===========================================================
+
+--- TEST P0 : stopListening() nominal, echecs et idempotence ---
+
+--- TEST P1-CONFIRM : Tests A, B, C, D, E confirmation sensible ---
+  [FAIL] Conf.C.1 WAITING_CONFIRMATION (tests/test_pipeline_suites.h:1834)
+  [FAIL] Conf.C.2 Nouvelle ecoute acceptee (tests/test_pipeline_suites.h:1838)
+  [FAIL] Conf.C.3 Etat LISTENING (tests/test_pipeline_suites.h:1839)
+  [FAIL] Conf.C.4 Tour statut termine (tests/test_pipeline_suites.h:1849)
+  [FAIL] Conf.D.1 WAITING_CONFIRMATION (tests/test_pipeline_suites.h:1857)
+
+--- TEST P1-LATE : Tests A -> E reponses IA tardives OpenAI Realtime ---
+
+[TEST SUITE 147] SUCCES INTEGRAL DES TESTS CORRECTIFS (v0.6.5.1 Final)
+
+===========================================================
+  BILAN FINAL DES TESTS : 3157 REUSSIS, 5 ECHECS
+===========================================================

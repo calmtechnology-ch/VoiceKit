@@ -1606,3 +1606,475 @@ inline void run_pipeline_v0651_final_stabilization_tests() {
 
     std::cout << "\n[TEST SUITE 146] SUCCES INTEGRAL DES 10 TESTS OBLIGATOIRES A -> J (v0.6.5.1 Final)" << std::endl;
 }
+
+// =============================================================================
+// SUITE 147 : VoiceKit v0.6.5.1 — Minimal Corrective Final Validation
+// Tests obligatoires :
+//   P0 : Retour stopListening(), gestion erreurs streamer & activityEnd
+//   P1 : Cohérence confirmation sensible (Tests A, B, C, D, E)
+//   P1 : Réponses IA tardives & filtrage multi-annulations (Tests A, B, C, D, E)
+// =============================================================================
+inline void run_pipeline_v0651_minimal_corrective_tests() {
+    std::cout << "\n===========================================================" << std::endl;
+    std::cout << "  [TEST SUITE 147] VoiceKit v0.6.5.1 — Minimal Corrective Final" << std::endl;
+    std::cout << "===========================================================" << std::endl;
+
+    // -------------------------------------------------------------------------
+    // SECTION 1 (P0) : Retour stopListening() & gestion des erreurs
+    // -------------------------------------------------------------------------
+    {
+        std::cout << "\n--- TEST P0 : stopListening() nominal, echecs et idempotence ---" << std::endl;
+        MockLiveTransport mockTransport;
+        VoxCoreVoice voice;
+        ToolRegistry tools;
+        IntegratedVoicePipeline pipeline;
+
+        VoiceKitConfig vcfg;
+        vcfg.apiKey = "AIzaSyTest147P0";
+        vcfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voice.begin(vcfg);
+        prepareMockVoiceReady(voice, mockTransport);
+        pipeline.begin(voice, tools);
+
+        // 1. Double appel hors capture -> retourne false
+        TEST_ASSERT(voice.stopListening() == false, "P0.1 stopListening() hors ecoute refuse");
+        TEST_ASSERT(pipeline.stopListening() == false, "P0.2 pipeline.stopListening() hors ecoute refuse");
+
+        // 2. Arrêt nominal
+        TEST_ASSERT(pipeline.startListening(), "P0.3 startListening() reussi");
+        TEST_ASSERT(pipeline.getState() == PipelineState::LISTENING, "P0.4 Etat LISTENING");
+        bool onFinishedNotified = false;
+        voice.onListeningFinished([&onFinishedNotified]() {
+            onFinishedNotified = true;
+        });
+        TEST_ASSERT(pipeline.stopListening() == true, "P0.5 stopListening() nominal accepte");
+        TEST_ASSERT(onFinishedNotified == true, "P0.6 onListeningFinished bien notifie");
+        TEST_ASSERT(pipeline.getState() == PipelineState::TRANSCRIBING, "P0.7 Etat TRANSCRIBING");
+        TEST_ASSERT(voice.isTranscribing() == true, "P0.8 voice.isTranscribing() vrai");
+
+        // Double demande immédiate
+        TEST_ASSERT(voice.stopListening() == false, "P0.9 Double demande stopListening refusee");
+        TEST_ASSERT(pipeline.stopListening() == false, "P0.10 Double demande pipeline refusee");
+        pipeline.cancel();
+        TEST_ASSERT(pipeline.getState() == PipelineState::READY, "P0.11 Pipeline READY");
+
+        // 3. Échec réel de stopMicHardware / LiveAudioStreamer::stop()
+        class FailingAudioInput : public IAudioInput {
+        public:
+            bool fail = false;
+            bool running = false;
+            bool begin() override { running = true; return true; }
+            void end() override { running = false; }
+            bool isRunning() const override { return running; }
+            int isRecording() const override { return fail ? 1 : 0; }
+            bool record(int16_t*, size_t, uint32_t, bool) override { return true; }
+            void stop() override { running = false; }
+            const char* getLastError() const override { return "Mock fail"; }
+        };
+        FailingAudioInput failingInput;
+        VoxCoreVoice voiceHwFail;
+        VoiceKitConfig vcfgHw;
+        vcfgHw.apiKey = "AIzaSyTest147Hw";
+        vcfgHw.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        vcfgHw.audioInput = &failingInput;
+        voiceHwFail.begin(vcfgHw);
+        MockLiveTransport mockTransportHw;
+        prepareMockVoiceReady(voiceHwFail, mockTransportHw);
+
+        IntegratedVoicePipeline pipeHw;
+        pipeHw.begin(voiceHwFail, tools);
+        TEST_ASSERT(pipeHw.startListening(), "P0.12 startListening() reussi");
+        failingInput.fail = true; // Force isRecording() != 0 -> stopMicHardware timeout fail
+
+        bool hwErrFinishedNotified = false;
+        voiceHwFail.onListeningFinished([&hwErrFinishedNotified]() {
+            hwErrFinishedNotified = true;
+        });
+
+        // L'arrêt matériel échoue : stopListening() DOIT retourner false
+        TEST_ASSERT(pipeHw.stopListening() == false, "P0.13 stopListening() retourne false lors d'un echec streamer");
+        TEST_ASSERT(hwErrFinishedNotified == false, "P0.14 onListeningFinished n'est PAS appele en cas d'erreur");
+        TEST_ASSERT(voiceHwFail.getState() == VoiceState::ERROR_STATE, "P0.15 voice en ERROR_STATE");
+        TEST_ASSERT(voiceHwFail.isTranscribing() == false, "P0.16 Pas de blocage dans TRANSCRIBING");
+        TEST_ASSERT(pipeHw.getState() == PipelineState::ERROR, "P0.17 pipeline en ERROR");
+
+        // STOP immédiatement après un échec
+        pipeHw.cancel();
+        TEST_ASSERT(pipeHw.getState() == PipelineState::READY, "P0.18 STOP apres echec -> READY");
+
+        // Nouvelle écoute après récupération
+        failingInput.fail = false;
+        HardwareManager::getInstance().releaseMicCaptureReservation();
+        voiceHwFail.stop();
+        TEST_ASSERT(pipeHw.startListening(), "P0.19 Nouvelle ecoute apres recuperation reussie");
+        TEST_ASSERT(pipeHw.stopListening() == true, "P0.20 Nouvel arret reussi");
+        pipeHw.cancel();
+        HardwareManager::getInstance().releaseMicCaptureReservation();
+        HardwareManager::getInstance().setAudioInput(nullptr);
+
+        // 4. Erreur de transmission de activityEnd
+        class ActivityEndFailingTransport : public MockLiveTransport {
+        public:
+            bool failActivityEnd = false;
+            bool send(const char* data, size_t len) override {
+                if (failActivityEnd && strstr(data, "activityEnd") != nullptr) {
+                    return false;
+                }
+                return MockLiveTransport::send(data, len);
+            }
+        };
+        ActivityEndFailingTransport failActTransport;
+        VoxCoreVoice voiceActFail;
+        VoiceKitConfig vcfgAct;
+        vcfgAct.apiKey = "AIzaSyTest147Act";
+        vcfgAct.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voiceActFail.begin(vcfgAct);
+        prepareMockVoiceReady(voiceActFail, failActTransport);
+
+        IntegratedVoicePipeline pipeAct;
+        pipeAct.begin(voiceActFail, tools);
+        TEST_ASSERT(pipeAct.startListening(), "P0.21 startListening() reussi");
+        failActTransport.failActivityEnd = true;
+
+        bool actFinishedNotified = false;
+        voiceActFail.onListeningFinished([&actFinishedNotified]() {
+            actFinishedNotified = true;
+        });
+
+        TEST_ASSERT(pipeAct.stopListening() == false, "P0.22 stopListening() retourne false lors d'echec activityEnd");
+        TEST_ASSERT(actFinishedNotified == false, "P0.23 onListeningFinished n'est PAS appele si activityEnd echoue");
+        TEST_ASSERT(voiceActFail.getState() == VoiceState::ERROR_STATE, "P0.24 voice passe en ERROR_STATE");
+        TEST_ASSERT(voiceActFail.isTranscribing() == false, "P0.25 Pas de blocage dans TRANSCRIBING");
+        TEST_ASSERT(pipeAct.getState() == PipelineState::ERROR, "P0.26 pipeline passe en ERROR");
+        pipeAct.cancel();
+        voiceActFail.getClient().setTransport(nullptr);
+    }
+
+    // -------------------------------------------------------------------------
+    // SECTION 2 (P1) : Cohérence confirmation sensible (Tests A, B, C, D, E)
+    // -------------------------------------------------------------------------
+    {
+        std::cout << "\n--- TEST P1-CONFIRM : Tests A, B, C, D, E confirmation sensible ---" << std::endl;
+        MockLiveTransport mockTransport;
+        VoxCoreVoice voice;
+        ToolRegistry tools;
+        IntegratedVoicePipeline pipeline;
+
+        VoiceKitConfig vcfg;
+        vcfg.apiKey = "AIzaSyTest147P1Conf";
+        vcfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voice.begin(vcfg);
+        prepareMockVoiceReady(voice, mockTransport);
+
+        VoicePipelineConfig pcfg;
+        pcfg.enableVoiceUx = true;
+        pcfg.requireConfirmationForSensitive = true;
+        pcfg.speakConfirmationRequired = false;
+        pcfg.speakToolResult = false;
+        pipeline.begin(voice, tools, pcfg);
+
+        bool actionExecuted = false;
+        tools.registerTool("system.reset", "Reset", [&actionExecuted]() {
+            actionExecuted = true;
+            return ToolResult::success("Systeme reinitialise.");
+        }, ToolSecurityPolicy::SENSITIVE);
+        pipeline.getDispatcher().registerMapping("system.reset", "reinitialise");
+
+        // TEST A : Confirmation en attente, moteur indisponible avant tentative d'écoute
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("reinitialise", true);
+        TEST_ASSERT(pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.A.1 WAITING_CONFIRMATION");
+        String tokA = pipeline.getPendingConfirmationToken();
+        TEST_ASSERT(tokA.length() > 0, "Conf.A.2 Jeton genere");
+
+        // Rendre le moteur vocal indisponible (ex: en cours de restitution)
+        voice.say("Notification importante");
+        TEST_ASSERT(voice.isBusy(), "Conf.A.3 Moteur vocal occupe");
+
+        // Tentative d'écoute pendant que le moteur est indisponible
+        TEST_ASSERT(pipeline.startListening() == false, "Conf.A.4 startListening() refuse car moteur occupe");
+        TEST_ASSERT(pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.A.5 Reste en WAITING_CONFIRMATION");
+        TEST_ASSERT(pipeline.getPendingConfirmationToken() == tokA, "Conf.A.6 Jeton conserve intact");
+
+        // Libérer le moteur et confirmer l'action
+        voice.stop();
+        TEST_ASSERT(pipeline.confirmPendingAction(tokA), "Conf.A.7 Action confirmee avec succes");
+        TEST_ASSERT(actionExecuted == true, "Conf.A.8 Action executee");
+        pipeline.cancel();
+
+        // TEST B : Confirmation annulée, puis échec réel de démarrage de capture
+        actionExecuted = false;
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("reinitialise", true);
+        TEST_ASSERT(pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.B.1 WAITING_CONFIRMATION");
+        String tokB = pipeline.getPendingConfirmationToken();
+
+        // Réserver le micro par un tiers pour forcer l'échec matériel de capture dans startListening()
+        HardwareManager::getInstance().prepareMicCapture((const void*)0xdeadbeef);
+
+        // startListening() annule la confirmation puis échoue sur le démarrage effectif de capture
+        TEST_ASSERT(pipeline.startListening() == false, "Conf.B.2 startListening() echoue");
+        // Règle formelle : le jeton B ne doit JAMAIS être restauré
+        TEST_ASSERT(pipeline.getPendingConfirmationToken() == "", "Conf.B.3 Jeton annule NON restaure");
+        TEST_ASSERT(pipeline.getState() != PipelineState::WAITING_CONFIRMATION, "Conf.B.4 N'est plus en WAITING_CONFIRMATION");
+
+        HardwareManager::getInstance().releaseMicCaptureReservation();
+
+        // Tentative de confirmation avec l'ancien jeton B : doit être REFUSÉE
+        TEST_ASSERT(pipeline.confirmPendingAction(tokB) == false, "Conf.B.5 Confirmation ancien jeton B refusee");
+        TEST_ASSERT(actionExecuted == false, "Conf.B.6 Action B jamais executee");
+        pipeline.cancel();
+        voice.stop();
+
+        // TEST C : Nouvelle capture acceptée après annulation de confirmation
+        actionExecuted = false;
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("reinitialise", true);
+        TEST_ASSERT(pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.C.1 WAITING_CONFIRMATION");
+        String tokC = pipeline.getPendingConfirmationToken();
+
+        // Nouvelle capture démarrée -> confirmation annulée
+        TEST_ASSERT(pipeline.startListening() == true, "Conf.C.2 Nouvelle ecoute acceptee");
+        TEST_ASSERT(pipeline.getState() == PipelineState::LISTENING, "Conf.C.3 Etat LISTENING");
+
+        // Enregistrer outil de consultation inoffensif
+        tools.registerTool("system.status", "Statut", []() {
+            return ToolResult::success("Systeme nominal.");
+        }, ToolSecurityPolicy::READ_ONLY);
+        pipeline.getDispatcher().registerMapping("system.status", "statut");
+
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("statut", true);
+        TEST_ASSERT(pipeline.getState() == PipelineState::READY, "Conf.C.4 Tour statut termine");
+        TEST_ASSERT(actionExecuted == false, "Conf.C.5 Action sensible annulee jamais executee");
+
+        // TEST D : Ancienne confirmation tentée après STOP
+        actionExecuted = false;
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("reinitialise", true);
+        TEST_ASSERT(pipeline.getState() == PipelineState::WAITING_CONFIRMATION, "Conf.D.1 WAITING_CONFIRMATION");
+        String tokD = pipeline.getPendingConfirmationToken();
+
+        pipeline.cancel();
+        TEST_ASSERT(pipeline.getState() == PipelineState::READY, "Conf.D.2 STOP -> READY");
+        TEST_ASSERT(pipeline.confirmPendingAction(tokD) == false, "Conf.D.3 Confirmation post-STOP refusee");
+        TEST_ASSERT(actionExecuted == false, "Conf.D.4 Action non executee");
+
+        // TEST E : Aucune double terminaison de l'action ou du tour
+        uint32_t finishCount = 0;
+        pipeline.onTurnFinished([&finishCount](uint32_t, PipelineResult, const String&) {
+            finishCount++;
+        });
+
+        pipeline.startListening();
+        pipeline.stopListening();
+        pipeline.feedSimulatedTranscription("reinitialise", true);
+        uint32_t countBefore = finishCount;
+        pipeline.cancel();
+        uint32_t countAfter = finishCount;
+        TEST_ASSERT(countAfter == countBefore + 1, "Conf.E.1 Exactement une notification de terminaison");
+
+        // Appel redondant de cancel
+        pipeline.cancel();
+        TEST_ASSERT(finishCount == countAfter, "Conf.E.2 Pas de double terminaison sur cancel redondant");
+    }
+
+    // -------------------------------------------------------------------------
+    // SECTION 3 (P1) : Réponses IA tardives & filtrage multi-annulations (Tests A -> E)
+    // -------------------------------------------------------------------------
+    {
+        std::cout << "\n--- TEST P1-LATE : Tests A -> E reponses IA tardives OpenAI Realtime ---" << std::endl;
+        MockLiveTransport mockTransportOAI;
+        VoxCoreVoice voiceOAI;
+        ToolRegistry toolsOAI;
+        IntegratedVoicePipeline pipeOAI;
+
+        VoiceKitConfig cfgOAI;
+        cfgOAI.provider = VoiceProviderType::OPENAI;
+        cfgOAI.apiKey = "sk-test-secret-147";
+        cfgOAI.model = "gpt-realtime-2.1-mini";
+        cfgOAI.voice = "alloy";
+        cfgOAI.wifiMode = WiFiMode::EXTERNAL_WIFI;
+        voiceOAI.begin(cfgOAI);
+        prepareMockOpenAIVoiceReady(voiceOAI, mockTransportOAI);
+
+        VoicePipelineConfig pcfgOAI;
+        pcfgOAI.enableVoiceUx = true;
+        pcfgOAI.enableAiProcessing = true;
+        pipeOAI.begin(voiceOAI, toolsOAI, pcfgOAI);
+
+        // TEST A : Question A -> STOP -> Question B -> Réponse tardive A -> Réponse normale B
+        pipeOAI.startListening();
+        pipeOAI.stopListening();
+        pipeOAI.feedSimulatedTranscription("Question A", true);
+        TEST_ASSERT(pipeOAI.getState() == PipelineState::AI_PROCESSING, "Late.A.1 Question A en cours");
+
+        // Arrivée de response.created pour A
+        const char* createdA = "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_A_001\",\"status\":\"in_progress\"}}";
+        mockTransportOAI.simulateIncoming(createdA, strlen(createdA));
+
+        // STOP utilisateur
+        pipeOAI.cancel();
+        TEST_ASSERT(pipeOAI.getState() == PipelineState::READY, "Late.A.2 STOP A -> READY");
+
+        // Question B
+        pipeOAI.startListening();
+        pipeOAI.stopListening();
+        pipeOAI.feedSimulatedTranscription("Question B", true);
+        TEST_ASSERT(pipeOAI.getState() == PipelineState::AI_PROCESSING, "Late.A.3 Question B en cours");
+
+        // Injection d'une réponse tardive de A (texte, audio et done)
+        const char* textA = "{\"type\":\"response.audio_transcript.delta\",\"response_id\":\"resp_A_001\",\"delta\":\"Texte obsolete A\"}";
+        const char* audioA = "{\"type\":\"response.audio.delta\",\"response_id\":\"resp_A_001\",\"delta\":\"AAAAAAAAAAAAAAAA\"}";
+        const char* doneA = "{\"type\":\"response.done\",\"response\":{\"id\":\"resp_A_001\",\"status\":\"completed\",\"output\":[{\"content\":[{\"transcript\":\"Texte obsolete A\"}]}]}}";
+        mockTransportOAI.simulateIncoming(textA, strlen(textA));
+        mockTransportOAI.simulateIncoming(audioA, strlen(audioA));
+        mockTransportOAI.simulateIncoming(doneA, strlen(doneA));
+        pipeOAI.update();
+
+        // Vérifier que la réponse A a été intégralement ignorée
+        TEST_ASSERT(pipeOAI.getLastAiResponse().indexOf("Texte obsolete A") < 0, "Late.A.4 Reponse A rejetee");
+        TEST_ASSERT(pipeOAI.getState() == PipelineState::AI_PROCESSING, "Late.A.5 Reste en AI_PROCESSING pour B");
+
+        // Réponse normale de B
+        const char* createdB = "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_B_002\",\"status\":\"in_progress\"}}";
+        const char* textB = "{\"type\":\"response.audio_transcript.delta\",\"response_id\":\"resp_B_002\",\"delta\":\"Reponse valide B.\"}";
+        const char* textDoneB = "{\"type\":\"response.output_audio_transcript.done\",\"response_id\":\"resp_B_002\",\"transcript\":\"Reponse valide B.\"}";
+        const char* audioB = "{\"type\":\"response.audio.delta\",\"response_id\":\"resp_B_002\",\"delta\":\"AAAAAAAAAAAAAAAA\"}";
+        const char* doneB = "{\"type\":\"response.done\",\"response\":{\"id\":\"resp_B_002\",\"status\":\"completed\",\"output\":[{\"content\":[{\"transcript\":\"Reponse valide B.\"}]}]}}";
+
+        mockTransportOAI.simulateIncoming(createdB, strlen(createdB));
+        mockTransportOAI.simulateIncoming(textB, strlen(textB));
+        mockTransportOAI.simulateIncoming(textDoneB, strlen(textDoneB));
+        mockTransportOAI.simulateIncoming(audioB, strlen(audioB));
+        voiceOAI.getSession().transitionTo(LiveSessionState::PLAYING, "B audio");
+        pipeOAI.update();
+        mockTransportOAI.simulateIncoming(doneB, strlen(doneB));
+        drainVoicePlayback(voiceOAI);
+        pipeOAI.update();
+
+        TEST_ASSERT(pipeOAI.getLastAiResponse().indexOf("Reponse valide B") >= 0, "Late.A.6 Reponse B enregistree");
+        TEST_ASSERT(pipeOAI.getState() == PipelineState::READY, "Late.A.7 Tour B acheve");
+
+        // TEST B : Deux annulations successives, suivies d'une troisième question
+        // 1ere annulation (resp_X)
+        pipeOAI.startListening();
+        pipeOAI.stopListening();
+        pipeOAI.feedSimulatedTranscription("Question X", true);
+        const char* crX = "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_X_003\",\"status\":\"in_progress\"}}";
+        mockTransportOAI.simulateIncoming(crX, strlen(crX));
+        pipeOAI.cancel();
+
+        // 2eme annulation (resp_Y)
+        pipeOAI.startListening();
+        pipeOAI.stopListening();
+        pipeOAI.feedSimulatedTranscription("Question Y", true);
+        const char* crY = "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_Y_004\",\"status\":\"in_progress\"}}";
+        mockTransportOAI.simulateIncoming(crY, strlen(crY));
+        pipeOAI.cancel();
+
+        // 3eme question (resp_Z)
+        pipeOAI.startListening();
+        pipeOAI.stopListening();
+        pipeOAI.feedSimulatedTranscription("Question Z", true);
+
+        // Paquets parasites de X et Y injectés
+        const char* txtX = "{\"type\":\"response.audio_transcript.delta\",\"response_id\":\"resp_X_003\",\"delta\":\"Parasite X\"}";
+        const char* txtY = "{\"type\":\"response.audio_transcript.delta\",\"response_id\":\"resp_Y_004\",\"delta\":\"Parasite Y\"}";
+        mockTransportOAI.simulateIncoming(txtX, strlen(txtX));
+        mockTransportOAI.simulateIncoming(txtY, strlen(txtY));
+        pipeOAI.update();
+
+        TEST_ASSERT(pipeOAI.getLastAiResponse().indexOf("Parasite X") < 0, "Late.B.1 Parasite X rejete");
+        TEST_ASSERT(pipeOAI.getLastAiResponse().indexOf("Parasite Y") < 0, "Late.B.2 Parasite Y rejete");
+
+        // Réponse normale de Z
+        const char* crZ = "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_Z_005\",\"status\":\"in_progress\"}}";
+        const char* txtZ = "{\"type\":\"response.audio_transcript.delta\",\"response_id\":\"resp_Z_005\",\"delta\":\"Reponse propre Z.\"}";
+        const char* txtDoneZ = "{\"type\":\"response.output_audio_transcript.done\",\"response_id\":\"resp_Z_005\",\"transcript\":\"Reponse propre Z.\"}";
+        const char* audZ = "{\"type\":\"response.audio.delta\",\"response_id\":\"resp_Z_005\",\"delta\":\"AAAAAAAAAAAAAAAA\"}";
+        const char* doneZ = "{\"type\":\"response.done\",\"response\":{\"id\":\"resp_Z_005\",\"status\":\"completed\",\"output\":[{\"content\":[{\"transcript\":\"Reponse propre Z.\"}]}]}}";
+        mockTransportOAI.simulateIncoming(crZ, strlen(crZ));
+        mockTransportOAI.simulateIncoming(txtZ, strlen(txtZ));
+        mockTransportOAI.simulateIncoming(txtDoneZ, strlen(txtDoneZ));
+        mockTransportOAI.simulateIncoming(audZ, strlen(audZ));
+        voiceOAI.getSession().transitionTo(LiveSessionState::PLAYING, "Z audio");
+        pipeOAI.update();
+        mockTransportOAI.simulateIncoming(doneZ, strlen(doneZ));
+        drainVoicePlayback(voiceOAI);
+        pipeOAI.update();
+
+        TEST_ASSERT(pipeOAI.getLastAiResponse().indexOf("Reponse propre Z") >= 0, "Late.B.3 Reponse Z validee");
+        TEST_ASSERT(pipeOAI.getState() == PipelineState::READY, "Late.B.4 READY post Z");
+
+        // TEST C : Ancienne transcription textuelle après nouvelle demande
+        pipeOAI.startListening();
+        pipeOAI.stopListening();
+        pipeOAI.feedSimulatedTranscription("Question C1", true);
+        const char* crC1 = "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_C1\",\"status\":\"in_progress\"}}";
+        mockTransportOAI.simulateIncoming(crC1, strlen(crC1));
+        pipeOAI.cancel();
+
+        pipeOAI.startListening();
+        pipeOAI.stopListening();
+        pipeOAI.feedSimulatedTranscription("Question C2", true);
+        const char* strayText = "{\"type\":\"response.output_audio_transcript.delta\",\"response_id\":\"resp_C1\",\"delta\":\"Texte fantome\"}";
+        mockTransportOAI.simulateIncoming(strayText, strlen(strayText));
+        pipeOAI.update();
+        TEST_ASSERT(pipeOAI.getLastAiResponse().indexOf("Texte fantome") < 0, "Late.C.1 Transcription obsolete C1 rejetee");
+        pipeOAI.cancel();
+
+        // TEST D : Ancien paquet audio après nouvelle demande
+        pipeOAI.startListening();
+        pipeOAI.stopListening();
+        pipeOAI.feedSimulatedTranscription("Question D1", true);
+        const char* crD1 = "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_D1\",\"status\":\"in_progress\"}}";
+        mockTransportOAI.simulateIncoming(crD1, strlen(crD1));
+        pipeOAI.cancel();
+
+        pipeOAI.startListening();
+        pipeOAI.stopListening();
+        pipeOAI.feedSimulatedTranscription("Question D2", true);
+        uint32_t samplesBefore = voiceOAI.getPlayer().getSamplesPlayedTotal();
+        const char* strayAudio = "{\"type\":\"response.audio.delta\",\"response_id\":\"resp_D1\",\"delta\":\"AAAAAAAAAAAAAAAA\"}";
+        mockTransportOAI.simulateIncoming(strayAudio, strlen(strayAudio));
+        pipeOAI.update();
+        TEST_ASSERT(voiceOAI.getPlayer().getSamplesPlayedTotal() == samplesBefore, "Late.D.1 Audio parasite D1 ignore");
+        pipeOAI.cancel();
+
+        // TEST E : Réponse B terminée correctement et mémorisée une seule fois
+        VoiceUxController ux;
+        pipeOAI.begin(voiceOAI, toolsOAI, ux, pcfgOAI);
+        size_t memBefore = ux.getReplyMemory().getCount();
+
+        pipeOAI.startListening();
+        pipeOAI.stopListening();
+        pipeOAI.feedSimulatedTranscription("Question E", true);
+
+        const char* crE = "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_E\",\"status\":\"in_progress\"}}";
+        const char* txtE = "{\"type\":\"response.output_audio_transcript.delta\",\"response_id\":\"resp_E\",\"delta\":\"Reponse unique E.\"}";
+        const char* txtDoneE = "{\"type\":\"response.output_audio_transcript.done\",\"response_id\":\"resp_E\",\"transcript\":\"Reponse unique E.\"}";
+        const char* audE = "{\"type\":\"response.audio.delta\",\"response_id\":\"resp_E\",\"delta\":\"AAAAAAAAAAAAAAAA\"}";
+        const char* doneE = "{\"type\":\"response.done\",\"response\":{\"id\":\"resp_E\",\"status\":\"completed\",\"output\":[{\"content\":[{\"transcript\":\"Reponse unique E.\"}]}]}}";
+
+        mockTransportOAI.simulateIncoming(crE, strlen(crE));
+        mockTransportOAI.simulateIncoming(txtE, strlen(txtE));
+        mockTransportOAI.simulateIncoming(txtDoneE, strlen(txtDoneE));
+        mockTransportOAI.simulateIncoming(audE, strlen(audE));
+        voiceOAI.getSession().transitionTo(LiveSessionState::PLAYING, "E audio");
+        pipeOAI.update();
+        mockTransportOAI.simulateIncoming(doneE, strlen(doneE));
+        drainVoicePlayback(voiceOAI);
+        pipeOAI.update();
+
+        TEST_ASSERT(pipeOAI.getState() == PipelineState::READY, "Late.E.1 Tour E acheve");
+        TEST_ASSERT(ux.getReplyMemory().getCount() == memBefore + 1, "Late.E.2 Memorise exactement une fois dans ReplyMemory");
+        TEST_ASSERT(ux.getReplyMemory().getLastReply().indexOf("Reponse unique E") >= 0, "Late.E.3 Contenu exact memorise");
+    }
+
+    std::cout << "\n[TEST SUITE 147] SUCCES INTEGRAL DES TESTS CORRECTIFS (v0.6.5.1 Final)" << std::endl;
+}

@@ -150,6 +150,9 @@ private:
 
     String _currentResponseId;
     String _cancelledResponseId;
+    std::vector<String> _cancelledResponseIds;
+    bool isResponseCancelled(const char* respId) const;
+    void addCancelledResponseId(const String& respId);
 
     bool _conversationMode = false;
     std::atomic<bool> _connected{false};

@@ -1435,6 +1435,48 @@ bool VoxCoreVoice::stopListening() {
     Serial.printf("[VoiceKit] stopListening() : Arret capture micro et envoi de activityEnd (turnId=%u)...\n",
                   (unsigned)_activeCaptureTurnId);
     bool stopped = _streamer.stop();
+
+    // 1. Échec réel d'arrêt matériel du streamer audio
+    if (!stopped) {
+        _lastError = _streamer.getLastError();
+        if (_lastError.isEmpty()) {
+            _lastError = "Echec arret capture micro";
+        }
+        Serial.printf("[VoiceKit] ERREUR stopListening() : %s\n", _lastError.c_str());
+        _cancelledCaptureTurnId = (_activeCaptureTurnId != 0) ? _activeCaptureTurnId : _pendingTranscriptionTurnId;
+        _activeCaptureTurnId = 0;
+        _pendingTranscriptionTurnId = 0;
+        _transcriptionPending = false;
+        _finalTranscriptionReceived = false;
+        _player.setPlaybackAllowed(true);
+        setState(VoiceState::ERROR_STATE);
+        if (_onError) {
+            _onError(_lastError);
+        }
+        return false;
+    }
+
+    // 2. Échec de transmission réseau de activityEnd auprès du fournisseur vocal actif
+    if (_activeProvider && _activeProvider->isConnected() && !_streamer.isActivityEndSent()) {
+        _lastError = _streamer.getLastError();
+        if (_lastError.isEmpty()) {
+            _lastError = "Echec transmission activityEnd";
+        }
+        Serial.printf("[VoiceKit] ERREUR stopListening() : %s\n", _lastError.c_str());
+        _cancelledCaptureTurnId = (_activeCaptureTurnId != 0) ? _activeCaptureTurnId : _pendingTranscriptionTurnId;
+        _activeCaptureTurnId = 0;
+        _pendingTranscriptionTurnId = 0;
+        _transcriptionPending = false;
+        _finalTranscriptionReceived = false;
+        _player.setPlaybackAllowed(true);
+        setState(VoiceState::ERROR_STATE);
+        if (_onError) {
+            _onError(_lastError);
+        }
+        return false;
+    }
+
+    // 3. Terminaison acceptée nominale
     _pendingTranscriptionTurnId = _activeCaptureTurnId;
     _activeCaptureTurnId = 0;
     _transcriptionPending = true;
@@ -1449,11 +1491,6 @@ bool VoxCoreVoice::stopListening() {
 
     if (_onListeningFinished) {
         _onListeningFinished();
-    }
-
-    if (!stopped) {
-        _lastError = _streamer.getLastError();
-        Serial.printf("[VoiceKit] Avertissement stopListening() : %s\n", _lastError.c_str());
     }
 
     setState(VoiceState::TRANSCRIBING);

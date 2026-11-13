@@ -10965,6 +10965,9 @@ int main() {
   // D, E, F, G, H, I & J)
   run_pipeline_v0651_final_stabilization_tests();
 
+  // Suite VoiceKit v0.6.5.1 — Minimal Corrective Final Validation (P0, P1 Conf, P1 Late AI)
+  run_pipeline_v0651_minimal_corrective_tests();
+
   std::cout << "\n==========================================================="
             << std::endl;
   std::cout << "  BILAN FINAL DES TESTS : " << s_testsPassed << " REUSSIS, "
