@@ -10753,6 +10753,7 @@ void test_v06432_final_event_correlation_validation() {
 
 #include "test_pipeline_suites.h"
 #include "test_v0652_transcription_suites.h"
+#include "test_v0652_examples_corrective_suites.h"
 
 // =============================================================================
 // MAIN TEST RUNNER
@@ -10972,6 +10973,9 @@ int main() {
 
   // Suite VoiceKit v0.6.5.2 — Transcription Assembly & Realtime Finalization (Tests 1 à 6)
   run_transcription_assembly_v0652_tests();
+
+  // Suite VoiceKit v0.6.5.2 — Examples Corrective (MinimalSTT & IntegratedVoiceDemo)
+  run_examples_minimal_corrective_v0652_tests();
 
   std::cout << "\n==========================================================="
             << std::endl;

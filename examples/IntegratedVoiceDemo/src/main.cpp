@@ -16,10 +16,12 @@
 
 #if __has_include("secrets.h")
     #include "secrets.h"
-#elif __has_include("secrets.example.h")
-    #include "secrets.example.h"
+    #define SECRETS_FILE_PRESENT 1
+#else
+    #define SECRETS_FILE_PRESENT 0
 #endif
 
+// Fallbacks de compilation si secrets.h est absent ou si des constantes sont omises
 #ifndef WIFI_SSID
     #define WIFI_SSID ""
 #endif
@@ -42,6 +44,24 @@
 
 #ifndef OPENAI_API_KEY
     #define OPENAI_API_KEY ""
+#endif
+
+// Détection des macros de sélection explicite de fournisseur IA
+#if defined(USE_GEMINI) && defined(USE_OPENAI)
+    static constexpr bool s_macroProviderConflict = true;
+#else
+    static constexpr bool s_macroProviderConflict = false;
+#endif
+
+#if defined(USE_OPENAI) && !defined(USE_GEMINI)
+    static constexpr bool s_macroUseOpenAi = true;
+    static constexpr bool s_macroUseGemini = false;
+#elif defined(USE_GEMINI) && !defined(USE_OPENAI)
+    static constexpr bool s_macroUseOpenAi = false;
+    static constexpr bool s_macroUseGemini = true;
+#else
+    static constexpr bool s_macroUseOpenAi = false;
+    static constexpr bool s_macroUseGemini = false;
 #endif
 
 // =============================================================================
@@ -85,6 +105,105 @@ static bool s_responseTextDirty    = true;
 static String s_pendingConfirmText = "";
 static bool s_showConfirmModal     = false;
 
+// État de validation de la configuration
+static bool   s_configValid    = false;
+static String s_configErrorMsg = "";
+
+struct ConfigValidationResult {
+    bool isValid = false;
+    String errorMessage = "";
+    VoiceProviderType provider = VoiceProviderType::GEMINI;
+    const char* providerName = "Google Gemini Live";
+};
+
+static bool isPlaceholderOrEmpty(const char* val) {
+    if (val == nullptr || val[0] == '\0') {
+        return true;
+    }
+    static const char* const s_placeholders[] = {
+        "VOTRE_CLE_API_GEMINI",
+        "VOTRE_CLE_API_OPENAI",
+        "VOTRE_CLE_ICI",
+        "VOTRE_SSID_WIFI",
+        "VOTRE_MOT_DE_PASSE_WIFI",
+        "VOTRE_MOT_DE_PASSE",
+        "YOUR_API_KEY",
+        "YOUR_WIFI_SSID",
+        "YOUR_WIFI_PASSWORD"
+    };
+    for (const char* placeholder : s_placeholders) {
+        if (strcmp(val, placeholder) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static ConfigValidationResult validateCredentials() {
+    ConfigValidationResult res;
+
+    // 1. secrets.h absent
+    if (!SECRETS_FILE_PRESENT) {
+        res.isValid = false;
+        res.errorMessage = "Fichier secrets.h absent.\nCopiez secrets.example.h vers secrets.h.";
+        return res;
+    }
+
+    // 2. Conflit explicite de sélection (USE_GEMINI et USE_OPENAI simultanés)
+    if (s_macroProviderConflict) {
+        res.isValid = false;
+        res.errorMessage = "Conflit : USE_GEMINI et USE_OPENAI sont définis simultanément.";
+        return res;
+    }
+
+    // 3. Fournisseur sélectionné
+    if (!s_macroUseGemini && !s_macroUseOpenAi) {
+        res.isValid = false;
+        res.errorMessage = "Aucun fournisseur sélectionné dans secrets.h (définissez USE_GEMINI ou USE_OPENAI).";
+        return res;
+    }
+
+    if (s_macroUseOpenAi) {
+        res.provider = VoiceProviderType::OPENAI;
+        res.providerName = "OpenAI Realtime";
+    } else {
+        res.provider = VoiceProviderType::GEMINI;
+        res.providerName = "Google Gemini Live";
+    }
+
+    // 4. Validation séparée du SSID Wi-Fi
+    if (isPlaceholderOrEmpty(WIFI_SSID)) {
+        res.isValid = false;
+        res.errorMessage = "SSID Wi-Fi non configuré dans secrets.h.";
+        return res;
+    }
+
+    // 5. Validation séparée du mot de passe Wi-Fi
+    if (isPlaceholderOrEmpty(WIFI_PASSWORD)) {
+        res.isValid = false;
+        res.errorMessage = "Mot de passe Wi-Fi non configuré dans secrets.h.";
+        return res;
+    }
+
+    // 6. Validation séparée de la clé du fournisseur sélectionné (sans test trompeur de préfixe)
+    if (res.provider == VoiceProviderType::GEMINI) {
+        if (isPlaceholderOrEmpty(GEMINI_API_KEY)) {
+            res.isValid = false;
+            res.errorMessage = "Clé API Gemini Live manquante pour le fournisseur sélectionné.";
+            return res;
+        }
+    } else {
+        if (isPlaceholderOrEmpty(OPENAI_API_KEY)) {
+            res.isValid = false;
+            res.errorMessage = "Clé API OpenAI Realtime manquante pour le fournisseur sélectionné.";
+            return res;
+        }
+    }
+
+    res.isValid = true;
+    return res;
+}
+
 // =============================================================================
 // Callbacks LVGL 9
 // =============================================================================
@@ -116,6 +235,11 @@ static void touchReadCb(lv_indev_t* indev, lv_indev_data_t* data) {
 
 static void updatePttUi(bool isListening, bool isSpeaking, bool isReady) {
     if (!s_btnPtt || !s_lblPtt) return;
+    if (!s_configValid) {
+        lv_label_set_text(s_lblPtt, "Config invalide");
+        lv_obj_set_style_bg_color(s_btnPtt, lv_color_hex(0x424242), 0);
+        return;
+    }
     if (isListening) {
         lv_label_set_text(s_lblPtt, "Relâcher pour envoyer");
         lv_obj_set_style_bg_color(s_btnPtt, lv_color_hex(0xC62828), 0);
@@ -134,6 +258,10 @@ static void updatePttUi(bool isListening, bool isSpeaking, bool isReady) {
 static void onPttButtonEvent(lv_event_t* e) {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_PRESSED) {
+        if (!s_configValid) {
+            Serial.println("[UI] PTT pressé mais configuration invalide (ERR CONFIG)");
+            return;
+        }
         if (!s_voice.isReady() || !s_pipeline.isReady()) {
             Serial.printf("[UI] PTT Pressé mais non prêt (voiceReady=%d, pipeState=%s, paused=%d)\n",
                           s_voice.isReady(), pipelineStateToString(s_pipeline.getState()), s_pipeline.isPaused());
@@ -151,6 +279,7 @@ static void onPttButtonEvent(lv_event_t* e) {
             updatePttUi(false, false, false);
         }
     } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        if (!s_configValid) return;
         if (s_pipeline.getState() == PipelineState::LISTENING) {
             Serial.println("[UI] PTT Released -> stopListening()");
             if (!s_pipeline.stopListening()) {
@@ -405,6 +534,10 @@ static void handleSerialCommand(const String& cmd) {
 
     if (first == 'p' || first == 'P') {
         Serial.println("[CMD] P -> Démarrer écoute");
+        if (!s_configValid) {
+            Serial.println("[CMD][REFUS] Service vocal indisponible : configuration invalide (ERR CONFIG).");
+            return;
+        }
         if (!s_voice.isReady()) {
             Serial.println("[CMD][REFUS] Service vocal non prêt (connexion en cours)...");
             return;
@@ -412,23 +545,41 @@ static void handleSerialCommand(const String& cmd) {
         s_pipeline.startListening();
     } else if (first == 'r' || first == 'R') {
         Serial.println("[CMD] R -> Arrêter écoute");
+        if (!s_configValid) {
+            Serial.println("[CMD][REFUS] Configuration invalide.");
+            return;
+        }
         s_pipeline.stopListening();
     } else if (first == 's' || first == 'S') {
         Serial.println("[CMD] S -> STOP prioritaire");
-        s_pipeline.cancel();
+        if (s_configValid) {
+            s_pipeline.cancel();
+        }
     } else if (first == 'k' || first == 'K') {
+        if (!s_configValid) {
+            Serial.println("[CMD][REFUS] Configuration invalide.");
+            return;
+        }
         bool nowPaused = !s_pipeline.isPaused();
         s_pipeline.setPaused(nowPaused);
         Serial.printf("[CMD] K -> Pipeline %s\n", nowPaused ? "EN PAUSE" : "REPRIS (ACTIF)");
         snprintf(s_responseTextBuf, sizeof(s_responseTextBuf), "Pipeline %s", nowPaused ? "en pause." : "repris.");
         s_responseTextDirty = true;
     } else if (first == 'c' || first == 'C') {
-        Serial.println("[CMD] C -> Confirmer action");
-        s_pipeline.confirmPendingAction();
+        if (s_configValid) {
+            Serial.println("[CMD] C -> Confirmer action");
+            s_pipeline.confirmPendingAction();
+        }
     } else if (first == 'x' || first == 'X') {
-        Serial.println("[CMD] X -> Refuser action");
-        s_pipeline.rejectPendingAction();
+        if (s_configValid) {
+            Serial.println("[CMD] X -> Refuser action");
+            s_pipeline.rejectPendingAction();
+        }
     } else if ((first == 't' || first == 'T') && cmd.length() > 2) {
+        if (!s_configValid) {
+            Serial.println("[CMD][REFUS] Test texte refusé : configuration invalide.");
+            return;
+        }
         String sim = cmd.substring(2);
         sim.trim();
         Serial.printf("[CMD] T -> Test texte : \"%s\"\n", sim.c_str());
@@ -463,62 +614,8 @@ void setup() {
     Serial.begin(115200);
     delay(200);
 
-    // 1. Détermination du Fournisseur Vocal IA et Configuration
-    VoiceKitConfig vcfg;
-#if defined(USE_GEMINI) && defined(USE_OPENAI)
-    #error "Conflit dans secrets.h : Décommentez soit USE_GEMINI, soit USE_OPENAI, mais pas les deux !"
-#elif defined(USE_OPENAI)
-    vcfg.provider = VoiceProviderType::OPENAI;
-    vcfg.apiKey = OPENAI_API_KEY;
-#elif defined(USE_GEMINI)
-    vcfg.provider = VoiceProviderType::GEMINI;
-    vcfg.apiKey = GEMINI_API_KEY;
-#elif defined(VOICE_PROVIDER) && (VOICE_PROVIDER == 1)
-    vcfg.provider = VoiceProviderType::OPENAI;
-    vcfg.apiKey = OPENAI_API_KEY;
-#elif defined(VOICE_PROVIDER) && (VOICE_PROVIDER == 0)
-    vcfg.provider = VoiceProviderType::GEMINI;
-    vcfg.apiKey = GEMINI_API_KEY;
-#else
-    // Sélection automatique basée sur la présence effective des clés API si aucune macro explicite
-    bool hasGeminiKey = (strlen(GEMINI_API_KEY) > 0 && strcmp(GEMINI_API_KEY, "VOTRE_CLE_ICI") != 0 && strcmp(GEMINI_API_KEY, "VOTRE_CLE_API_GEMINI") != 0);
-    bool hasOpenAiKey = (strlen(OPENAI_API_KEY) > 0 && strcmp(OPENAI_API_KEY, "VOTRE_CLE_ICI") != 0 && strcmp(OPENAI_API_KEY, "VOTRE_CLE_API_OPENAI") != 0);
-
-    if (hasGeminiKey) {
-        vcfg.provider = VoiceProviderType::GEMINI;
-        vcfg.apiKey = GEMINI_API_KEY;
-    } else if (hasOpenAiKey) {
-        vcfg.provider = VoiceProviderType::OPENAI;
-        vcfg.apiKey = OPENAI_API_KEY;
-    } else {
-        // Repli par défaut sans clé
-        vcfg.provider = VoiceProviderType::GEMINI;
-        vcfg.apiKey = "";
-        Serial.println("[MAIN] AVERTISSEMENT : Aucune clé API valide trouvée dans secrets.h !");
-    }
-#endif
-    vcfg.wifiMode = WiFiMode::MANAGED_WIFI;
-    vcfg.wifiSSID = WIFI_SSID;
-    vcfg.wifiPassword = WIFI_PASSWORD;
-    vcfg.volume = 75;
-
-    s_activeProviderType = vcfg.provider;
-    const char* providerName = (s_activeProviderType == VoiceProviderType::OPENAI) ? "OpenAI Realtime" : "Google Gemini Live";
-
-    if (vcfg.apiKey.length() == 0 || vcfg.apiKey == "VOTRE_CLE_ICI") {
-        Serial.printf("[MAIN] AVERTISSEMENT : Clé API %s non configurée dans secrets.h\n", providerName);
-    }
-
-    Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.6.5.2 — Integrated Voice Pipeline Demo     ");
-    Serial.printf ("  Moteur IA actif : %s\n", providerName);
-    Serial.println("========================================================\n");
-
-    // Message d'attente initial avec nom du fournisseur
-    snprintf(s_responseTextBuf, sizeof(s_responseTextBuf), "Fournisseur : %s\nEn attente de connexion...", providerName);
-
-    // 2. Initialisation Affichage M5GFX (Orientation Paysage 320x240) et LVGL 9
-    // Sur M5Stack CoreS3, rotation 0 = 320x240 Paysage Normal (caméra en haut).
+    // 1. Initialisation Affichage M5GFX (Orientation Paysage 320x240) et LVGL 9
+    // Doit être exécutée avant la validation pour afficher immédiatement l'état graphique
     M5.Display.waitDisplay();
     M5.Display.setRotation(0);
     M5.Display.setBrightness(220);
@@ -542,7 +639,76 @@ void setup() {
     createUi();
     lv_timer_handler();
 
-    // 3. Démarrage du Moteur Vocal VoxCoreVoice
+    // 2. Validation stricte des identifiants (secrets.h)
+    ConfigValidationResult valRes = validateCredentials();
+    s_activeProviderType = valRes.provider;
+
+    if (!valRes.isValid) {
+        s_configValid = false;
+        s_configErrorMsg = valRes.errorMessage;
+
+        Serial.println("\n========================================================");
+        Serial.println("  VoiceKit v0.6.5.2 — IntegratedVoiceDemo               ");
+        Serial.println("  [ERREUR CONFIGURATION IDENTIFIANTS]                   ");
+        Serial.printf ("  Cause : %s\n", valRes.errorMessage.c_str());
+        Serial.println("  Initialisation réseau et moteur IA annulée.           ");
+        Serial.println("========================================================\n");
+
+        if (s_lblTitle != nullptr) {
+            char titleBuf[64];
+            snprintf(titleBuf, sizeof(titleBuf), "VoiceKit — %s",
+                     (valRes.provider == VoiceProviderType::OPENAI) ? "OpenAI" : "Gemini");
+            lv_label_set_text(s_lblTitle, titleBuf);
+        }
+        if (s_lblStateBadge != nullptr) {
+            lv_label_set_text(s_lblStateBadge, "ERR CONFIG");
+            lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFF5252), 0);
+            lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x490000), 0);
+        }
+        if (s_btnPtt != nullptr && s_lblPtt != nullptr) {
+            lv_label_set_text(s_lblPtt, "Config invalide");
+            lv_obj_set_style_bg_color(s_btnPtt, lv_color_hex(0x424242), 0);
+        }
+        snprintf(s_userTextBuf, sizeof(s_userTextBuf), "Configuration invalide :");
+        snprintf(s_responseTextBuf, sizeof(s_responseTextBuf), "%s", valRes.errorMessage.c_str());
+        s_userTextDirty = true;
+        s_responseTextDirty = true;
+        if (s_lblUserText) lv_label_set_text(s_lblUserText, s_userTextBuf);
+        if (s_lblResponseText) lv_label_set_text(s_lblResponseText, s_responseTextBuf);
+        lv_timer_handler();
+
+        printHelp();
+        return;
+    }
+
+    // 3. Configuration acceptée : initialisation normale
+    s_configValid = true;
+
+    VoiceKitConfig vcfg;
+    vcfg.provider = valRes.provider;
+    if (valRes.provider == VoiceProviderType::OPENAI) {
+        vcfg.apiKey = OPENAI_API_KEY;
+    } else {
+        vcfg.apiKey = GEMINI_API_KEY;
+    }
+    vcfg.wifiMode = WiFiMode::MANAGED_WIFI;
+    vcfg.wifiSSID = WIFI_SSID;
+    vcfg.wifiPassword = WIFI_PASSWORD;
+    vcfg.volume = 75;
+
+    // Diagnostics série conformes : ne jamais divulguer la clé API !
+    Serial.println("\n========================================================");
+    Serial.println("  VoiceKit v0.6.5.2 — Integrated Voice Pipeline Demo     ");
+    Serial.printf ("  Moteur IA actif : %s\n", valRes.providerName);
+    Serial.printf ("  SSID Wi-Fi      : %s\n", WIFI_SSID);
+    Serial.println("  Clé API         : [CONFIGURÉE]");
+    Serial.println("========================================================\n");
+
+    // Message d'attente initial avec nom du fournisseur
+    snprintf(s_responseTextBuf, sizeof(s_responseTextBuf), "Fournisseur : %s\nEn attente de connexion...", valRes.providerName);
+    s_responseTextDirty = true;
+
+    // 4. Démarrage du Moteur Vocal VoxCoreVoice
     bool voiceOk = s_voice.begin(vcfg);
     if (!voiceOk) {
         Serial.println("[MAIN] ERREUR : Echec initialisation VoxCoreVoice !");
@@ -555,7 +721,7 @@ void setup() {
         s_responseTextDirty = true;
     }
 
-    // 3. Enregistrement des outils locaux
+    // 5. Enregistrement des outils locaux
     bool toolsOk = registerDemoTools();
     if (!toolsOk) {
         Serial.println("[MAIN] ERREUR : Echec enregistrement outils ou mappages !");
@@ -568,7 +734,7 @@ void setup() {
         s_responseTextDirty = true;
     }
 
-    // 4. Configuration et Démarrage du Pipeline Intégré
+    // 6. Configuration et Démarrage du Pipeline Intégré
     VoicePipelineConfig pcfg;
     pcfg.enableVoiceUx = true;
     pcfg.enableLocalTools = true;
@@ -589,7 +755,7 @@ void setup() {
         s_responseTextDirty = true;
     }
 
-    // 5. Abonnements aux Événements du Pipeline & Moteur Vocal
+    // 7. Abonnements aux Événements du Pipeline & Moteur Vocal
     s_voice.onReady([]() {
         const char* pName = (s_activeProviderType == VoiceProviderType::OPENAI) ? "OpenAI Realtime" : "Google Gemini Live";
         Serial.printf("[MAIN] VoiceKit service vocal (%s) connecté et PRÊT !\n", pName);
@@ -732,7 +898,9 @@ void setup() {
 
 void loop() {
     M5.update();
-    s_pipeline.update();
+    if (s_configValid) {
+        s_pipeline.update();
+    }
 
     // Commandes reçues via la liaison série
     if (Serial.available()) {

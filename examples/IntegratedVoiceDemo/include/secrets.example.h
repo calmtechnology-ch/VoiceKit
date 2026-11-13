@@ -1,8 +1,11 @@
 #pragma once
 
 // =============================================================================
-// VoiceKit v0.6.5.2 — IntegratedVoiceDemo Configuration des Identifiants
-// Copiez ce fichier sous le nom "secrets.h" et renseignez vos identifiants réels.
+// VoiceKit v0.6.5.2 — IntegratedVoiceDemo Modèle de Configuration (Template)
+// ATTENTION : Ce fichier est uniquement un modèle d'exemple.
+// Pour configurer votre application, copiez ce fichier sous le nom "secrets.h"
+// dans ce même répertoire et renseignez vos identifiants réels.
+// Le fichier "secrets.h" est ignoré par Git et ne doit jamais être commité.
 // =============================================================================
 
 // =============================================================================
@@ -12,7 +15,7 @@
 #define WIFI_PASSWORD "VOTRE_MOT_DE_PASSE_WIFI"
 
 // =============================================================================
-// 2. SÉLECTION FACILE DU FOURNISSEUR IA VOCAL
+// 2. SÉLECTION EXPLICITE DU FOURNISSEUR IA VOCAL
 //    (Décommentez une seule ligne pour choisir le moteur actif)
 // =============================================================================
 #define USE_GEMINI      // <-- Google Gemini Live (Actif par défaut)
@@ -22,9 +25,9 @@
 // 3. CLÉS D'AUTHENTIFICATION API
 // =============================================================================
 
-// Clé API Google Gemini Live (débutant par AQ...)
+// Clé API Google Gemini Live
 #define GEMINI_KEY    "VOTRE_CLE_API_GEMINI"
 #define GEMINI_API_KEY GEMINI_KEY
 
-// Clé API OpenAI Realtime (débutant par sk-proj-...)
+// Clé API OpenAI Realtime
 #define OPENAI_API_KEY "VOTRE_CLE_API_OPENAI"

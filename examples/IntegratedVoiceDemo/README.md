@@ -23,7 +23,7 @@ L'exemple montre comment brancher `IntegratedVoicePipeline` avec le registre d'o
   - *Conversation IA en streaming* : Redirection automatique vers Gemini Live ou OpenAI Realtime pour les questions générales.
 - **Gestion sécurisée des actions sensibles (`SENSITIVE`)** : Boîte de dialogue tactile demandant une confirmation explicite avant toute exécution irréversible.
 - **Mémoire conversationnelle (`ReplyMemory`)** : Mémorisation des dernières réponses avec support natif des intentions locales de répétition (*« Répète »*).
-- **Pause et reprise du pipeline** : Suspension non bloquante de l'écoute (`PAUSE` / `RESUME`) via commande vocale ou série.
+- **Pause et reprise du pipeline** : Suspension du traitement des commandes ordinaires (`PAUSE` / `RESUME`) via commande vocale ou série. Le bouton PARLER reste utilisable lorsque les ressources audio sont disponibles pour capter les ordres de reprise (`RESUME`) ou d'arrêt prioritaire (`STOP`), tandis que les commandes ordinaires ne sont pas exécutées pendant la pause.
 - **Contrôle série complet** : Injection de transcriptions simulées, pilotage PTT et rotation écran à chaud.
 
 ---
@@ -48,11 +48,16 @@ L'exemple montre comment brancher `IntegratedVoicePipeline` avec le registre d'o
    #define WIFI_SSID     "Votre_SSID_WiFi"
    #define WIFI_PASSWORD "Votre_Mot_De_Passe"
 
-   // Renseigner au moins une des deux clés API :
-   #define GEMINI_API_KEY "Votre_Cle_API_Google_Gemini"
+   // Décommenter une seule ligne selon le fournisseur souhaité :
+   #define USE_GEMINI      // <-- Google Gemini Live (par défaut)
+   // #define USE_OPENAI   // <-- OpenAI Realtime
+
+   // Renseigner la clé de votre fournisseur sélectionné :
+   #define GEMINI_KEY    "Votre_Cle_API_Google_Gemini"
+   #define GEMINI_API_KEY GEMINI_KEY
    #define OPENAI_API_KEY "Votre_Cle_API_OpenAI"
    ```
-   *Note : Le fournisseur est automatiquement sélectionné selon les clés renseignées (Gemini par défaut).*
+   *Note : Le fichier `secrets.example.h` sert uniquement de modèle. Si `secrets.h` est absent ou si des clés d'exemple sont détectées, l'application démarre avec un badge explicite `ERR CONFIG` sans initier de connexion réseau.*
 
 ---
 
@@ -116,7 +121,7 @@ La console série accepte les commandes interactives suivantes :
 | 6 | Intention Locale (Mémoire) | *« Répète »* ou `t repete` | Restitution vocale immédiate de la dernière réponse générée. |
 | 7 | Conversation IA | *« Pourquoi le ciel est-il bleu ? »* | Routage vers l'IA, réponse textuelle complète et synthèse audio PCM 24 kHz. |
 | 8 | Interruption STOP | Appui sur *STOP* pendant la réponse IA | Coupure audio immédiate et retour à l'état `READY`. |
-| 9 | Pause / Reprise | Touche `k` (ou *« Pause »*) | Refus de toute nouvelle écoute PTT tant que la pause est active. |
+| 9 | Pause / Reprise | Touche `k` (ou *« Pause »*), puis *« Statut »* ou *« Reprends »* | Suspension des commandes ordinaires (*« Statut »* rejeté sans exécution). Le bouton PARLER reste utilisable lorsque les ressources audio sont disponibles ; *« Reprends »* quitte la pause (RESUME) et STOP reste prioritaire. |
 
 ---
 
@@ -125,6 +130,7 @@ La console série accepte les commandes interactives suivantes :
 - **Transitions d'état** :
   $$\text{READY} \longrightarrow \text{LISTENING} \longrightarrow \text{TRANSCRIBING} \longrightarrow \begin{cases} \text{LOCAL\_TOOL} \longrightarrow \text{SPEAKING} \\ \text{WAITING\_CONFIRMATION} \\ \text{AI\_PROCESSING} \longrightarrow \text{SPEAKING} \end{cases} \longrightarrow \text{READY}$$
 - **Vérification d'exécution des outils** : Aucune commande locale n'est validée tant que son exécution effective n'a pas produit de `ToolResult::success()`.
+- **Gestion PAUSE / RESUME** : En pause, le traitement des commandes ordinaires est suspendu. Le bouton PARLER reste utilisable lorsque les ressources audio sont disponibles afin de recevoir la commande de reprise (`RESUME`) ou d'arrêt prioritaire (`STOP`). Les commandes ordinaires ne sont jamais exécutées pendant la pause.
 - **Mémoire & fluidité** : Aucun blocage de la boucle graphique LVGL (maintien à ~50 FPS), aucune fuite de mémoire après des dizaines de tours consécutifs.
 
 ---

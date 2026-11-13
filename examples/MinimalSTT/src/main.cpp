@@ -217,7 +217,9 @@ void setup() {
     // 3. Enregistrement des callbacks
     voice.onReady([]() {
         Serial.println("[MinimalSTT] Callback onReady : Prêt pour la dictée !");
-        setDemoState(DemoState::READY);
+        if (voice.getState() != VoiceState::ERROR_STATE) {
+            setDemoState(DemoState::READY);
+        }
     });
 
     voice.onListeningStarted([]() {
@@ -228,7 +230,10 @@ void setup() {
 
     voice.onListeningFinished([]() {
         Serial.println("[MinimalSTT] Callback onListeningFinished : Acquisition terminée.");
-        setDemoState(DemoState::TRANSCRIBING);
+        // Ne pas écraser un résultat final déjà reçu ou un état d'erreur
+        if (s_uiState != DemoState::READY && s_uiState != DemoState::ERROR) {
+            setDemoState(DemoState::TRANSCRIBING);
+        }
     });
 
     // Callback de transcription (partielle et finale)
@@ -242,7 +247,13 @@ void setup() {
             s_finalText = text;
             s_interimText = "";
             s_captureHappened = false;
-            setDemoState(DemoState::READY);
+            // Ne pas déclarer READY si le moteur est toujours en erreur
+            if (voice.getState() != VoiceState::ERROR_STATE && voice.isReady()) {
+                setDemoState(DemoState::READY);
+            } else if (voice.getState() == VoiceState::ERROR_STATE) {
+                s_errorMessage = voice.getLastError();
+                setDemoState(DemoState::ERROR);
+            }
         } else {
             Serial.printf("... [interim] %s\n", text.c_str());
             s_interimText = text;
@@ -282,8 +293,19 @@ void loop() {
         Serial.println("[MinimalSTT] Réinitialisation manuelle suite erreur");
         s_touchActive = false;
         s_captureHappened = false;
-        s_errorMessage = "";
-        setDemoState(voice.isReady() ? DemoState::READY : DemoState::INITIALIZING);
+        // Ne pas déclarer READY lorsque le moteur est toujours en erreur (Règle 5)
+        if (voice.getState() == VoiceState::ERROR_STATE) {
+            Serial.println("[MinimalSTT] Moteur toujours en erreur, réinitialisation impossible");
+            s_errorMessage = voice.getLastError();
+            if (s_errorMessage.length() == 0) s_errorMessage = "Moteur toujours en erreur";
+            setDemoState(DemoState::ERROR);
+        } else if (voice.isReady()) {
+            s_errorMessage = "";
+            setDemoState(DemoState::READY);
+        } else {
+            s_errorMessage = "";
+            setDemoState(DemoState::INITIALIZING);
+        }
         return;
     }
 
@@ -301,7 +323,11 @@ void loop() {
             } else {
                 Serial.println("[MinimalSTT] Refus de startListening() par le moteur vocal");
                 s_touchActive = false;
-                s_errorMessage = "Demarrage ecoute refuse";
+                s_captureHappened = false;
+                s_errorMessage = voice.getLastError();
+                if (s_errorMessage.length() == 0) {
+                    s_errorMessage = "Demarrage ecoute refuse";
+                }
                 setDemoState(DemoState::ERROR);
             }
         } else {
@@ -317,11 +343,49 @@ void loop() {
             Serial.println("[MinimalSTT] Relachement / sortie tactile detectee -> Fin de la capture");
             s_touchActive = false;
             if (voice.isListening()) {
-                voice.stopListening();
-                setDemoState(DemoState::TRANSCRIBING);
+                // 1. Vérifier systématiquement la valeur de retour de voice.stopListening()
+                bool stopOk = voice.stopListening();
+                if (!stopOk) {
+                    // 3. En cas d'échec, afficher ERROR et le message de voice.getLastError()
+                    // 4. Réinitialiser les indicateurs tactiles et de capture nécessaires
+                    Serial.println("[MinimalSTT] Echec de stopListening()");
+                    s_touchActive = false;
+                    s_captureHappened = false;
+                    s_errorMessage = voice.getLastError();
+                    if (s_errorMessage.length() == 0) {
+                        s_errorMessage = "Echec arret capture micro";
+                    }
+                    setDemoState(DemoState::ERROR);
+                } else {
+                    // 2. Passer à TRANSCRIBING uniquement si l'arrêt a réussi et que le moteur attend effectivement une transcription
+                    // 6. Ne pas écraser un callback de transcription finale éventuellement émis pendant stopListening()
+                    if (voice.isTranscribing() && s_uiState != DemoState::READY && s_uiState != DemoState::ERROR) {
+                        setDemoState(DemoState::TRANSCRIBING);
+                    } else if (s_uiState != DemoState::READY && s_uiState != DemoState::ERROR) {
+                        // Le moteur n'attend plus de transcription (ex: résultat immédiat ou aucun audio)
+                        // 5. Ne pas déclarer READY lorsque le moteur est toujours en erreur
+                        if (voice.getState() != VoiceState::ERROR_STATE && voice.isReady()) {
+                            setDemoState(DemoState::READY);
+                        } else if (voice.getState() == VoiceState::ERROR_STATE) {
+                            s_errorMessage = voice.getLastError();
+                            setDemoState(DemoState::ERROR);
+                        }
+                    }
+                }
             } else {
-                // Si l'écoute n'était pas encore active lors du relâchement rapide
-                setDemoState(DemoState::READY);
+                // Relâchement rapide avant démarrage effectif de l'écoute
+                s_touchActive = false;
+                s_captureHappened = false;
+                // 5. Ne pas déclarer READY lorsque le moteur est toujours en erreur
+                if (s_uiState != DemoState::ERROR && voice.getState() != VoiceState::ERROR_STATE && voice.isReady()) {
+                    setDemoState(DemoState::READY);
+                } else if (voice.getState() == VoiceState::ERROR_STATE && s_uiState != DemoState::ERROR) {
+                    s_errorMessage = voice.getLastError();
+                    if (s_errorMessage.length() == 0) {
+                        s_errorMessage = "Moteur en erreur";
+                    }
+                    setDemoState(DemoState::ERROR);
+                }
             }
         }
     }
