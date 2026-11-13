@@ -192,7 +192,7 @@ static uint32_t lvglTickCallback() {
 static inline void setObjHidden(lv_obj_t* obj, bool hidden) {
     if (!obj) return;
 #if LV_VERSION_CHECK(9, 5, 0)
-    lv_obj_set_flag(obj, LV_OBJ_FLAG_HIDDEN, hidden);
+    lv_obj_set_hidden(obj, hidden);
 #else
     if (hidden) lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
     else        lv_obj_remove_flag(obj, LV_OBJ_FLAG_HIDDEN);

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-VoiceKit v0.6.5.2 — Script de Validation Automatisée des Exemples
+VoiceKit v0.6.6 — Script de Validation Automatisée des Exemples
 Vérifie la conformité, la structure de fichiers, la configuration PlatformIO
 et effectue la compilation de tous les exemples officiels.
 """
@@ -14,7 +14,7 @@ import argparse
 import subprocess
 from pathlib import Path
 
-# 11 Exemples officiels conservés pour VoiceKit v0.6.5.2
+# 11 Exemples officiels conservés pour VoiceKit v0.6.6
 OFFICIAL_EXAMPLES = [
     {
         "name": "MinimalTTS",
@@ -251,7 +251,7 @@ def compile_platformio_example(root_dir: Path, ex_name: str, pio_cmd: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="VoiceKit v0.6.5.2 Examples Validator")
+    parser = argparse.ArgumentParser(description="VoiceKit v0.6.6 Examples Validator")
     parser.add_argument("--check-only", action="store_true", help="Vérifie uniquement les fichiers sans compiler")
     parser.add_argument("--example", type=str, default="", help="Nom d'un exemple spécifique à valider")
     parser.add_argument("--output", type=str, default="", help="Fichier de sortie du rapport Markdown")
@@ -261,7 +261,7 @@ def main():
     os.chdir(root_dir)
 
     print("================================================================================")
-    print("  VOICEKIT v0.6.5.2 — VALIDATION OFFICIELLE DES EXEMPLES")
+    print("  VOICEKIT v0.6.6 — VALIDATION OFFICIELLE DES EXEMPLES")
     print(f"  Répertoire racine : {root_dir}")
     print("================================================================================\n")
 
@@ -325,7 +325,7 @@ def main():
 
     # 3. Bilan Récapitulatif
     print("\n================================================================================")
-    print("  RAPPORT RÉCAPITULATIF DE VALIDATION DES EXEMPLES v0.6.5.2")
+    print("  RAPPORT RÉCAPITULATIF DE VALIDATION DES EXEMPLES v0.6.6")
     print("================================================================================")
     print(f"{'Exemple':<26} | {'Type':<11} | {'Fichiers':<9} | {'README':<8} | {'Compilation':<15}")
     print("-" * 80)
@@ -360,7 +360,7 @@ def main():
     if args.output:
         out_p = Path(args.output)
         md_lines = [
-            "# Rapport de Validation des Exemples — VoiceKit v0.6.5.2\n",
+            "# Rapport de Validation des Exemples — VoiceKit v0.6.6\n",
             f"Date d'exécution : {time.strftime('%Y-%m-%d %H:%M:%S')}\n",
             "| Exemple | Type | Fichiers | Documentation (10/10) | Compilation PlatformIO |",
             "|---|---|---|---|---|",
