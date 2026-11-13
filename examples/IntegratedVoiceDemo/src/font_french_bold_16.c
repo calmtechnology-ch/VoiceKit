@@ -2036,7 +2036,11 @@ lv_font_t font_french_bold_16 = {
 #endif
     .dsc = &font_dsc,          /*The custom font data. Will be accessed by `get_glyph_bitmap/dsc` */
 #if LV_VERSION_CHECK(8, 2, 0) || LVGL_VERSION_MAJOR >= 9
+    #if LV_FONT_MONTSERRAT_16
+    .fallback = &lv_font_montserrat_16,
+    #else
     .fallback = NULL,
+    #endif
 #endif
     .user_data = NULL,
 };

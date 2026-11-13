@@ -289,7 +289,7 @@ static void rebuildVoiceList() {
         lv_obj_t* lbl = lv_label_create(btn);
         char line[96];
         snprintf(line, sizeof(line), "%s%s — %s (%s)",
-                 selected ? "● " : "  ",
+                 selected ? LV_SYMBOL_BULLET " " : "  ",
                  vd.displayName,
                  voiceGenderToFrenchLabel(vd.gender),
                  vd.traitsFr);
@@ -567,14 +567,20 @@ static void buildUi() {
         lv_obj_set_style_text_color(t2, lv_color_hex(0x90CAF9), 0);
         lv_obj_set_pos(t2, 4, 68);
 
-        createStyledButton(p, "◀", 4, 90, 40, 36, 0x2C384A, onLangCycle, (void*)(intptr_t)-1);
+        lv_obj_t* lblPrev = nullptr;
+        lv_obj_t* lblNext = nullptr;
+        createStyledButton(p, LV_SYMBOL_LEFT, 4, 90, 40, 36, 0x2C384A, onLangCycle, (void*)(intptr_t)-1, &lblPrev);
+        if (lblPrev) lv_obj_set_style_text_font(lblPrev, &lv_font_montserrat_16, 0);
+
         s_lblLangValue = lv_label_create(p);
         lv_obj_set_size(s_lblLangValue, 204, 36);
         lv_obj_set_pos(s_lblLangValue, 48, 98);
         lv_obj_set_style_text_align(s_lblLangValue, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_font(s_lblLangValue, &font_french_14, 0);
         lv_obj_set_style_text_color(s_lblLangValue, lv_color_hex(0xFFFFFF), 0);
-        createStyledButton(p, "▶", 256, 90, 40, 36, 0x2C384A, onLangCycle, (void*)(intptr_t)1);
+
+        createStyledButton(p, LV_SYMBOL_RIGHT, 256, 90, 40, 36, 0x2C384A, onLangCycle, (void*)(intptr_t)1, &lblNext);
+        if (lblNext) lv_obj_set_style_text_font(lblNext, &lv_font_montserrat_16, 0);
 
         s_lblConnState = lv_label_create(p);
         lv_obj_set_pos(s_lblConnState, 4, 138);

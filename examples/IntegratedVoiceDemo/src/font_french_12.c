@@ -1441,7 +1441,11 @@ lv_font_t font_french_12 = {
 #endif
     .dsc = &font_dsc,          /*The custom font data. Will be accessed by `get_glyph_bitmap/dsc` */
 #if LV_VERSION_CHECK(8, 2, 0) || LVGL_VERSION_MAJOR >= 9
+    #if LV_FONT_MONTSERRAT_12
+    .fallback = &lv_font_montserrat_12,
+    #else
     .fallback = NULL,
+    #endif
 #endif
     .user_data = NULL,
 };
