@@ -7,6 +7,41 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.6.2] - 2026-11-14 (Public Release Readiness)
+
+Version de stabilisation, de validation de reproductibilité et de préparation de distribution pour mise à disposition publique sur M5Stack CoreS3. Aucun ajout fonctionnel ; consolidation stricte des acquis et préparation de la première version bêta publique (v0.7.0).
+
+### Corrections
+- **Alignement universel des constantes de version** : Mise à niveau synchrone de `library.json`, `library.properties`, `VOICEKIT_VERSION` (`src/core/VoiceHubConfig.h`), des bannières de démarrage dans `src/VoxCoreVoice.cpp` et `examples/IntegratedVoiceDemo/src/main.cpp`.
+- **Hygiène du dépôt** : Nettoyage des dossiers de build `.pio` résiduels dans `tutorials/` et traçage du `.gitignore` pour `examples/IntegratedVoiceDemo`.
+
+### Tests
+- **Exécution et vérification intégrale de la suite de tests natifs** : **3 716 assertions unitaires réussies (0 échec, 0 ignoré)** sur compilateur GCC C++17 hôte (`tests/run_tests.bat`).
+- **Validation automatisée de la compilation des exemples** : 10 exemples PlatformIO officiels compilés avec succès (**10/10 PASS**, 100 %) avec mesure des empreintes Flash et RAM via `tools/validation/validate_examples.py`.
+- **Validation matérielle sur M5Stack CoreS3 physique (COM9)** : 19 scénarios sur 20 validés en conditions réelles (démarrage, Wi-Fi DHCP/SNTP, codec audio AW88298/ES7210, streaming PTT, STT Gemini Live, TTS 24 kHz, STOP prioritaire sous 50 ms avec rejet de blocs audio tardifs, multi-tours consécutifs, stabilité mémoire). 1 test annoté honnêtement `NOT TESTED` (OpenAI Realtime sur carte physique).
+
+### Documentation
+- **Refonte intégrale du README principal** : Structuration en 14 sections claires, épurées et didactiques pour développeurs tiers.
+- **Création du Guide de Démarrage Rapide (`docs/QUICK_START.md`)** : Guide pas à pas d'installation, configuration et exécution du premier programme vocal en moins de 10 minutes.
+- **Création du Référentiel des Limitations (`docs/KNOWN_LIMITATIONS.md`)** : Détail exhaustif des contraintes matérielles (Wi-Fi 2.4 GHz), réseau, quotas d'IA, fonctionnalités expérimentales (WakeNet) et compatibilités logicielles.
+- **Politique de Sécurité et Confidentialité (`SECURITY.md`)** : Procédure de signalement de vulnérabilités, protection stricte des clés API, masquage dans les logs série et exclusion NVS.
+- **Mise à jour des leçons d'apprentissage** : Correction des directives d'installation dans `tutorials/00-Installation/README.md` pour distinguer le développement local monorepo de l'intégration dans un projet autonome.
+
+### Compatibilité
+- **Validation d'intégration dans un projet externe isolé** : Démonstration complète de la compilation d'un projet PlatformIO tiers neuf avec résolution autonome des dépendances et inclusion directe de `<VoiceKit.h>` sans dépendance relative à l'arbre source.
+- **Standard C++17** : Validation stricte des drapeaux de compilation `-std=gnu++17` et compatibilité avec le framework Arduino-ESP32 2.0.17+ et 3.x.
+
+### Distribution
+- **Audit de sécurité de l'historique Git** : Détection et signalement d'identifiants historiques dans le commit initial `aae5465` (supprimés dès `6fef6fe`), avec recommandation formelle de révocation de clé et nettoyage d'historique Git avant ouverture publique du dépôt.
+- **Validation de licence** : Recensement de la licence MIT du projet et des composants tiers (ESP-SR sous Apache 2.0, cJSON sous MIT).
+- **Intégration continue (CI)** : Création de la configuration GitHub Actions `.github/workflows/ci.yml` pour valider automatiquement les 3 716 tests natifs, la structure documentaire et la compilation des exemples de référence sur chaque push/PR.
+
+### Limitations restantes
+- Compilation Arduino IDE CLI non automatisée dans l'environnement hôte (`NOT TESTED (CLI)` pour `MinimalTTS_Arduino.ino`).
+- Session matérielle physique limitée à Gemini Live lors des essais en direct (OpenAI Realtime validé à 100% sur simulateur natif, à tester physiquement sur carte avec clé OpenAI dédiée).
+
+---
+
 ## [0.6.6.1] - 2026-11-14 (Corrective State Coordination)
 
 Version corrective ciblée consacrée à la fiabilité des machines à états, à l'orchestration des tours vocaux, à la protection contre les événements obsolètes et à la cohérence du STOP prioritaire sans altération de l'architecture générale ni régression du fonctionnement validé sur M5Stack CoreS3.

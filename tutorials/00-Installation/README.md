@@ -91,12 +91,18 @@ build_flags =
     -DARDUINO_EVENT_RUNNING_CORE=1
     -DBOARD_M5STACK_CORES3=1
     -DVOXCORE_AUDIO_MODE=2
-    -Iinclude
 lib_deps = 
     m5stack/M5CoreS3@1.0.0
     m5stack/M5Unified@0.2.23
+    ; Dans le cadre des tutoriels du dépôt, VoiceKit est lié localement :
     symlink://../..
+    ; Pour un projet externe autonome, remplacez par :
+    ; https://github.com/Philippe-AD/VoiceKit.git
 ```
+
+> **Note d'intégration pour un projet externe :**
+> - Si vous créez votre propre projet en dehors du dépôt VoiceKit, copiez le fichier `no_ota.csv` (ou utilisez `partitions_16MB.csv` pour les projets LVGL volumineux) à la racine de votre projet.
+> - Dans un projet externe, remplacez `symlink://../..` par l'URL Git de VoiceKit ou placez l'archive de VoiceKit dans le dossier `lib/` de votre projet.
 
 ### Fichier d'exemple d'identifiants (`include/secrets.example.h`)
 ```cpp

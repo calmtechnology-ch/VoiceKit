@@ -1,6 +1,6 @@
 /**
  * @file main.cpp
- * @brief VoiceKit v0.6.5 — Exemple de Référence IntegratedVoiceDemo
+ * @brief VoiceKit v0.6.6.2 — Exemple de Référence IntegratedVoiceDemo
  *        Démonstration de l'orchestrateur IntegratedVoicePipeline
  *        sur M5Stack CoreS3 (ESP32-S3, 8 Mo PSRAM, 320x240 LCD tactile + LVGL 9).
  */
@@ -648,7 +648,7 @@ void setup() {
         s_configErrorMsg = valRes.errorMessage;
 
         Serial.println("\n========================================================");
-        Serial.println("  VoiceKit v0.6.5.2 — IntegratedVoiceDemo               ");
+        Serial.println("  VoiceKit v0.6.6.2 — IntegratedVoiceDemo               ");
         Serial.println("  [ERREUR CONFIGURATION IDENTIFIANTS]                   ");
         Serial.printf ("  Cause : %s\n", valRes.errorMessage.c_str());
         Serial.println("  Initialisation réseau et moteur IA annulée.           ");
@@ -698,7 +698,7 @@ void setup() {
 
     // Diagnostics série conformes : ne jamais divulguer la clé API !
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.6.5.2 — Integrated Voice Pipeline Demo     ");
+    Serial.println("  VoiceKit v0.6.6.2 — Integrated Voice Pipeline Demo     ");
     Serial.printf ("  Moteur IA actif : %s\n", valRes.providerName);
     Serial.printf ("  SSID Wi-Fi      : %s\n", WIFI_SSID);
     Serial.println("  Clé API         : [CONFIGURÉE]");

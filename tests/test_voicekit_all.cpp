@@ -4620,12 +4620,13 @@ void test_v0531_facade_modes_transitions_and_resilience() {
   cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
   vk.begin(cfg);
 
-  // 1. Constante de version alignée sur v0.6.6 (ou versions 0.6.5.x précédentes)
-  TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.6") == 0 ||
+  // 1. Constante de version alignée sur v0.6.6.2 (ou versions précédentes)
+  TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.6.2") == 0 ||
+                  strcmp(VOICEKIT_VERSION, "v0.6.6") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.5.2") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.5.1") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.5") == 0,
-              "VOICEKIT_VERSION est v0.6.6");
+              "VOICEKIT_VERSION est v0.6.6.2");
 
   // 2. Mode par défaut IDLE
   TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode initial = IDLE");

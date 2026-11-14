@@ -1,7 +1,7 @@
 {
   "name": "VoiceKit",
-  "version": "0.6.6.1",
-  "description": "Bibliotheque C++/Arduino multi-fournisseurs (Gemini Live & OpenAI Realtime) avec Coordination Fiabilisée des États (State Coordination v0.6.6.1), Profils Vocaux Universels (Universal Voice Profiles v0.6.6 + sauvegarde NVS), Pipeline Vocal Integre Stabilise (Integrated Voice Pipeline), Routeur de Commandes Locales (VoiceCommandDispatcher), Fondation Voice UX locale, Registre Local d'Outils securise (ToolRegistry), synthese vocale (TTS), reconnaissance vocale (STT), dictee continue (ContinuousSTT), conversation bidirectionnelle native, Wake Word Foundation hors ligne et moteur VoxCore stabilise pour M5Stack CoreS3 — v0.6.6.1",
+  "version": "0.6.6.2",
+  "description": "Bibliotheque C++/Arduino multi-fournisseurs (Gemini Live & OpenAI Realtime) avec Public Release Readiness (v0.6.6.2), Coordination Fiabilisee des Etats (State Coordination v0.6.6.1), Profils Vocaux Universels (Universal Voice Profiles v0.6.6 + sauvegarde NVS), Pipeline Vocal Integre Stabilise (Integrated Voice Pipeline), Routeur de Commandes Locales (VoiceCommandDispatcher), Fondation Voice UX locale, Registre Local d'Outils securise (ToolRegistry), synthese vocale (TTS), reconnaissance vocale (STT), dictee continue (ContinuousSTT), conversation bidirectionnelle native, Wake Word Foundation hors ligne et moteur VoxCore stabilise pour M5Stack CoreS3 — v0.6.6.2",
   "keywords": [
     "voicekit",
     "voxcore",
