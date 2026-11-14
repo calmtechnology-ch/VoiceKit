@@ -7,6 +7,32 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.6.1] - 2026-11-14 (Corrective State Coordination)
+
+Version corrective ciblée consacrée à la fiabilité des machines à états, à l'orchestration des tours vocaux, à la protection contre les événements obsolètes et à la cohérence du STOP prioritaire sans altération de l'architecture générale ni régression du fonctionnement validé sur M5Stack CoreS3.
+
+### Corrigé
+- **Fiabilisation du Push-to-Talk (PTT)** :
+  - Idempotence stricte de `VoxCoreVoice::startListening()` : rejet immédiat et silencieux de tout nouvel appui PTT lorsque le moteur est déjà en cours d'écoute (`isListening()`) ou en cours de transcription finale (`isTranscribing()`).
+  - Déduplication des transcriptions finales STT dans `handleIncomingTranscription()` : protection contre l'émission de doublons de fin de transcription lorsque le tour est déjà clos, tout en préservant l'étanchéité des tours annulés (`_cancelledCaptureTurnId`).
+  - Suppression de la fausse transition `CONNECTED` dans `LiveSessionController::requestStop()` lors des phases de connexion (`CONNECTING`) ou reconnexion (`RECONNECTING`).
+- **Protection contre les événements et callbacks obsolètes (STT & TTS)** :
+  - `IntegratedVoicePipeline::onTranscriptionWithTurnId()` : rejet strict de tout événement sans `originTurnId` valide (`0`) ou ne correspondant pas exactement à `_activeTurnId`.
+  - `VoxCoreVoice` : filtrage strict des notifications de fin de restitution audio orphelines ou annulées dans `_session.setOnPlaybackFinishedWithId` lorsque `_activeSpeechId == 0` ou lors d'un décalage d'identifiant.
+  - Sécurisation de `triggerSpeechFinishedForTesting()` pour ignorer les notifications tardives sur un identifiant déjà clos.
+- **Cohérence et priorité de la commande STOP** :
+  - Réinitialisation propre de `_activeSpeechId = 0` et interruption immédiate des tampons audio DMA et streamer.
+  - Évitement des transitions invalides `STOPPING -> READY` dans `IntegratedVoicePipeline` lorsque le moteur sous-jacent est en état d'erreur.
+- **Diagnostics standardisés de transition** :
+  - Traces ciblées intégrées sans surcharge des boucles audio : `[STATE][PIPELINE]`, `[STATE][STOP]`, `[STATE][STT]`, `[STATE][TTS]`.
+
+### Ajouté
+- **Suite de tests automatisés 151 (`tests/test_v0661_corrective_state_coordination_suites.h`)** :
+  - 20 scénarios déterministes couvrant : Initialisation vers READY, Cycle PTT normal, Double appui PTT, Double relâchement, Transcription vide, Double transcription finale, Callback STT tardif après STOP, STOP pendant l'écoute, STOP pendant la génération IA, STOP pendant la restitution TTS, Callback TTS tardif après STOP, Timeout de transcription, Échec de démarrage microphone, Déconnexion réseau, Récupération après erreur, Exécution commande locale, Commande sensible en attente, Annulation confirmation, Changement profil moteur libre, Refus changement profil moteur occupé.
+  - Total : **3716 tests réussis, 0 échec** sur l'ensemble des 151 suites de tests.
+
+---
+
 ## [0.6.6] - 2026-11-13 (Universal Voice Profiles)
 
 Version fonctionnelle introduisant le système unifié de **Profils Vocaux Universels (`VoiceProfileManager` + `VoiceProfile`)** compatible avec **Google Gemini Live** et **OpenAI Realtime**, utilisable depuis C++ ou LVGL 9, sans création de second moteur vocal ni régression de l'existant.

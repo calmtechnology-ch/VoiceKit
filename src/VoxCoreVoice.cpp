@@ -461,10 +461,16 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         if (_state == VoiceState::LISTENING || _state == VoiceState::TRANSCRIBING) {
             return;
         }
+        // Si aucun TTS n'est actif (ex: après stop()), la notification est orpheline ou annulée
+        if (_activeSpeechId == 0) {
+            Serial.printf("[STATE][TTS] Notification fin audio orpheline/annulée ignorée : speechId=%u\n",
+                          (unsigned)finishedId);
+            return;
+        }
         // Validation stricte de corrélation temporelle et d'opération :
         // Si un speechId actif est en cours et que la notification porte un identifiant non nul différent,
         // c'est une ancienne notification résiduelle (drain DMA, tâche différée, fin de tour annulé).
-        if (_activeSpeechId != 0 && finishedId != 0 && finishedId != _activeSpeechId) {
+        if (finishedId != 0 && finishedId != _activeSpeechId) {
             Serial.printf("[VoiceKit] Notification fin audio IGNOREE : speechId=%u != actif=%u\n",
                           (unsigned)finishedId, (unsigned)_activeSpeechId);
             return;
@@ -476,6 +482,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
         }
         uint32_t finishedIdToReport = (_activeSpeechId != 0) ? _activeSpeechId : finishedId;
         _activeSpeechId = 0;
+        Serial.printf("[STATE][TTS] Restitution terminée (speechId=%u)\n", (unsigned)finishedIdToReport);
         setState(VoiceState::READY);
         if (_onSpeechFinishedWithId && finishedIdToReport > 0) {
             _onSpeechFinishedWithId(finishedIdToReport);
@@ -1077,6 +1084,7 @@ bool VoxCoreVoice::dispatchAiQuestion(const String& question) {
 }
 
 void VoxCoreVoice::stop() {
+    Serial.println("[STATE][STOP] Tour annulé");
     Serial.println("[VoiceKit] Arret demande (stop)");
     if (_wakeWordConversationController.isEnabled() && _wakeWordConversationController.isSessionInProgress()) {
         _wakeWordConversationController.stopSession(true);
@@ -1704,6 +1712,13 @@ bool VoxCoreVoice::startListening() {
         return _conversationController.startTurn();
     }
 
+    // Refus strict si une capture ou transcription est déjà active
+    if (isListening() || isTranscribing()) {
+        _lastError = "Capture ou transcription deja en cours";
+        Serial.println("[VoiceKit] startListening() refuse : capture ou transcription deja en cours");
+        return false;
+    }
+
     // 1. Si une restitution sonore TTS ou attente de réponse est en cours, l'interrompre prioritairement
     if (_session.getState() == LiveSessionState::WAITING_RESPONSE || isSpeaking()) {
         _session.requestStop();
@@ -1921,7 +1936,7 @@ void VoxCoreVoice::handleIncomingTranscription(const String& text, bool isFinal)
     }
 
     if (isCancelledTurn) {
-        Serial.printf("[VoiceKit] Transcription IGNOREE (associee au tour annule turnId=%u) : \"%s\"\n",
+        Serial.printf("[STATE][STT] Transcription obsolète ignorée (tour annulé turnId=%u) : \"%s\"\n",
                       (unsigned)originTurnId, text.c_str());
         if (_onTranscriptionWithTurn) {
             _onTranscriptionWithTurn(text, isFinal, originTurnId);
@@ -1930,6 +1945,11 @@ void VoxCoreVoice::handleIncomingTranscription(const String& text, bool isFinal)
     }
 
     if (isFinal) {
+        if (_finalTranscriptionReceived && _pendingTranscriptionTurnId == 0 && _activeCaptureTurnId == 0) {
+            Serial.printf("[STATE][STT] Transcription obsolète ignorée (finale déjà consommée turnId=%u) : \"%s\"\n",
+                          (unsigned)originTurnId, text.c_str());
+            return;
+        }
         _pendingTranscriptionTurnId = 0;
         _latencyMetrics.playbackFinishedMs = millis();
         if (_latencyMetrics.playbackFinishedMs == 0) _latencyMetrics.playbackFinishedMs = 1;

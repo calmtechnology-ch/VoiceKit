@@ -10756,6 +10756,7 @@ void test_v06432_final_event_correlation_validation() {
 #include "test_v0652_transcription_suites.h"
 #include "test_v0652_examples_corrective_suites.h"
 #include "test_v066_universal_voice_profiles_suites.h"
+#include "test_v0661_corrective_state_coordination_suites.h"
 
 // =============================================================================
 // MAIN TEST RUNNER
@@ -10981,6 +10982,9 @@ int main() {
 
   // Suite VoiceKit v0.6.6 — Universal Voice Profiles (Scénarios 1 à 20 & non-régression)
   run_universal_voice_profiles_v066_tests();
+
+  // Suite VoiceKit v0.6.6.1 — Corrective State Coordination (Scénarios 1 à 20)
+  run_v0661_corrective_state_coordination_tests();
 
   std::cout << "\n==========================================================="
             << std::endl;

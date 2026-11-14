@@ -1,4 +1,4 @@
-# VoiceKit v0.6.6 — Universal Voice Profiles
+# VoiceKit v0.6.6.1 — Corrective State Coordination
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-Compatible-00979C.svg)](https://www.arduino.cc/)
@@ -8,6 +8,30 @@
 Bibliothèque C++/Arduino installable de **synthèse vocale (Text-To-Speech / TTS)**, de **reconnaissance vocale (Speech-To-Text / STT)**, de **profils vocaux universels multi-fournisseurs (`VoiceProfileManager`)**, de **pipeline vocal intégré autonome (`IntegratedVoicePipeline`)**, de **conversation vocale bidirectionnelle native (Mode B)**, de **détection locale de mot de réveil (Wake Word Foundation hors ligne)** et de **registre local d'outils (Local Tool Registry)** pour **M5Stack CoreS3** (ESP32-S3).
 
 Propulsée par une **architecture multi-fournisseurs unifiée (`IVoiceProvider`)** supportant à la fois **Google Gemini Live** (moteur par défaut, 100% rétrocompatible) et **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`), construite sur le moteur audio et réseau éprouvé de **[VoxCore](https://github.com/Philippe-AD/VoxCore)** et **[VoxTranscribe](https://github.com/Philippe-AD/VoxTranscribe)**.
+
+---
+
+### Nouveautés de la v0.6.6.1 (Corrective State Coordination)
+
+La version **v0.6.6.1** est une version corrective ciblée consacrée à la fiabilité des machines à états, à l'orchestration des tours vocaux et à la cohérence du STOP prioritaire, sans transformation architecturale ni régression sur M5Stack CoreS3 :
+
+1. **Fiabilisation Push-to-Talk (PTT) & Idempotence** :
+   - Rejet silencieux et idempotent de tout nouvel appui PTT lorsque le moteur est déjà en cours d'écoute (`isListening()`) ou en cours de transcription (`isTranscribing()`).
+   - Élimination des doubles transcriptions finales dupliquées issues du réseau lors de la clôture d'un tour.
+   - Suppression d'une transition illégitime vers `CONNECTED` dans `LiveSessionController::requestStop()` lors de la connexion initiale ou de la reconnexion.
+
+2. **Protection Anti-Callbacks Obsolètes (STT & TTS)** :
+   - Corrélation stricte des identifiants de tours vocaux : rejet de tout événement STT ou fin de transcription sans `originTurnId` valide ou décalé par rapport au tour actif.
+   - Filtrage strict des notifications de fin TTS orphelines ou annulées (`_activeSpeechId == 0`) pour empêcher toute reprise involontaire ou double notification.
+
+3. **STOP Prioritaire Non Réentrant & Gestion des Erreurs** :
+   - Clôture immédiate des captures et libération des ressources audio (streamer, DMA player).
+   - Préservation de l'état d'erreur réel : interdiction de repasser le pipeline en `READY` après un STOP si le moteur sous-jacent est indisponible ou déconnecté.
+
+4. **Validation Complète & Diagnostics Ciblés** :
+   - Traces de diagnostic standardisées : `[STATE][PIPELINE]`, `[STATE][STOP]`, `[STATE][STT]`, `[STATE][TTS]`.
+   - **Suite de tests 151 (20 scénarios)** validée sans régression : **3716 tests logiciels réussis, 0 échec** sur l'ensemble de la suite native.
+   - Compilation PlatformIO validée sur ESP32-S3 CoreS3 (`RAM: 25.5%`, `Flash: 82.1%`).
 
 ---
 

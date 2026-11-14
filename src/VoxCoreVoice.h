@@ -570,6 +570,9 @@ public:
         if (_onSpeechStarted) _onSpeechStarted();
     }
     void triggerSpeechFinishedForTesting(uint32_t speechId = 0) {
+        if (speechId > 0 && (_activeSpeechId == 0 || speechId != _activeSpeechId)) {
+            return;
+        }
         if (_onSpeechFinishedWithId && speechId > 0) _onSpeechFinishedWithId(speechId);
         if (_onSpeechFinished) _onSpeechFinished();
     }

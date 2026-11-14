@@ -879,6 +879,8 @@ void LiveSessionController::finishTurn() {
             transitionTo(LiveSessionState::CONNECTED,
                          "Interruption STOP et reprise apres erreur");
           }
+        } else if (_state == LiveSessionState::CONNECTING || _state == LiveSessionState::RECONNECTING) {
+          Serial.println("[LiveSession] STOP pendant connexion : tour annule, maintien de la phase de connexion");
         } else {
           transitionTo(LiveSessionState::CONNECTED,
                        "Interruption STOP demandee");

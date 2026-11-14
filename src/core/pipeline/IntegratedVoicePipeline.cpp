@@ -57,8 +57,8 @@ bool IntegratedVoicePipeline::begin(VoxCoreVoice& voice, ToolRegistry& tools, Vo
             // Transcription issue d'un tour annulé : rejet immédiat
             return;
         }
-        if (_activeTurnId != 0 && originTurnId != 0 && originTurnId != _activeTurnId) {
-            // Transcription issue d'un tour périmé : rejet
+        if (originTurnId == 0 || (_activeTurnId != 0 && originTurnId != _activeTurnId)) {
+            // Transcription orpheline ou issue d'un tour périmé : rejet
             return;
         }
         if (_state != PipelineState::TRANSCRIBING && _state != PipelineState::LISTENING) {
@@ -211,6 +211,7 @@ void IntegratedVoicePipeline::setState(PipelineState newState) {
         PipelineState old = _state;
         _state = newState;
         _stateStartTimeMs = millis();
+        Serial.printf("[STATE][PIPELINE] %s -> %s\n", pipelineStateToString(old), pipelineStateToString(newState));
         if (_onStateChanged) {
             _onStateChanged(old, newState);
         }
@@ -340,6 +341,8 @@ void IntegratedVoicePipeline::cancel() {
     _pendingConfirmationToken = "";
     _pendingToolId = "";
 
+    Serial.printf("[STATE][STOP] Tour annulé (turnId=%u)\n", (unsigned)_cancelledTurnId);
+
     if (_onStopped) {
         _onStopped(_cancelledTurnId);
     }
@@ -348,6 +351,8 @@ void IntegratedVoicePipeline::cancel() {
 
     if (_voice != nullptr && _voice->isBusy()) {
         setState(PipelineState::STOPPING);
+    } else if (_voice != nullptr && (!_voice->isReady() && _voice->getState() == VoiceState::ERROR_STATE)) {
+        setState(PipelineState::ERROR);
     } else {
         setState(PipelineState::READY);
     }
@@ -419,7 +424,11 @@ void IntegratedVoicePipeline::update() {
 
         case PipelineState::STOPPING:
             if (_voice == nullptr || !_voice->isBusy()) {
-                setState(PipelineState::READY);
+                if (_voice != nullptr && (!_voice->isReady() && _voice->getState() == VoiceState::ERROR_STATE)) {
+                    setState(PipelineState::ERROR);
+                } else {
+                    setState(PipelineState::READY);
+                }
             }
             break;
 
