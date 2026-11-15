@@ -31,7 +31,7 @@ namespace AppConfig {
     // Directives système pour l'IA
     constexpr const char* CONVERSATION_INSTRUCTION =
         "Tu es un assistant vocal fluide et concis pour M5Stack CoreS3. "
-        "Reponds brievement en francais naturel, sans balises markdown ni emojis.";
+        "Réponds brièvement en français naturel, sans balises markdown ni émojis.";
 
     // Volume audio (0-100%)
     constexpr uint8_t DEFAULT_VOLUME = 80;

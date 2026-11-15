@@ -14,6 +14,7 @@
 #include "app_config.h"
 #include "lv_conf.h"
 #include <lvgl.h>
+#include "FrenchFonts.h"
 
 #if __has_include("secrets.h")
     #include "secrets.h"
@@ -113,13 +114,13 @@ static uint32_t lvgl_tick_cb() {
 
 static void onTalkButtonClicked(lv_event_t* e) {
     (void)e;
-    Serial.println("[UI][CLICK] Bouton PARLER / TERMINER clique");
+    Serial.println("[UI][CLICK] Bouton PARLER / TERMINER cliqué");
     s_interaction.onTalkClick();
 }
 
 static void onStopButtonClicked(lv_event_t* e) {
     (void)e;
-    Serial.println("[UI][CLICK] Bouton STOP clique");
+    Serial.println("[UI][CLICK] Bouton STOP cliqué");
     s_interaction.triggerStop();
 }
 
@@ -135,20 +136,20 @@ static void init_ui() {
     s_lblConn = lv_label_create(scr);
     lv_obj_set_pos(s_lblConn, 8, 6);
     lv_label_set_text(s_lblConn, "WiFi: ... | Session: ...");
-    lv_obj_set_style_text_font(s_lblConn, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(s_lblConn, &font_french_12, 0);
     lv_obj_set_style_text_color(s_lblConn, lv_color_hex(0x9E9E9E), 0);
 
     s_lblVad = lv_label_create(scr);
     lv_obj_set_pos(s_lblVad, 210, 6);
-    lv_label_set_text(s_lblVad, "VAD: PRET");
-    lv_obj_set_style_text_font(s_lblVad, &lv_font_montserrat_12, 0);
+    lv_label_set_text(s_lblVad, "VAD: PRÊT");
+    lv_obj_set_style_text_font(s_lblVad, &font_french_12, 0);
     lv_obj_set_style_text_color(s_lblVad, lv_color_hex(0x00E676), 0);
 
     // 2. Indicateur d'état vocal (y: 28, h: 24)
     s_lblState = lv_label_create(scr);
     lv_obj_set_pos(s_lblState, 8, 28);
-    lv_label_set_text(s_lblState, "ETAT : INITIALISATION...");
-    lv_obj_set_style_text_font(s_lblState, &lv_font_montserrat_16, 0);
+    lv_label_set_text(s_lblState, "ÉTAT : INITIALISATION...");
+    lv_obj_set_style_text_font(s_lblState, &font_french_bold_16, 0);
     lv_obj_set_style_text_color(s_lblState, lv_color_hex(0xFFEB3B), 0);
 
     // 3. Cadre texte Utilisateur (y: 56, h: 56, w: 304)
@@ -165,7 +166,7 @@ static void init_ui() {
     lv_obj_set_size(s_lblUserText, 292, 46);
     lv_label_set_long_mode(s_lblUserText, LV_LABEL_LONG_MODE_WRAP);
     lv_label_set_text(s_lblUserText, "Moi : (En attente de parole...)");
-    lv_obj_set_style_text_font(s_lblUserText, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(s_lblUserText, &font_french_12, 0);
     lv_obj_set_style_text_color(s_lblUserText, lv_color_hex(0xBBDEFB), 0);
 
     // 4. Cadre texte Assistant (y: 118, h: 62, w: 304)
@@ -181,8 +182,8 @@ static void init_ui() {
     s_lblAssistantText = lv_label_create(pnlAssistant);
     lv_obj_set_size(s_lblAssistantText, 292, 52);
     lv_label_set_long_mode(s_lblAssistantText, LV_LABEL_LONG_MODE_WRAP);
-    lv_label_set_text(s_lblAssistantText, "IA : Bonjour ! Cliquez sur PARLER pour demarrer.");
-    lv_obj_set_style_text_font(s_lblAssistantText, &lv_font_montserrat_12, 0);
+    lv_label_set_text(s_lblAssistantText, "IA : Bonjour ! Cliquez sur PARLER pour démarrer.");
+    lv_obj_set_style_text_font(s_lblAssistantText, &font_french_12, 0);
     lv_obj_set_style_text_color(s_lblAssistantText, lv_color_hex(0xC8E6C9), 0);
 
     // 5. Bouton Principal PARLER / TERMINER (y: 186, h: 48, w: 196)
@@ -195,7 +196,7 @@ static void init_ui() {
 
     s_lblBtnTalk = lv_label_create(s_btnTalk);
     lv_label_set_text(s_lblBtnTalk, "PARLER");
-    lv_obj_set_style_text_font(s_lblBtnTalk, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_lblBtnTalk, &font_french_bold_16, 0);
     lv_obj_center(s_lblBtnTalk);
 
     // 6. Bouton STOP prioritaire (y: 186, h: 48, w: 102)
@@ -208,7 +209,7 @@ static void init_ui() {
 
     lv_obj_t* lblBtnStop = lv_label_create(s_btnStop);
     lv_label_set_text(lblBtnStop, "STOP");
-    lv_obj_set_style_text_font(lblBtnStop, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(lblBtnStop, &font_french_bold_16, 0);
     lv_obj_center(lblBtnStop);
 }
 
@@ -221,63 +222,63 @@ static void updateUiState(VoiceInteractionState st) {
 
     switch (st) {
         case VoiceInteractionState::DISABLED:
-            lv_label_set_text(s_lblState, "ETAT : DESACTIVE");
+            lv_label_set_text(s_lblState, "ÉTAT : DÉSACTIVÉ");
             lv_obj_set_style_text_color(s_lblState, lv_color_hex(0x9E9E9E), 0);
             lv_label_set_text(s_lblBtnTalk, "ATTENTE");
             lv_obj_set_style_bg_color(s_btnTalk, lv_color_hex(0x424242), 0);
             break;
         case VoiceInteractionState::READY:
-            lv_label_set_text(s_lblState, "ETAT : PRET (2 clics)");
+            lv_label_set_text(s_lblState, "ÉTAT : PRÊT (2 clics)");
             lv_obj_set_style_text_color(s_lblState, lv_color_hex(0x00E676), 0);
             lv_label_set_text(s_lblBtnTalk, "PARLER");
             lv_obj_set_style_bg_color(s_btnTalk, lv_color_hex(0x1976D2), 0);
             break;
         case VoiceInteractionState::STARTING:
-            lv_label_set_text(s_lblState, "ETAT : OUVERTURE MICRO...");
+            lv_label_set_text(s_lblState, "ÉTAT : OUVERTURE MICRO...");
             lv_obj_set_style_text_color(s_lblState, lv_color_hex(0xFF9800), 0);
             lv_label_set_text(s_lblBtnTalk, "OUVERTURE");
             lv_obj_set_style_bg_color(s_btnTalk, lv_color_hex(0xF57C00), 0);
             break;
         case VoiceInteractionState::LISTENING:
-            lv_label_set_text(s_lblState, "ETAT : ECOUTE EN COURS...");
+            lv_label_set_text(s_lblState, "ÉTAT : ÉCOUTE EN COURS...");
             lv_obj_set_style_text_color(s_lblState, lv_color_hex(0xFF1744), 0);
             lv_label_set_text(s_lblBtnTalk, "TERMINER");
             lv_obj_set_style_bg_color(s_btnTalk, lv_color_hex(0xD50000), 0);
             break;
         case VoiceInteractionState::STOPPING_CAPTURE:
-            lv_label_set_text(s_lblState, "ETAT : VALIDATION VAD...");
+            lv_label_set_text(s_lblState, "ÉTAT : VALIDATION VAD...");
             lv_obj_set_style_text_color(s_lblState, lv_color_hex(0xFFB300), 0);
             lv_label_set_text(s_lblBtnTalk, "VALIDATION");
             lv_obj_set_style_bg_color(s_btnTalk, lv_color_hex(0xFF8F00), 0);
             break;
         case VoiceInteractionState::PROCESSING:
-            lv_label_set_text(s_lblState, "ETAT : TRAITEMENT IA...");
+            lv_label_set_text(s_lblState, "ÉTAT : TRAITEMENT IA...");
             lv_obj_set_style_text_color(s_lblState, lv_color_hex(0x29B6F6), 0);
             lv_label_set_text(s_lblBtnTalk, "TRAITEMENT");
             lv_obj_set_style_bg_color(s_btnTalk, lv_color_hex(0x0288D1), 0);
             break;
         case VoiceInteractionState::SPEAKING:
-            lv_label_set_text(s_lblState, "ETAT : ASSISTANT PARLE");
+            lv_label_set_text(s_lblState, "ÉTAT : ASSISTANT PARLE");
             lv_obj_set_style_text_color(s_lblState, lv_color_hex(0xAB47BC), 0);
             lv_label_set_text(s_lblBtnTalk, "STOP PAROLE");
             lv_obj_set_style_bg_color(s_btnTalk, lv_color_hex(0x7B1FA2), 0);
             break;
         case VoiceInteractionState::INTERRUPTING:
-            lv_label_set_text(s_lblState, "ETAT : ARRET STOP...");
+            lv_label_set_text(s_lblState, "ÉTAT : ARRÊT STOP...");
             lv_obj_set_style_text_color(s_lblState, lv_color_hex(0xE53935), 0);
-            lv_label_set_text(s_lblBtnTalk, "ARRET...");
+            lv_label_set_text(s_lblBtnTalk, "ARRÊT...");
             lv_obj_set_style_bg_color(s_btnTalk, lv_color_hex(0xC62828), 0);
             break;
         case VoiceInteractionState::RECOVERING:
-            lv_label_set_text(s_lblState, "ETAT : RECUPERATION...");
+            lv_label_set_text(s_lblState, "ÉTAT : RÉCUPÉRATION...");
             lv_obj_set_style_text_color(s_lblState, lv_color_hex(0xFFA726), 0);
             lv_label_set_text(s_lblBtnTalk, "REPRISE");
             lv_obj_set_style_bg_color(s_btnTalk, lv_color_hex(0xE65100), 0);
             break;
         case VoiceInteractionState::ERROR_STATE:
-            lv_label_set_text(s_lblState, "ETAT : ERREUR");
+            lv_label_set_text(s_lblState, "ÉTAT : ERREUR");
             lv_obj_set_style_text_color(s_lblState, lv_color_hex(0xFF3D00), 0);
-            lv_label_set_text(s_lblBtnTalk, "REINITIALISER");
+            lv_label_set_text(s_lblBtnTalk, "RÉINITIALISER");
             lv_obj_set_style_bg_color(s_btnTalk, lv_color_hex(0xBF360C), 0);
             break;
     }
@@ -300,12 +301,18 @@ void setup() {
     Serial.println("  Validation VAD Locale & STOP Prioritaire sur CoreS3   ");
     Serial.println("========================================================");
 
+    // Initialisation et rétroéclairage de l'écran CoreS3
+    M5.Display.waitDisplay();
+    M5.Display.setBrightness(200);
+    M5.Display.fillScreen(TFT_BLACK);
+
     // 1. Initialisation de LVGL 9
     lv_init();
     lv_tick_set_cb(lvgl_tick_cb);
 
     lv_display_t* disp = lv_display_create(AppConfig::SCREEN_WIDTH, AppConfig::SCREEN_HEIGHT);
     lv_display_set_buffers(disp, s_drawBuf, nullptr, sizeof(s_drawBuf), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565_SWAPPED);
     lv_display_set_flush_cb(disp, disp_flush);
 
     lv_indev_t* indev = lv_indev_create();
@@ -334,19 +341,19 @@ void setup() {
     });
 
     s_interaction.onSilenceDetected([](const char* reason) {
-        Serial.printf("[VAD][REJECT] Silence ou bruit bref detecte [motif: %s]\n", reason ? reason : "INCONNU");
+        Serial.printf("[VAD][REJECT] Silence ou bruit bref détecté [motif: %s]\n", reason ? reason : "INCONNU");
         char vadBuf[64];
         snprintf(vadBuf, sizeof(vadBuf), "VAD: REJET (%s)", reason ? reason : "");
         setTextThreadSafe(s_pendingVadText, sizeof(s_pendingVadText), vadBuf, s_hasPendingVadText);
 
         char userBuf[128];
-        snprintf(userBuf, sizeof(userBuf), "Moi : (Aucune parole detectee : %s)", reason ? reason : "");
+        snprintf(userBuf, sizeof(userBuf), "Moi : (Aucune parole détectée : %s)", reason ? reason : "");
         setTextThreadSafe(s_pendingUserText, sizeof(s_pendingUserText), userBuf, s_hasPendingUserText);
     });
 
     s_interaction.onCaptureValidated([](const VoiceCaptureMetrics& m) {
         if (m.isValid) {
-            Serial.printf("[VAD][VALID] Parole confirmee [duree: %u ms, parole: %u ms, peak: %u RMS]\n",
+            Serial.printf("[VAD][VALID] Parole confirmée [durée: %u ms, parole: %u ms, peak: %u RMS]\n",
                           (unsigned)m.captureDurationMs, (unsigned)m.cumulativeSpeechMs, (unsigned)m.peakRms);
             char vadBuf[64];
             snprintf(vadBuf, sizeof(vadBuf), "VAD: OK (%ums)", (unsigned)m.cumulativeSpeechMs);
@@ -386,7 +393,7 @@ void setup() {
     });
 
     s_voice.onReady([]() {
-        Serial.println("[VOICE] Session live connectee et prete !");
+        Serial.println("[VOICE] Session live connectée et prête !");
         s_interaction.notifyReady();
     });
 
@@ -437,11 +444,11 @@ void setup() {
 
     // 7. Démarrage de VoiceKit
     if (!s_voice.begin(vConfig)) {
-        Serial.printf("[MAIN][ERR] Echec voice.begin() : %s\n", s_voice.getLastError().c_str());
+        Serial.printf("[MAIN][ERR] Échec voice.begin() : %s\n", s_voice.getLastError().c_str());
         s_interaction.notifyError(s_voice.getLastError());
     }
 
-    Serial.println("[MAIN] Initialisation achevee. Pret pour l'interaction vocale.");
+    Serial.println("[MAIN] Initialisation achevée. Prêt pour l'interaction vocale.");
 }
 
 // =============================================================================
