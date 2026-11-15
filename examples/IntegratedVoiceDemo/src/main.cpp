@@ -105,6 +105,32 @@ static bool s_responseTextDirty    = true;
 static String s_pendingConfirmText = "";
 static bool s_showConfirmModal     = false;
 
+// Synchronisation d'état UI thread-safe pour LVGL 9
+static volatile bool s_badgeDirty     = true;
+static char s_badgeText[32]           = "CONNEXION...";
+static uint32_t s_badgeTextColor      = 0xFFAB00;
+static uint32_t s_badgeBgColor        = 0x4E3400;
+
+static volatile bool s_pttUiDirty     = true;
+static bool s_pttListening            = false;
+static bool s_pttSpeaking             = false;
+static bool s_pttReady                = false;
+
+static void setBadgeUi(const char* text, uint32_t textColor, uint32_t bgColor) {
+    strncpy(s_badgeText, text, sizeof(s_badgeText) - 1);
+    s_badgeText[sizeof(s_badgeText) - 1] = '\0';
+    s_badgeTextColor = textColor;
+    s_badgeBgColor = bgColor;
+    s_badgeDirty = true;
+}
+
+static void queuePttUi(bool isListening, bool isSpeaking, bool isReady) {
+    s_pttListening = isListening;
+    s_pttSpeaking = isSpeaking;
+    s_pttReady = isReady;
+    s_pttUiDirty = true;
+}
+
 // État de validation de la configuration
 static bool   s_configValid    = false;
 static String s_configErrorMsg = "";
@@ -268,7 +294,6 @@ static void onPttButtonEvent(lv_event_t* e) {
             snprintf(s_userTextBuf, sizeof(s_userTextBuf), "Système indisponible (%s)...",
                      pipelineStateToString(s_pipeline.getState()));
             s_userTextDirty = true;
-            updatePttUi(false, false, false);
             return;
         }
         Serial.println("[UI] PTT Pressed -> startListening()");
@@ -276,7 +301,6 @@ static void onPttButtonEvent(lv_event_t* e) {
             Serial.println("[UI] startListening() refusé par le pipeline.");
             snprintf(s_userTextBuf, sizeof(s_userTextBuf), "Écoute refusée (état incompatible)...");
             s_userTextDirty = true;
-            updatePttUi(false, false, false);
         }
     } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
         if (!s_configValid) return;
@@ -759,41 +783,31 @@ void setup() {
     s_voice.onReady([]() {
         const char* pName = (s_activeProviderType == VoiceProviderType::OPENAI) ? "OpenAI Realtime" : "Google Gemini Live";
         Serial.printf("[MAIN] VoiceKit service vocal (%s) connecté et PRÊT !\n", pName);
-        if (s_lblStateBadge && s_pipeline.getState() == PipelineState::READY) {
-            lv_label_set_text(s_lblStateBadge, "PRÊT");
-            lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0x00E676), 0);
-            lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x003311), 0);
+        if (s_pipeline.getState() == PipelineState::READY) {
+            setBadgeUi("PRÊT", 0x00E676, 0x003311);
         }
         snprintf(s_responseTextBuf, sizeof(s_responseTextBuf), "Connecté à %s.\nPrêt pour vos commandes ou questions !", pName);
         s_responseTextDirty = true;
-        updatePttUi(false, false, true);
+        queuePttUi(false, false, true);
     });
 
     s_voice.onStateChanged([](VoiceState st) {
         if (s_pipeline.getState() == PipelineState::READY) {
-            updatePttUi(false, false, s_voice.isReady());
+            queuePttUi(false, false, s_voice.isReady());
         }
         if (!s_voice.isReady() && s_pipeline.getState() == PipelineState::READY) {
-            if (s_lblStateBadge) {
-                switch (st) {
-                    case VoiceState::CONNECTING_WIFI:
-                        lv_label_set_text(s_lblStateBadge, "WIFI...");
-                        lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFF9800), 0);
-                        lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x4E2600), 0);
-                        break;
-                    case VoiceState::CONNECTING_SERVICE:
-                        lv_label_set_text(s_lblStateBadge, (s_activeProviderType == VoiceProviderType::OPENAI) ? "OPENAI..." : "GEMINI...");
-                        lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFFEB3B), 0);
-                        lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x4E4B00), 0);
-                        break;
-                    case VoiceState::ERROR_STATE:
-                        lv_label_set_text(s_lblStateBadge, "ERREUR");
-                        lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFF5252), 0);
-                        lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x490000), 0);
-                        break;
-                    default:
-                        break;
-                }
+            switch (st) {
+                case VoiceState::CONNECTING_WIFI:
+                    setBadgeUi("WIFI...", 0xFF9800, 0x4E2600);
+                    break;
+                case VoiceState::CONNECTING_SERVICE:
+                    setBadgeUi((s_activeProviderType == VoiceProviderType::OPENAI) ? "OPENAI..." : "GEMINI...", 0xFFEB3B, 0x4E4B00);
+                    break;
+                case VoiceState::ERROR_STATE:
+                    setBadgeUi("ERREUR", 0xFF5252, 0x490000);
+                    break;
+                default:
+                    break;
             }
         }
     });
@@ -801,56 +815,44 @@ void setup() {
     s_pipeline.onStateChanged([](PipelineState oldState, PipelineState newState) {
         Serial.printf("[PIPELINE] Transition : %s -> %s\n",
                       pipelineStateToString(oldState), pipelineStateToString(newState));
-        if (s_lblStateBadge != nullptr) {
-            lv_label_set_text(s_lblStateBadge, pipelineStateToString(newState));
-            switch (newState) {
-                case PipelineState::READY:
-                    lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0x00E676), 0);
-                    lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x003311), 0);
-                    s_showConfirmModal = false;
-                    updatePttUi(false, false, s_voice.isReady());
-                    break;
-                case PipelineState::LISTENING:
-                    lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0x40C4FF), 0);
-                    lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x002B49), 0);
-                    updatePttUi(true, false, false);
-                    break;
-                case PipelineState::TRANSCRIBING:
-                    lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xE040FB), 0);
-                    lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x38003D), 0);
-                    updatePttUi(false, false, false);
-                    break;
-                case PipelineState::WAITING_CONFIRMATION:
-                    lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFFAB00), 0);
-                    lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x4E3400), 0);
-                    s_showConfirmModal = true;
-                    updatePttUi(false, false, false);
-                    break;
-                case PipelineState::SPEAKING:
-                    lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0x69F0AE), 0);
-                    lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x00391E), 0);
-                    updatePttUi(false, true, false);
-                    break;
-                case PipelineState::AI_PROCESSING:
-                    lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFFEB3B), 0);
-                    lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x4E4B00), 0);
-                    updatePttUi(false, false, false);
-                    break;
-                case PipelineState::STOPPING:
-                    lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFF7043), 0);
-                    lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x491800), 0);
-                    updatePttUi(false, false, false);
-                    break;
-                case PipelineState::ERROR:
-                    lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFF5252), 0);
-                    lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x490000), 0);
-                    updatePttUi(false, false, false);
-                    break;
-                default:
-                    lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(0xFFD740), 0);
-                    lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(0x3B3000), 0);
-                    break;
-            }
+        switch (newState) {
+            case PipelineState::READY:
+                setBadgeUi(pipelineStateToString(newState), 0x00E676, 0x003311);
+                s_showConfirmModal = false;
+                queuePttUi(false, false, s_voice.isReady());
+                break;
+            case PipelineState::LISTENING:
+                setBadgeUi(pipelineStateToString(newState), 0x40C4FF, 0x002B49);
+                queuePttUi(true, false, false);
+                break;
+            case PipelineState::TRANSCRIBING:
+                setBadgeUi(pipelineStateToString(newState), 0xE040FB, 0x38003D);
+                queuePttUi(false, false, false);
+                break;
+            case PipelineState::WAITING_CONFIRMATION:
+                setBadgeUi(pipelineStateToString(newState), 0xFFAB00, 0x4E3400);
+                s_showConfirmModal = true;
+                queuePttUi(false, false, false);
+                break;
+            case PipelineState::SPEAKING:
+                setBadgeUi(pipelineStateToString(newState), 0x69F0AE, 0x00391E);
+                queuePttUi(false, true, false);
+                break;
+            case PipelineState::AI_PROCESSING:
+                setBadgeUi(pipelineStateToString(newState), 0xFFEB3B, 0x4E4B00);
+                queuePttUi(false, false, false);
+                break;
+            case PipelineState::STOPPING:
+                setBadgeUi(pipelineStateToString(newState), 0xFF7043, 0x491800);
+                queuePttUi(false, false, false);
+                break;
+            case PipelineState::ERROR:
+                setBadgeUi(pipelineStateToString(newState), 0xFF5252, 0x490000);
+                queuePttUi(false, false, false);
+                break;
+            default:
+                setBadgeUi(pipelineStateToString(newState), 0xFFD740, 0x3B3000);
+                break;
         }
     });
 
@@ -917,6 +919,32 @@ void loop() {
     if (s_responseTextDirty && s_lblResponseText != nullptr) {
         lv_label_set_text(s_lblResponseText, s_responseTextBuf);
         s_responseTextDirty = false;
+    }
+
+    // Rafraîchissement thread-safe du badge d'état
+    if (s_badgeDirty && s_lblStateBadge != nullptr) {
+        lv_label_set_text(s_lblStateBadge, s_badgeText);
+        lv_obj_set_style_text_color(s_lblStateBadge, lv_color_hex(s_badgeTextColor), 0);
+        lv_obj_set_style_bg_color(s_lblStateBadge, lv_color_hex(s_badgeBgColor), 0);
+        s_badgeDirty = false;
+    }
+
+    // Rafraîchissement thread-safe du bouton PTT
+    if (s_pttUiDirty) {
+        s_pttUiDirty = false;
+        updatePttUi(s_pttListening, s_pttSpeaking, s_pttReady);
+    }
+
+    // Sécurité active de disponibilité PTT : réarmer automatiquement le bouton si le système est READY
+    static uint32_t s_lastPttCheckMs = 0;
+    uint32_t nowMs = millis();
+    if (nowMs - s_lastPttCheckMs >= 200) {
+        s_lastPttCheckMs = nowMs;
+        if (s_configValid && s_pipeline.getState() == PipelineState::READY && s_voice.isReady()) {
+            if (!s_pttReady || s_pttListening || s_pttSpeaking) {
+                queuePttUi(false, false, true);
+            }
+        }
     }
 
     // Gestion de l'affichage de la fenêtre modale de confirmation

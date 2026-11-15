@@ -265,11 +265,19 @@ bool IntegratedVoicePipeline::startListening() {
             return false;
         }
         _activeTurnId = _voice->getActiveCaptureTurnId();
-        if (_activeTurnId == 0) {
+        if (_activeTurnId == 0 || _activeTurnId <= _lastFinishedTurnId) {
             _activeTurnId = ++_turnCounter;
+            if (_activeTurnId <= _lastFinishedTurnId) {
+                _turnCounter = _lastFinishedTurnId + 1;
+                _activeTurnId = _turnCounter;
+            }
         }
     } else {
         _activeTurnId = ++_turnCounter;
+        if (_activeTurnId <= _lastFinishedTurnId) {
+            _turnCounter = _lastFinishedTurnId + 1;
+            _activeTurnId = _turnCounter;
+        }
     }
 
     _cancelledTurnId = 0;
@@ -285,6 +293,7 @@ bool IntegratedVoicePipeline::startListening() {
     _speechWaitingStart = false;
     _shouldRememberReply = false;
     _finalTranscriptionReceivedForTurn = false;
+    _activeSpeechId = 0;
 
     setState(PipelineState::LISTENING);
 
@@ -843,12 +852,25 @@ void IntegratedVoicePipeline::finishTurn(PipelineResult result, const String& su
 
     if (reportingTurn == 0 || reportingTurn == _lastFinishedTurnId) {
         // Idempotence stricte : un tour ne peut avoir qu'une seule terminaison
+        // Mais l'état doit impérativement revenir à READY s'il est resté dans un état transitoire
+        _speechWaitingStart = false;
+        _isAiSpeechActive = false;
+        _activeSpeechId = 0;
+        _finalTranscriptionReceivedForTurn = false;
+        if (_state != PipelineState::READY && _state != PipelineState::ERROR) {
+            setState(PipelineState::READY);
+        }
         return;
     }
 
     _lastFinishedTurnId = reportingTurn;
     _lastResult = result;
     _speechWaitingStart = false;
+    _activeTurnId = 0;
+    _cancelledTurnId = 0;
+    _isAiSpeechActive = false;
+    _activeSpeechId = 0;
+    _finalTranscriptionReceivedForTurn = false;
 
     if (_onTurnFinished && reportingTurn > 0) {
         _onTurnFinished(reportingTurn, result, summary);
@@ -859,9 +881,13 @@ void IntegratedVoicePipeline::finishTurn(PipelineResult result, const String& su
 
 void IntegratedVoicePipeline::feedSimulatedTranscription(const String& text, bool isFinal) {
     if (_state != PipelineState::LISTENING && _state != PipelineState::TRANSCRIBING) {
-        _activeTurnId = (_voice != nullptr && _voice->getActiveCaptureTurnId() != 0) 
-                        ? _voice->getActiveCaptureTurnId() 
-                        : ++_turnCounter;
+        _activeTurnId = ++_turnCounter;
+        if (_activeTurnId <= _lastFinishedTurnId) {
+            _turnCounter = _lastFinishedTurnId + 1;
+            _activeTurnId = _turnCounter;
+        }
+        _cancelledTurnId = 0;
+        _finalTranscriptionReceivedForTurn = false;
         setState(PipelineState::TRANSCRIBING);
     }
 
