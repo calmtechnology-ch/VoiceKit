@@ -7,6 +7,49 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.7.0] - 2026-11-15 (Voice Interaction Experimental)
+
+Version expérimentale majeure introduisant l'extraction modulaire et la standardisation des mécanismes d'interaction vocale éprouvés dans `VoiceKit-SmartUI v0.1.0.6` (Option B de l'audit architectural `AUDIT_VOICE_INTERACTION.md`). Développement strictement additif préservant 100% du comportement de VoiceKit v0.6.6.2.
+
+### Ajouté
+- **`VoiceCaptureValidator` (`src/core/interaction/VoiceCaptureValidator.h`, `.cpp` et `src/VoiceCaptureValidator.h`)** :
+  - Validateur d'activité vocale (VAD) holistique évaluant l'énergie globale d'une capture terminée.
+  - Suivi adaptatif du bruit de fond par lissage exponentiel (EMA, $\alpha = 0.05$).
+  - Seuil dynamique $\text{seuil} = 1.8 \times \text{noiseFloor} + 150$, avec plancher garanti à 380 RMS pour le microphone ES7210.
+  - Rejet catégorique des captures sans parole exploitable (`TOO_SHORT` < 350 ms, `SILENCE`, `BRIEF_NOISE` < 120 ms continu ou < 250 ms cumulé, `LOW_ENERGY`).
+  - Structure `VoiceCaptureMetrics` (alias `VadMetrics`) fournissant les causes explicites de rejet.
+  - Configuration numérique personnalisable (`VoiceCaptureConfig`) sans imposer les valeurs CoreS3 à tous les matériels.
+- **`VoiceInteractionController` (`src/core/interaction/VoiceInteractionController.h`, `.cpp` et `src/VoiceInteractionController.h`)** :
+  - Machine à états d'interaction Push-to-Talk (PTT) à deux clics (PARLER / TERMINER), indépendante de LVGL.
+  - Filtrage anti-rebond matériel configurable (120 ms par défaut).
+  - Découplage des intentions tactiles/utilisateurs pour exécution non-bloquante dans la boucle `update()`.
+  - Décision VAD au second clic : appel à `stopListening()` si parole valide, appel strict à `cancelListening()` si silence ou bruit bref, empêchant toute génération de trame réseau vers OpenAI / Gemini.
+  - Commande STOP prioritaire absolue et universelle (accessible en écoute, traitement ou élocution), idempotente et non réentrante.
+  - Watchdogs non bloquants intégrés : timeout microphone (15 s), timeout réponse serveur (15 s), stabilisation post-STOP (1,5 s), récupération d'erreur (15 s).
+  - Callbacks d'observation IHM (`onSilenceDetected`, `onStateChanged`, `onCaptureValidated`).
+  - API de notification explicite depuis les callbacks de `VoxCoreVoice` et méthode d'auto-liaison `attachVoiceCallbacks()`.
+  - Compteurs d'observabilité et instrumentation pour les tests automatisés.
+- **Exemple de référence `TwoClickConversationLVGL` (`examples/TwoClickConversationLVGL/`)** :
+  - Exemple autonome et minimal pour M5Stack CoreS3 avec LVGL 9.
+  - Démonstration du PTT à deux clics, indicateurs de connexion et d'état vocal, zone de transcription utilisateur et assistant, affichage de la cause de rejet VAD et bouton STOP prioritaire.
+  - Prise en charge par défaut d'OpenAI Realtime avec commutateur de configuration pour Gemini Live.
+- **Suite de tests automatisés Suite 152 (`tests/test_v0670_voice_interaction_suites.h`)** :
+  - 20 scénarios exhaustifs validant tous les aspects de l'interaction (initialisation, transitions, deux clics, rejet silence/bruit/durée, double clic, STOP pendant écoute/restitution, idempotence, résilience timeouts et perte Wi-Fi, intégrité UTF-8).
+- **Documentation complète** :
+  - `docs/VOICE_INTERACTION.md` : Guide d'architecture, intégration, callbacks, guide de migration depuis SmartUI et exemple C++ complet.
+  - `docs/reports/VOICE_INTERACTION_v0.6.7.0.md` : Rapport technique distinguant résultats logiciels, compilations matérielles et protocole de validation sur carte physique.
+
+### Tests
+- **Suite de tests unitaires et d'intégration** : **3 804 assertions réussies (0 échec)** sur compilateur C++17 hôte (`tests/run_tests.bat`).
+- **Validation des compilations PlatformIO CoreS3** :
+  - `examples/TwoClickConversationLVGL` : **SUCCESS** (RAM: 131 156 o, Flash: 2 042 465 o)
+  - `examples/MinimalConversation` : **SUCCESS** (Non-régression)
+  - `examples/OpenAIConversationLVGL` : **SUCCESS** (Non-régression)
+  - `examples/IntegratedVoiceDemo` : **SUCCESS** (Non-régression)
+  - `examples/VoiceDiagnostics` : **SUCCESS** (Non-régression)
+
+---
+
 ## [0.6.6.2] - 2026-11-14 (Public Release Readiness)
 
 Version de stabilisation, de validation de reproductibilité et de préparation de distribution pour mise à disposition publique sur M5Stack CoreS3. Aucun ajout fonctionnel ; consolidation stricte des acquis et préparation de la première version bêta publique (v0.7.0).
