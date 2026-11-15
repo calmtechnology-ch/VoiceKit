@@ -14,4 +14,13 @@
  * @param minutes Minute de 0 à 59.
  * @return String Phrase prête pour la synthèse vocale.
  */
-String formatTimeInFrench(int hours, int minutes);
+enum class TimeSpeechStyle {
+    EXACT,
+    NATURAL
+};
+
+String formatTimeInFrench(int hours, int minutes,
+                          TimeSpeechStyle style = TimeSpeechStyle::NATURAL);
+
+/** Format court destine a l'ecran, par exemple "dimanche 15 novembre". */
+String formatDateInFrench(const tm& local_time);

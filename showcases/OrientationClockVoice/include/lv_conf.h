@@ -23,7 +23,6 @@
 #if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
     /* 64 KB memory pool for LVGL */
     #define LV_MEM_SIZE (64U * 1024U)
-    #define LV_MEM_POOL_EXPAND_SIZE 0
     #define LV_MEM_ADR 0
 #endif
 

@@ -9,6 +9,23 @@ static const char* TENS_FRENCH[] = {
     "", "", "vingt", "trente", "quarante", "cinquante"
 };
 
+static String formatNumberFrench(int value, bool feminine_one = false) {
+    if (value < 0 || value > 59) return "";
+    if (value < 20) {
+        if (value == 1 && feminine_one) return "une";
+        return UNITS_FRENCH[value];
+    }
+    int tens = value / 10;
+    int units = value % 10;
+    String result = TENS_FRENCH[tens];
+    if (units == 1) result += " et un";
+    else if (units > 1) {
+        result += "-";
+        result += UNITS_FRENCH[units];
+    }
+    return result;
+}
+
 static String formatMinutesFrench(int m) {
     if (m < 0 || m > 59) return "";
     if (m < 20) {
@@ -27,42 +44,59 @@ static String formatMinutesFrench(int m) {
     return res;
 }
 
-String formatTimeInFrench(int hours, int minutes) {
+static String formatHourFrench(int hours) {
+    hours = (hours + 24) % 24;
+    if (hours == 0) return "minuit";
+    if (hours == 12) return "midi";
+    if (hours == 1) return "une heure";
+    if (hours == 21) return "vingt et une heures";
+    return formatNumberFrench(hours) + " heures";
+}
+
+String formatTimeInFrench(int hours, int minutes, TimeSpeechStyle style) {
     if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
         return "Il est une heure.";
     }
 
     String sentence = "Il est ";
 
-    // Cas particuliers de midi et minuit
-    if (hours == 0) {
-        sentence += "minuit";
-    } else if (hours == 12) {
-        sentence += "midi";
-    } else if (hours == 1) {
-        sentence += "une heure";
-    } else if (hours == 21) {
-        sentence += "vingt et une heures";
-    } else if (hours < 20) {
-        sentence += UNITS_FRENCH[hours];
-        sentence += " heures";
+    if (style == TimeSpeechStyle::NATURAL && minutes > 30) {
+        sentence += formatHourFrench((hours + 1) % 24);
+        sentence += " moins ";
+        if (minutes == 45) sentence += "le quart";
+        else sentence += formatMinutesFrench(60 - minutes);
     } else {
-        int tens = hours / 10;
-        int units = hours % 10;
-        sentence += TENS_FRENCH[tens];
-        if (units > 0) {
-            sentence += "-";
-            sentence += UNITS_FRENCH[units];
+        sentence += formatHourFrench(hours);
+        if (minutes > 0) {
+            if (style == TimeSpeechStyle::NATURAL && minutes == 15) {
+                sentence += " et quart";
+            } else if (style == TimeSpeechStyle::NATURAL && minutes == 30) {
+                sentence += (hours == 0 || hours == 12) ? " et demi" : " et demie";
+            } else {
+                sentence += " ";
+                sentence += formatMinutesFrench(minutes);
+            }
         }
-        sentence += " heures";
-    }
-
-    // Ajout des minutes
-    if (minutes > 0) {
-        sentence += " ";
-        sentence += formatMinutesFrench(minutes);
     }
 
     sentence += ".";
     return sentence;
+}
+
+String formatDateInFrench(const tm& local_time) {
+    static const char* DAYS[] = {
+        "dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"
+    };
+    static const char* MONTHS[] = {
+        "janvier", "fevrier", "mars", "avril", "mai", "juin",
+        "juillet", "aout", "septembre", "octobre", "novembre", "decembre"
+    };
+    if (local_time.tm_wday < 0 || local_time.tm_wday > 6 ||
+        local_time.tm_mon < 0 || local_time.tm_mon > 11) return "";
+    String result = DAYS[local_time.tm_wday];
+    result += " ";
+    result += String(local_time.tm_mday);
+    result += " ";
+    result += MONTHS[local_time.tm_mon];
+    return result;
 }
