@@ -330,6 +330,9 @@ void VoiceInteractionController::notifyVoiceStateChanged(VoiceState newState) {
 }
 
 void VoiceInteractionController::notifyListeningStarted() {
+    if (_lastTurnCancelled) {
+        return;
+    }
     _listeningStartTimeMs = millis();
     _isListeningActive = true;
     if (_state != VoiceInteractionState::LISTENING) {
@@ -341,16 +344,24 @@ void VoiceInteractionController::notifyListeningFinished() {
     _isListeningActive = false;
     _startListeningCalled = false;
     _stopListeningCalled = false;
-    setState(VoiceInteractionState::PROCESSING);
+    if (_lastTurnCancelled) {
+        return;
+    }
+    if (_state == VoiceInteractionState::LISTENING || _state == VoiceInteractionState::STOPPING_CAPTURE) {
+        setState(VoiceInteractionState::PROCESSING);
+    }
 }
 
 void VoiceInteractionController::notifySpeechStarted() {
+    if (_lastTurnCancelled) {
+        return;
+    }
     setState(VoiceInteractionState::SPEAKING);
 }
 
 void VoiceInteractionController::notifySpeechFinished() {
     if (_state == VoiceInteractionState::SPEAKING || _state == VoiceInteractionState::PROCESSING) {
-        if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED) {
+        if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED && !_voice.isBusy()) {
             setState(VoiceInteractionState::READY);
         } else {
             setState(VoiceInteractionState::DISABLED);
@@ -522,7 +533,7 @@ void VoiceInteractionController::processIntents(uint32_t nowMs) {
                 _stopListeningCalled = false;
                 _lastRejectCause = res.rejectReason;
 
-                if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED) {
+                if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED && !_voice.isBusy()) {
                     setState(VoiceInteractionState::READY);
                 } else {
                     setState(VoiceInteractionState::DISABLED);
@@ -545,7 +556,7 @@ void VoiceInteractionController::checkWatchdogs(uint32_t nowMs) {
             setState(VoiceInteractionState::READY);
         } else if (_stopStartTimeMs > 0 && nowMs >= _stopStartTimeMs && (nowMs - _stopStartTimeMs >= _config.interruptingRecoveryMs)) {
             _stopStartTimeMs = 0;
-            if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED) {
+            if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED && !_voice.isBusy()) {
                 setState(VoiceInteractionState::READY);
             } else {
                 setState(VoiceInteractionState::DISABLED);
@@ -564,7 +575,7 @@ void VoiceInteractionController::checkWatchdogs(uint32_t nowMs) {
     }
 
     // 3. Timeout d'écoute micro (15 s par défaut) avec évaluation VAD de secours
-    if (_voice.isListening() && _listeningStartTimeMs > 0 && nowMs >= _listeningStartTimeMs && (nowMs - _listeningStartTimeMs >= _config.micTimeoutMs)) {
+    if ((_isListeningActive || _state == VoiceInteractionState::LISTENING || _voice.isListening()) && _listeningStartTimeMs > 0 && nowMs >= _listeningStartTimeMs && (nowMs - _listeningStartTimeMs >= _config.micTimeoutMs)) {
         VoiceCaptureMetrics res = _validator.evaluate(nowMs);
         _validator.stop();
         _isListeningActive = false;
@@ -579,14 +590,24 @@ void VoiceInteractionController::checkWatchdogs(uint32_t nowMs) {
             setState(VoiceInteractionState::STOPPING_CAPTURE);
             _responseRequestsSentCount++;
             _stopListeningCallsCount++;
-            _voice.stopListening();
+            if (!_voice.stopListening()) {
+                _lastTurnCancelled = true;
+                _cancelListeningCallsCount++;
+                _voice.cancelListening();
+                _voice.stop();
+                if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED && !_voice.isBusy()) {
+                    setState(VoiceInteractionState::READY);
+                } else {
+                    setState(VoiceInteractionState::DISABLED);
+                }
+            }
         } else {
             _silenceRejectionsCount++;
             _lastTurnCancelled = true;
             _cancelListeningCallsCount++;
             _voice.cancelListening();
             _voice.stop();
-            if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED) {
+            if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED && !_voice.isBusy()) {
                 setState(VoiceInteractionState::READY);
             } else {
                 setState(VoiceInteractionState::DISABLED);
@@ -601,8 +622,9 @@ void VoiceInteractionController::checkWatchdogs(uint32_t nowMs) {
     if (_state == VoiceInteractionState::PROCESSING && _processingStartTimeMs > 0 && nowMs >= _processingStartTimeMs && (nowMs - _processingStartTimeMs >= _config.serverResponseTimeoutMs)) {
         _isListeningActive = false;
         _processingStartTimeMs = 0;
+        _lastTurnCancelled = true;
         _voice.stop();
-        if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED) {
+        if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED && !_voice.isBusy()) {
             setState(VoiceInteractionState::READY);
         } else {
             setState(VoiceInteractionState::DISABLED);
@@ -612,7 +634,7 @@ void VoiceInteractionController::checkWatchdogs(uint32_t nowMs) {
     // 5. Reprise automatique après STOPPED (> 1 s)
     if (_voice.getState() == VoiceState::STOPPED && _stoppedStartTimeMs > 0 && nowMs >= _stoppedStartTimeMs && (nowMs - _stoppedStartTimeMs >= _config.stoppedRecoveryMs)) {
         _stoppedStartTimeMs = 0;
-        if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED) {
+        if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED && !_voice.isBusy()) {
             setState(VoiceInteractionState::READY);
         } else {
             setState(VoiceInteractionState::DISABLED);
@@ -625,7 +647,7 @@ void VoiceInteractionController::checkWatchdogs(uint32_t nowMs) {
         if (isWifiConnected()) {
             _isListeningActive = false;
             _voice.stop();
-            if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED) {
+            if (_voice.isReady() && _voice.getSession().getState() == LiveSessionState::CONNECTED && !_voice.isBusy()) {
                 setState(VoiceInteractionState::READY);
             } else {
                 setState(VoiceInteractionState::DISABLED);

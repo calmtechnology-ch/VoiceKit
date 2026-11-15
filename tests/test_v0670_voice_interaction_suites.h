@@ -30,7 +30,7 @@ extern int s_testsFailed;
 
 inline void run_v0670_voice_interaction_tests() {
     std::cout << "\n===========================================================" << std::endl;
-    std::cout << "  [TEST SUITE 152] VoiceKit v0.6.7.0 — Voice Interaction (Experimental)" << std::endl;
+    std::cout << "  [TEST SUITE 152] VoiceKit v0.6.7.1 — Voice Interaction Stabilization" << std::endl;
     std::cout << "  PTT 2 Clics, Validateur VAD Holistique & STOP Prioritaire" << std::endl;
     std::cout << "===========================================================" << std::endl;
 
@@ -654,6 +654,16 @@ inline void run_v0670_voice_interaction_tests() {
         onUserTextSim("Texte orphelin arrivé après STOP");
         TEST_ASSERT(!lateTextProcessed, "16.2 Texte tardif ignoré grâce au drapeau d'annulation");
 
+        // Protection contre les callbacks moteur/matériel tardifs après STOP (v0.6.7.1)
+        controller.notifyListeningStarted();
+        TEST_ASSERT(controller.getState() == VoiceInteractionState::READY, "16.3 Callback notifyListeningStarted tardif ignoré après STOP");
+
+        controller.notifyListeningFinished();
+        TEST_ASSERT(controller.getState() == VoiceInteractionState::READY, "16.4 Callback notifyListeningFinished tardif ignoré après STOP");
+
+        controller.notifySpeechStarted();
+        TEST_ASSERT(controller.getState() == VoiceInteractionState::READY, "16.5 Callback notifySpeechStarted tardif ignoré après STOP");
+
         voice.getClient().setTransport(nullptr);
     }
 
@@ -773,5 +783,5 @@ inline void run_v0670_voice_interaction_tests() {
         voice.getClient().setTransport(nullptr);
     }
 
-    std::cout << "\n[TEST SUITE 152] SUCCES INTEGRAL DES 20 TESTS D'INTERACTION VOCALE (v0.6.7.0)" << std::endl;
+    std::cout << "\n[TEST SUITE 152] SUCCES INTEGRAL DES TESTS D'INTERACTION VOCALE (v0.6.7.1)" << std::endl;
 }

@@ -1,6 +1,6 @@
 /**
  * @file lv_conf.h
- * @brief Configuration LVGL 9 pour M5Stack CoreS3 (320x240) - TwoClickConversationLVGL v0.6.7.0
+ * @brief Configuration LVGL 9 pour M5Stack CoreS3 (320x240) - TwoClickConversationLVGL v0.6.7.1
  */
 
 #ifndef LV_CONF_H

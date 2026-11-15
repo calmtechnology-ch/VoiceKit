@@ -1,6 +1,6 @@
 /**
  * @file main.cpp
- * @brief Exemple TwoClickConversationLVGL — VoiceKit v0.6.7.0 Experimental
+ * @brief Exemple TwoClickConversationLVGL — VoiceKit v0.6.7.1
  *        Démonstration du PTT à deux clics, validation locale de parole (VAD)
  *        et STOP prioritaire avec LVGL 9 sur M5Stack CoreS3.
  */
@@ -296,7 +296,7 @@ void setup() {
     delay(200);
 
     Serial.println("\n========================================================");
-    Serial.println("  VoiceKit v0.6.7.0 — TwoClickConversationLVGL          ");
+    Serial.println("  VoiceKit v0.6.7.1 — TwoClickConversationLVGL          ");
     Serial.println("  Interaction Vocale Réutilisable à Deux Clics (PTT)    ");
     Serial.println("  Validation VAD Locale & STOP Prioritaire sur CoreS3   ");
     Serial.println("========================================================");

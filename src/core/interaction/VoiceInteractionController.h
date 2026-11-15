@@ -9,7 +9,7 @@
 /**
  * @file VoiceInteractionController.h
  * @brief Machine à états réutilisable à deux clics (PTT à bascule), validation locale et STOP prioritaire.
- *        Composant autonome, modulaire et indépendant de LVGL pour VoiceKit v0.6.7.0 Experimental.
+ *        Composant autonome, modulaire et indépendant de LVGL pour VoiceKit v0.6.7.1.
  */
 
 enum class VoiceInteractionState : uint8_t {

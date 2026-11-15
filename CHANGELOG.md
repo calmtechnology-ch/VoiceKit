@@ -7,6 +7,36 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.7.1] - 2026-11-15 (Voice Interaction Stabilization)
+
+Version de stabilisation et de consolidation des composants réutilisables d'interaction vocale introduits en v0.6.7.0 (`VoiceInteractionController` et `VoiceCaptureValidator`), en préparation de leur intégration universelle et de leur découplage architectural. Aucun ajout de fonctionnalité ; durcissement strict du comportement validé sur CoreS3 réel.
+
+### Stabilisation & Corrections
+- **Protection contre les callbacks tardifs (`VoiceInteractionController`)** :
+  - Immunisation des méthodes de notification (`notifyListeningStarted()`, `notifyListeningFinished()`, `notifySpeechStarted()`) contre les signaux différés émis par le matériel ou le réseau après une commande STOP prioritaire (`_lastTurnCancelled`).
+  - Maintien garanti du contrôleur dans l'état `READY` sans résurrection intempestive de `LISTENING`, `PROCESSING` ou `SPEAKING`.
+- **Déterminisme des watchdogs et prévention des retours artificiels à READY** :
+  - Conditionnement systématique des retours à `READY` à la disponibilité effective du moteur (`_voice.isReady() && !_voice.isBusy()`).
+  - Ajout d'une gestion de repli sécurisée (`cancelListening()`) dans le watchdog microphone (15 s) en cas d'échec de `stopListening()`.
+  - Marquage explicite `_lastTurnCancelled = true` lors du timeout de réponse serveur (15 s) pour ignorer toute réponse asynchrone hors délai.
+- **Validation matérielle CoreS3 confirmée par l'utilisateur (8/8 PASS)** :
+  - MAT-01 (Conversation normale), MAT-02 (Silence rejeté), MAT-03 (Bruit bref rejeté), MAT-04 (Double clic accidentel / anti-rebond 120 ms), MAT-05 (STOP pendant réponse), MAT-06 (STOP pendant écoute), MAT-07 (Rafale de clics), MAT-08 (Timeout microphone 15 s).
+- **Stabilisation de `VoiceCaptureValidator`** :
+  - Préservation des paramètres nominaux validés : capture minimale 350 ms, parole cumulée 250 ms, segment continu 120 ms, plancher RMS 380 et coefficient de lissage bruit EMA $\alpha = 0.05$.
+  - Conformité stricte des 5 causes d'évaluation (`OK`, `TOO_SHORT`, `SILENCE`, `BRIEF_NOISE`, `LOW_ENERGY`).
+- **Conformité de l'exemple de référence `TwoClickConversationLVGL`** :
+  - Harmonisation du `README.md` selon les 10 sections obligatoires de conformité VoiceKit.
+  - Intégration de l'exemple dans l'outillage de validation automatisé `tools/validation/validate_examples.py` (portant le catalogue officiel à 12 exemples).
+  - Vérification de l'absence de duplication de code : l'exemple délègue l'intégralité de la logique PTT et VAD à la bibliothèque.
+
+### Tests & Validation
+- **Tests unitaires et d'intégration** : **3 807 tests réussis (0 échec)** sur `tests/run_tests.bat` (baseline v0.6.7.0 : 3 804 tests + 3 tests de non-régression sur callbacks tardifs).
+- **Validation automatisée des exemples (`tools/validation/validate_examples.py`)** :
+  - 12/12 exemples conformes en structure et documentation (100% OK).
+  - Compilations PlatformIO vérifiées avec 100% de succès : `TwoClickConversationLVGL`, `MinimalTTS`, `MinimalSTT`, `MinimalConversation`, `OpenAIConversationLVGL`, `IntegratedVoiceDemo`, `VoiceDiagnostics`, `VoiceSettingsDemo`, `LocalToolRegistryDemo`, `WakeWordFoundation`, `WakeWordConversation`.
+
+---
+
 ## [0.6.7.0] - 2026-11-15 (Voice Interaction Experimental)
 
 Version expérimentale majeure introduisant l'extraction modulaire et la standardisation des mécanismes d'interaction vocale éprouvés dans `VoiceKit-SmartUI v0.1.0.6` (Option B de l'audit architectural `AUDIT_VOICE_INTERACTION.md`). Développement strictement additif préservant 100% du comportement de VoiceKit v0.6.6.2.

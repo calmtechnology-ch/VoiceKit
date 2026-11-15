@@ -1,4 +1,4 @@
-# Guide d'Intégration de l'Interaction Vocale Réutilisable (v0.6.7.0 Experimental)
+# Guide d'Intégration de l'Interaction Vocale Stabilisée (v0.6.7.1)
 
 ## VoiceInteractionController & VoiceCaptureValidator pour M5Stack CoreS3 (ESP32-S3)
 
@@ -6,11 +6,12 @@
 
 ## 1. Introduction et Objectif
 
-La version **v0.6.7.0 Experimental** de VoiceKit introduit des composants expérimentaux, légers et modulaires, destinés à rendre universellement réutilisables les mécanismes d'interaction vocale éprouvés sur matériel réel dans **VoiceKit-SmartUI v0.1.0.6** :
+La version **v0.6.7.1 (Voice Interaction Stabilization)** de VoiceKit stabilise et pérennise les composants légers et modulaires d'interaction vocale introduits en v0.6.7.0 :
 - **Push-to-Talk (PTT) à deux clics (PARLER / TERMINER)** avec filtrage anti-rebond matériel (120 ms).
 - **Validation locale d'activité vocale (VAD holistique)** analysant l'énergie RMS par blocs PCM 16 kHz (32 ms) pour rejeter catégoriquement le silence et les bruits brefs sans appel au réseau.
 - **Interruption prioritaire STOP** instantanée, coupant micro ou haut-parleur et rétablissant la session sans blocage.
-- **Surveillance non-bloquante par watchdogs** (timeouts micro, serveur, reprise après erreur).
+- **Protection stricte contre les callbacks tardifs** (moteur ou matériel) suite à une annulation ou une interruption STOP.
+- **Surveillance non-bloquante par watchdogs déterministes** (timeouts micro 15 s avec repli propre, serveur 15 s, reprise après erreur).
 
 Ces composants sont **strictement additifs** et **indépendants de LVGL**. Leur présence ne modifie en rien le fonctionnement des applications existantes.
 
@@ -257,8 +258,9 @@ void loop() {
 
 ---
 
-## 8. Limitations Expérimentales (v0.6.7.0)
+## 8. Statut de Stabilisation et Limitations (v0.6.7.1)
 
-1. **Statut Expérimental :** Les classes `VoiceInteractionController` et `VoiceCaptureValidator` sont livrées à des fins de validation technique et d'évaluation matérielle. La version de référence de production reste `v0.6.6.2`.
-2. **Dépendance matérielle du microphone :** Le plancher par défaut (380 RMS) et les seuils VAD ont été optimisés sur le microphone ES7210 du M5Stack CoreS3. Sur d'autres cartes ESP32-S3 (ex: microphone PDM SPM1423 ou analogique), ces seuils doivent être ajustés via `VoiceInteractionConfig`.
-3. **Application VoiceKit-SmartUI :** Conformément au principe directeur de non-régression, **VoiceKit-SmartUI v0.1.0.6 n'a pas été modifiée**. L'adoption de ces composants par SmartUI fera l'objet d'une version ultérieure après validation complète sur banc de tests physiques.
+1. **Validation Matérielle Confirmée :** Le protocole matériel de validation sur M5Stack CoreS3 physique a obtenu **8/8 PASS** (MAT-01 à MAT-08, confirmé utilisateur).
+2. **Statut de Stabilisation :** Les classes `VoiceInteractionController` et `VoiceCaptureValidator` sont désormais stabilisées pour intégration applicative externe. La version préparée pour diffusion publique reste `v0.6.6.2`, tandis que la branche `v0.6.7.x` prépare la future version consolidée.
+3. **Dépendance matérielle du microphone :** Le plancher par défaut (380 RMS) et les seuils VAD sont optimisés sur le microphone ES7210 du M5Stack CoreS3. Sur d'autres cartes ESP32-S3 (ex: microphone PDM SPM1423 ou analogique), ces seuils sont ajustables via `VoiceInteractionConfig`.
+4. **Application VoiceKit-SmartUI :** Conformément au principe directeur de non-régression, **VoiceKit-SmartUI v0.1.0.6 n'a pas été modifiée**. L'application reste la référence matérielle historique. La migration de SmartUI vers ces nouveaux composants sera traitée séparément après stabilisation complète.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-VoiceKit v0.6.6 — Script de Validation Automatisée des Exemples
+VoiceKit v0.6.7.1 — Script de Validation Automatisée des Exemples
 Vérifie la conformité, la structure de fichiers, la configuration PlatformIO
 et effectue la compilation de tous les exemples officiels.
 """
@@ -14,7 +14,7 @@ import argparse
 import subprocess
 from pathlib import Path
 
-# 11 Exemples officiels conservés pour VoiceKit v0.6.6
+# 12 Exemples officiels conservés pour VoiceKit v0.6.7.1
 OFFICIAL_EXAMPLES = [
     {
         "name": "MinimalTTS",
@@ -92,6 +92,13 @@ OFFICIAL_EXAMPLES = [
         "requires_secrets": True,
         "entry_point": "src/main.cpp",
         "description": "Exemple principal : orchestrateur IntegratedVoicePipeline",
+    },
+    {
+        "name": "TwoClickConversationLVGL",
+        "type": "platformio",
+        "requires_secrets": True,
+        "entry_point": "src/main.cpp",
+        "description": "Exemple de référence interaction vocale 2 clics (PTT & VAD holistique) avec LVGL 9",
     },
 ]
 
@@ -251,7 +258,7 @@ def compile_platformio_example(root_dir: Path, ex_name: str, pio_cmd: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="VoiceKit v0.6.6 Examples Validator")
+    parser = argparse.ArgumentParser(description="VoiceKit v0.6.7.1 Examples Validator")
     parser.add_argument("--check-only", action="store_true", help="Vérifie uniquement les fichiers sans compiler")
     parser.add_argument("--example", type=str, default="", help="Nom d'un exemple spécifique à valider")
     parser.add_argument("--output", type=str, default="", help="Fichier de sortie du rapport Markdown")
@@ -261,7 +268,7 @@ def main():
     os.chdir(root_dir)
 
     print("================================================================================")
-    print("  VOICEKIT v0.6.6 — VALIDATION OFFICIELLE DES EXEMPLES")
+    print("  VOICEKIT v0.6.7.1 — VALIDATION OFFICIELLE DES EXEMPLES")
     print(f"  Répertoire racine : {root_dir}")
     print("================================================================================\n")
 
@@ -280,7 +287,7 @@ def main():
             sys.exit(1)
 
     # 1. Vérification des fichiers et configurations
-    print("--- 1. AUDIT DE STRUCTURE ET CONFORMITÉ DES 11 EXEMPLES ---")
+    print(f"--- 1. AUDIT DE STRUCTURE ET CONFORMITÉ DES {len(examples_to_run)} EXEMPLES ---")
     file_results = []
     all_files_ok = True
     for ex in examples_to_run:
@@ -325,7 +332,7 @@ def main():
 
     # 3. Bilan Récapitulatif
     print("\n================================================================================")
-    print("  RAPPORT RÉCAPITULATIF DE VALIDATION DES EXEMPLES v0.6.6")
+    print("  RAPPORT RÉCAPITULATIF DE VALIDATION DES EXEMPLES v0.6.7.1")
     print("================================================================================")
     print(f"{'Exemple':<26} | {'Type':<11} | {'Fichiers':<9} | {'README':<8} | {'Compilation':<15}")
     print("-" * 80)

@@ -1,9 +1,10 @@
-# VoiceKit v0.6.6.2 — Public Release Readiness
+# VoiceKit — Framework Vocal Multi-Fournisseurs pour M5Stack CoreS3
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![ESP32-S3](https://img.shields.io/badge/Target-M5Stack%20CoreS3%20(ESP32--S3)-blue.svg)](https://docs.m5stack.com/en/core/CoreS3)
-[![Tests: 3716 PASS](https://img.shields.io/badge/Tests-3716%20Passed-brightgreen.svg)](tests/)
+[![Tests: 3807 PASS](https://img.shields.io/badge/Tests-3807%20Passed-brightgreen.svg)](tests/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Version: v0.6.7.1](https://img.shields.io/badge/Version-v0.6.7.1--Stabilization-blue.svg)](docs/VOICE_INTERACTION.md)
 
 ---
 
@@ -45,8 +46,10 @@ La bibliothèque gère l'ensemble de la chaîne technique : acquisition micropho
 
 ---
 
-## 4. Fonctionnalités Expérimentales
+## 4. Interaction Vocale Stabilisée (v0.6.7.1)
 
+- **Machine à États Push-to-Talk à Deux Clics (`VoiceInteractionController`) :** Contrôleur universel indépendant de LVGL implémentant le cycle `READY -> STARTING -> LISTENING -> STOPPING_CAPTURE -> PROCESSING -> SPEAKING -> READY`, filtrage anti-rebond matériel (120 ms), arbitrage STOP prioritaire instantané, surveillance par watchdogs déterministes (15 s) et immunisation stricte contre les callbacks tardifs.
+- **Validation Vocale Locale & VAD Holistique (`VoiceCaptureValidator`) :** Évaluation locale de l'activité vocale sur micro ES7210 (durée minimale 350 ms, parole cumulée 250 ms, segment continu 120 ms, plancher RMS 380 et seuil adaptatif) avec rejet catégorique du silence et des bruits transitoires sans aucune requête réseau superflue.
 - **Détection Locale de Mot de Réveil (`WakeWordFoundation`) :** Reconnaissance vocale locale hors ligne de l'amorce « Bonjour ESP » basée sur WakeNet 9 (ESP-SR).
 - **Écoute Continue Adaptative (`ContinuousSTT`) :** Détection automatique d'activité vocale (VAD) par énergie acoustique sans appui sur un bouton.
 
@@ -172,7 +175,7 @@ vcfg.apiKey = OPENAI_KEY;
 
 ---
 
-## 10. Liste des 11 Exemples Officiels
+## 10. Liste des 12 Exemples Officiels
 
 | Répertoire | Type | Description |
 |---|---|---|
@@ -187,6 +190,7 @@ vcfg.apiKey = OPENAI_KEY;
 | [`examples/VoiceSettingsDemo`](examples/VoiceSettingsDemo) | PlatformIO | Démonstrateur multilingue, profils vocaux et LVGL 9 |
 | [`examples/OpenAIConversationLVGL`](examples/OpenAIConversationLVGL) | PlatformIO | Conversation OpenAI Realtime avec interface graphique LVGL |
 | [`examples/IntegratedVoiceDemo`](examples/IntegratedVoiceDemo) | PlatformIO | **Exemple de référence principal** : orchestrateur complet |
+| [`examples/TwoClickConversationLVGL`](examples/TwoClickConversationLVGL) | PlatformIO | **Exemple de référence interaction vocale v0.6.7.1** : PTT 2 clics & VAD holistique |
 
 ---
 
@@ -204,9 +208,11 @@ Pour une vue complète et détaillée des contraintes opérationnelles, consulte
 
 VoiceKit dispose d'une infrastructure de validation logicielle et matérielle à double niveau :
 
-- **3 716 tests unitaires et d'intégration natifs (100 % PASS)** exécutés sans régression (`tests/run_tests.bat`).
-- **Compilation automatisée des 10 exemples PlatformIO (100 % PASS)** validée via `tools/validation/validate_examples.py`.
-- **Validation matérielle sur M5Stack CoreS3 physique (19/20 PASS)** documentée dans **[docs/release/v0.6.6.2/VALIDATION_CORES3.md](docs/release/v0.6.6.2/VALIDATION_CORES3.md)**.
+- **3 807 tests unitaires et d'intégration natifs (100 % PASS)** exécutés sans régression (`tests/run_tests.bat`).
+- **Audit de structure et compilation automatisée des 11 exemples PlatformIO (100 % PASS)** via `tools/validation/validate_examples.py`.
+- **Validation matérielle sur M5Stack CoreS3 physique :**
+  - **8/8 PASS** sur l'interaction vocale 2 clics (MAT-01 à MAT-08, confirmé utilisateur).
+  - **19/20 PASS** sur la suite de diffusion publique v0.6.6.2 ([VALIDATION_CORES3.md](docs/release/v0.6.6.2/VALIDATION_CORES3.md)).
 
 ---
 

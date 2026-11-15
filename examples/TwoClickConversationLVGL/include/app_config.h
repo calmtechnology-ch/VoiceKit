@@ -5,7 +5,7 @@
 
 /**
  * @file app_config.h
- * @brief Paramètres applicatifs pour TwoClickConversationLVGL v0.6.7.0 Experimental.
+ * @brief Paramètres applicatifs pour TwoClickConversationLVGL v0.6.7.1.
  */
 
 // Sélection du fournisseur IA (OpenAI Realtime par défaut, basculable vers Gemini Live)

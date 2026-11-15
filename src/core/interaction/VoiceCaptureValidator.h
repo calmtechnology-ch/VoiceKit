@@ -5,7 +5,7 @@
 
 /**
  * @file VoiceCaptureValidator.h
- * @brief Validateur d'activité vocale (VAD) léger et non bloquant pour VoiceKit v0.6.7.0.
+ * @brief Validateur d'activité vocale (VAD) léger et non bloquant pour VoiceKit v0.6.7.1.
  *
  * Extrait et standardisé depuis VoiceKit-SmartUI v0.1.0.6 (voice_validator.h).
  * Évalue la présence d'activité vocale exploitable avant toute transmission vers le fournisseur IA :
