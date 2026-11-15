@@ -86,7 +86,7 @@ build_flags =
 lib_deps =
     m5stack/M5CoreS3@1.0.0
     m5stack/M5Unified@0.2.23
-    https://github.com/Philippe-AD/VoiceKit.git#v0.6.6.2
+    https://github.com/calmtechnology-ch/VoiceKit.git#v0.6.6.2
 ```
 
 Copiez également le fichier de partition `no_ota.csv` (présent à la racine du dépôt VoiceKit) dans votre répertoire de projet.
