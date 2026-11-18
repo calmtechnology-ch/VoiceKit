@@ -131,6 +131,21 @@ bool AppController::begin() {
   if (m_voice.getProfileManager().loadActiveProfile(savedProf)) {
     Serial.println("[APP] Profil vocal restauré depuis NVS avec succès.");
     m_activeProfile = savedProf;
+#if defined(USE_OPENAI) && !defined(USE_GEMINI)
+    m_activeProfile.provider = VoiceProviderType::OPENAI;
+    if (m_activeProfile.voiceId.isEmpty() ||
+        !m_voice.getProfileManager().isValidVoiceForProvider(
+            VoiceProviderType::OPENAI, m_activeProfile.voiceId)) {
+      m_activeProfile.voiceId = AppConfig::OPENAI_VOICE;
+    }
+#elif defined(USE_GEMINI) && !defined(USE_OPENAI)
+    m_activeProfile.provider = VoiceProviderType::GEMINI;
+    if (m_activeProfile.voiceId.isEmpty() ||
+        !m_voice.getProfileManager().isValidVoiceForProvider(
+            VoiceProviderType::GEMINI, m_activeProfile.voiceId)) {
+      m_activeProfile.voiceId = AppConfig::GEMINI_VOICE;
+    }
+#endif
   }
 
   // 4. Configuration VoiceKit
@@ -369,6 +384,10 @@ bool AppController::switchProvider(VoiceProviderType newProvider) {
 
   // Arrêt prioritaire si une interaction est active
   m_interaction.triggerStop();
+  if (m_voice.isConnecting()) {
+    Serial.println("[APP] Interruption de la session en cours pour basculement fournisseur...");
+    m_voice.getSession().deactivate();
+  }
 
   // Vérifier la présence d'une clé API valide
   if (newProvider == VoiceProviderType::OPENAI &&

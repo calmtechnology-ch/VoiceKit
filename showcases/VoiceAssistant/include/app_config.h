@@ -20,7 +20,7 @@ namespace AppConfig {
     constexpr size_t   BUFFER_PIXELS  = 320 * 20; // 6400 pixels (~12.8 Ko DMA)
 
     // Configuration par défaut Gemini Live
-    constexpr const char* GEMINI_MODEL    = "models/gemini-2.0-flash-exp";
+    constexpr const char* GEMINI_MODEL    = "models/gemini-2.5-flash";
     constexpr const char* GEMINI_VOICE    = "Aoede";
 
     // Configuration par défaut OpenAI Realtime

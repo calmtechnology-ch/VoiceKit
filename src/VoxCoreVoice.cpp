@@ -771,8 +771,8 @@ void VoxCoreVoice::update() {
         uint32_t timeoutLimit = (targetProv == VoiceProviderType::OPENAI) ? 15000 : (GEMINI_LIVE_CONNECT_TIMEOUT_MS + 2000);
         if (_connectingStartTimeMs > 0 && (millis() - _connectingStartTimeMs > timeoutLimit)) {
             Serial.println("[VoiceKit] ERREUR : Delai de connexion depasse vers service vocal");
+            _session.deactivate();
             if (_profileChangePending) {
-                _session.deactivate();
                 rollbackPendingProfileChange("Timeout connexion service vocal lors du changement de profil", true);
             }
             if (_modeSwitchPending && _activeProvider) {
