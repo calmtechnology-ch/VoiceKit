@@ -46,6 +46,12 @@ void ConversationController::setState(VoiceState newState) {
     if (_state != newState) {
         VoiceState oldState = _state;
         _state = newState;
+        if (newState == VoiceState::SPEAKING) {
+            _speakingStartTimeMs = millis();
+            if (_speakingStartTimeMs == 0) _speakingStartTimeMs = 1;
+        } else if (newState != VoiceState::SPEAKING) {
+            _speakingStartTimeMs = 0;
+        }
         Serial.printf("[Conversation] Transition : %s -> %s\n",
                       voiceStateToString(oldState), voiceStateToString(newState));
         if (_onStateChanged) {
@@ -75,6 +81,8 @@ bool ConversationController::startTurn() {
     _isTurnActive = true;
     _turnStartTimeMs = millis();
     if (_turnStartTimeMs == 0) _turnStartTimeMs = 1;
+    _micStopMs = 0;
+    _speakingStartTimeMs = 0;
     _lastUserText = "";
     _lastAssistantText = "";
     uint32_t prevSpeechEnd = _metrics.latency.speechEndDetectedMs;
@@ -220,10 +228,34 @@ void ConversationController::tick() {
         }
     }
 
-    // Timeout de securite non bloquant si le tour vocal est anormalement persistant (> 20 s)
-    if (_turnStartTimeMs > 0 && (millis() - _turnStartTimeMs >= 20000)) {
-        Serial.println("[Conversation] Timeout de securite du tour vocal (20 s) -> reinitialisation propre");
-        requestStop();
+    // Timeouts de securite adaptatifs selon la phase du tour vocal :
+    // - LISTENING : capture micro prolongee (securite 30 s si PTT ou VAD bloque)
+    // - WAITING_RESPONSE : attente du premier son serveur (securite 25 s si reseau bloque)
+    // - SPEAKING : restitution audio active. On ne coupe PAS la voix de l'IA prematurement ;
+    //   un plafond large de 120 s est applique pour autoriser les longues reponses tout en empechant un blocage infini.
+    uint32_t nowMs = millis();
+    if (_state == VoiceState::LISTENING) {
+        if (_turnStartTimeMs > 0 && (nowMs - _turnStartTimeMs >= 30000)) {
+            Serial.println("[Conversation] Timeout de securite ecoute micro (30 s) -> reinitialisation propre");
+            requestStop();
+        }
+    } else if (_state == VoiceState::WAITING_RESPONSE) {
+        uint32_t waitOrigin = (_micStopMs > 0) ? _micStopMs : _turnStartTimeMs;
+        if (waitOrigin > 0 && (nowMs - waitOrigin >= 25000)) {
+            Serial.println("[Conversation] Timeout de securite attente reponse (25 s) -> reinitialisation propre");
+            requestStop();
+        }
+    } else if (_state == VoiceState::SPEAKING) {
+        if (_speakingStartTimeMs > 0 && (nowMs - _speakingStartTimeMs >= 120000)) {
+            Serial.println("[Conversation] Timeout de securite restitution longue (120 s) -> reinitialisation propre");
+            requestStop();
+        }
+    } else {
+        if (_turnStartTimeMs > 0 && (nowMs - _turnStartTimeMs >= 30000)) {
+            Serial.printf("[Conversation] Timeout de securite global (30 s, etat=%s) -> reinitialisation propre\n",
+                          voiceStateToString(_state));
+            requestStop();
+        }
     }
 }
 

@@ -98,6 +98,7 @@ private:
     bool _isTurnActive = false;
     uint32_t _turnStartTimeMs = 0;
     uint32_t _micStopMs = 0;
+    uint32_t _speakingStartTimeMs = 0;
 
     String _lastUserText = "";
     String _lastAssistantText = "";
