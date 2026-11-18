@@ -54,13 +54,7 @@ public:
   }
   const String &getSystemInstruction() const { return _systemInstruction; }
   const String &getModel() const { return _model; }
-  void setModel(const String &model) {
-    if (!model.startsWith("models/")) {
-      _model = "models/" + model;
-    } else {
-      _model = model;
-    }
-  }
+  void setModel(const String &model) { _model = model; }
   const String &getVoice() const { return _voice; }
   void setVoice(const String &voice) { _voice = voice; }
   const String &getLanguage() const { return _language; }

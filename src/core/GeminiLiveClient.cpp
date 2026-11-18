@@ -289,7 +289,7 @@ void GeminiLiveClient::sendSetupMessage() {
     setupJson += "}";
 
     Serial.printf("[LiveClient] Envoi setup Gemini Live (modele=%s, voix=%s, VAD manuelle, transcriptions, %u outil(s) declare(s))...\n",
-                  _model.c_str(), _voice.c_str(), (unsigned)_tools.size());
+                  effectiveModel.c_str(), _voice.c_str(), (unsigned)_tools.size());
     _transport->send(setupJson.c_str(), setupJson.length());
 }
 
