@@ -65,6 +65,9 @@ public:
     bool isActionAllowed() const { return m_interaction.isActionAllowed(); }
     bool isWifiConnected() const;
     bool isSessionConnected() const;
+    bool isSessionReady() const;
+    bool canModifySettings() const;
+    bool isStopInProgress() const { return m_stopHandlingActive; }
 
     VoiceProviderType getProvider() const { return m_activeProfile.provider; }
     const char* getProviderName() const;
@@ -142,7 +145,9 @@ public:
 
     // Diagnostics / Accès interne
     VoxCoreVoice& getVoice() { return m_voice; }
+    const VoxCoreVoice& getVoice() const { return m_voice; }
     VoiceInteractionController& getInteraction() { return m_interaction; }
+    const VoiceInteractionController& getInteraction() const { return m_interaction; }
 
 private:
     VoxCoreVoice m_voice;
@@ -156,6 +161,13 @@ private:
     String m_lastUserText;
     String m_lastAssistantText;
     static constexpr size_t MAX_HISTORY = 4;
+
+    // Instrumentation STOP et synchronisation de tour
+    bool m_stopHandlingActive = false;
+    uint32_t m_lastStopTriggerMs = 0;
+    bool m_turnInterruptedByStop = false;
+    uint32_t m_lastAssistantUiPushMs = 0;
+    LiveSessionState m_lastObservedLiveState = LiveSessionState::DISCONNECTED;
 
     // Buffers de découplage thread-safe (FreeRTOS -> boucle principale)
     portMUX_TYPE m_mux = portMUX_INITIALIZER_UNLOCKED;

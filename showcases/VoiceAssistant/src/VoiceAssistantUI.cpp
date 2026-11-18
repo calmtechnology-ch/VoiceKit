@@ -310,6 +310,9 @@ void VoiceAssistantUI::refreshHeader() {
         if (!wifiOk) {
             lv_label_set_text(m_lblWifiStatus, "WiFi NO");
             lv_obj_set_style_text_color(m_lblWifiStatus, lv_color_hex(0xD32F2F), 0);
+        } else if (m_controller->getVoice().getSession().getState() == LiveSessionState::RECONNECTING) {
+            lv_label_set_text(m_lblWifiStatus, "Reconnexion...");
+            lv_obj_set_style_text_color(m_lblWifiStatus, lv_color_hex(0xE65100), 0);
         } else if (!sessionOk) {
             lv_label_set_text(m_lblWifiStatus, "Session...");
             lv_obj_set_style_text_color(m_lblWifiStatus, lv_color_hex(0xF57C00), 0);
@@ -323,13 +326,17 @@ void VoiceAssistantUI::refreshHeader() {
 void VoiceAssistantUI::updateVoiceState(VoiceInteractionState state) {
     if (!m_lblState || !m_btnTalk || !m_lblBtnTalk || !m_controller) return;
 
-    bool sessionReady = m_controller->isSessionConnected() &&
-                        m_controller->isWifiConnected() &&
-                        !m_controller->isProfileChangeInProgress();
+    bool sessionReady = m_controller->isSessionReady();
 
     switch (state) {
         case VoiceInteractionState::DISABLED:
-            lv_label_set_text(m_lblState, "Non disponible (hors ligne)");
+            if (!m_controller->isWifiConnected()) {
+                lv_label_set_text(m_lblState, "Non disponible (Wi-Fi déconnecté)");
+            } else if (m_controller->getVoice().getSession().getState() == LiveSessionState::RECONNECTING) {
+                lv_label_set_text(m_lblState, "Reconnexion session IA...");
+            } else {
+                lv_label_set_text(m_lblState, "Non disponible (hors ligne)");
+            }
             lv_obj_set_style_text_color(m_lblState, lv_color_hex(0x757575), 0);
             lv_label_set_text(m_lblBtnTalk, "ATTENTE");
             lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0x9E9E9E), 0);
@@ -338,7 +345,13 @@ void VoiceAssistantUI::updateVoiceState(VoiceInteractionState state) {
 
         case VoiceInteractionState::READY:
             if (!sessionReady) {
-                lv_label_set_text(m_lblState, "Connexion session IA...");
+                if (!m_controller->isWifiConnected()) {
+                    lv_label_set_text(m_lblState, "Wi-Fi non connecté");
+                } else if (m_controller->getVoice().getSession().getState() == LiveSessionState::RECONNECTING) {
+                    lv_label_set_text(m_lblState, "Reconnexion session IA...");
+                } else {
+                    lv_label_set_text(m_lblState, "Connexion session IA...");
+                }
                 lv_obj_set_style_text_color(m_lblState, lv_color_hex(0xF57C00), 0);
                 lv_label_set_text(m_lblBtnTalk, "ATTENTE");
                 lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0x9E9E9E), 0);

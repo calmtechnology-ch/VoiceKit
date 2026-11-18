@@ -238,16 +238,16 @@ void SettingsScreen::init(lv_obj_t* parent, AppController& controller, std::func
     lv_obj_center(lblVolUp);
 
     // Bouton Sauvegarder NVS
-    lv_obj_t* btnSaveNvs = lv_button_create(cardVolAction);
-    lv_obj_set_size(btnSaveNvs, 72, 26);
-    lv_obj_set_pos(btnSaveNvs, 144, 4);
-    lv_obj_set_style_bg_color(btnSaveNvs, lv_color_hex(0x00897B), 0);
-    lv_obj_set_style_radius(btnSaveNvs, 4, 0);
-    lv_obj_set_style_pad_all(btnSaveNvs, 0, 0);
-    lv_obj_add_event_cb(btnSaveNvs, eventHandler, LV_EVENT_CLICKED, this);
-    lv_obj_set_user_data(btnSaveNvs, (void*)(uintptr_t)EVT_SAVE_NVS);
+    m_btnSaveNvs = lv_button_create(cardVolAction);
+    lv_obj_set_size(m_btnSaveNvs, 72, 26);
+    lv_obj_set_pos(m_btnSaveNvs, 144, 4);
+    lv_obj_set_style_bg_color(m_btnSaveNvs, lv_color_hex(0x00897B), 0);
+    lv_obj_set_style_radius(m_btnSaveNvs, 4, 0);
+    lv_obj_set_style_pad_all(m_btnSaveNvs, 0, 0);
+    lv_obj_add_event_cb(m_btnSaveNvs, eventHandler, LV_EVENT_CLICKED, this);
+    lv_obj_set_user_data(m_btnSaveNvs, (void*)(uintptr_t)EVT_SAVE_NVS);
 
-    lv_obj_t* lblSave = lv_label_create(btnSaveNvs);
+    lv_obj_t* lblSave = lv_label_create(m_btnSaveNvs);
     lv_label_set_text(lblSave, "Sauver");
     lv_obj_set_style_text_font(lblSave, &font_french_12, 0);
     lv_obj_set_style_text_color(lblSave, lv_color_hex(0xFFFFFF), 0);
@@ -314,8 +314,40 @@ bool SettingsScreen::isVisible() const {
     return !lv_obj_has_flag(m_container, LV_OBJ_FLAG_HIDDEN);
 }
 
+bool SettingsScreen::isSettingsActionAllowed() const {
+    if (!m_controller) return false;
+    return m_controller->canModifySettings();
+}
+
+void SettingsScreen::updateControlsAvailability() {
+    bool allowed = isSettingsActionAllowed();
+    if (allowed == !m_controlsBlocked) {
+        return;
+    }
+    m_controlsBlocked = !allowed;
+
+    lv_obj_t* btns[] = {m_btnGemini, m_btnOpenAi, m_btnLang, m_btnVoice, m_btnSaveNvs};
+    for (lv_obj_t* b : btns) {
+        if (b) {
+            if (m_controlsBlocked) {
+                lv_obj_add_state(b, LV_STATE_DISABLED);
+            } else {
+                lv_obj_remove_state(b, LV_STATE_DISABLED);
+            }
+        }
+    }
+
+    if (m_controlsBlocked) {
+        setFeedbackMessage("Connexion en cours — paramètres indisponibles");
+    } else if (!m_waitingConfirmation) {
+        setFeedbackMessage("Prêt");
+    }
+}
+
 void SettingsScreen::update() {
     if (!m_controller) return;
+
+    updateControlsAvailability();
 
     bool success = false;
     String msg;
@@ -409,6 +441,10 @@ void SettingsScreen::updateVolumeLabel() {
 
 void SettingsScreen::onProviderClicked(VoiceProviderType prov) {
     if (!m_controller) return;
+    if (!isSettingsActionAllowed()) {
+        setFeedbackMessage("Connexion en cours — paramètres indisponibles");
+        return;
+    }
     if (m_waitingConfirmation || m_controller->isProfileChangeInProgress()) {
         setFeedbackMessage("Modification déjà en cours");
         return;
@@ -429,6 +465,10 @@ void SettingsScreen::onProviderClicked(VoiceProviderType prov) {
 
 void SettingsScreen::onLangCycleClicked() {
     if (!m_controller) return;
+    if (!isSettingsActionAllowed()) {
+        setFeedbackMessage("Connexion en cours — paramètres indisponibles");
+        return;
+    }
     if (m_waitingConfirmation || m_controller->isProfileChangeInProgress()) {
         setFeedbackMessage("Modification déjà en cours");
         return;
@@ -447,6 +487,10 @@ void SettingsScreen::onLangCycleClicked() {
 
 void SettingsScreen::onVoiceCycleClicked() {
     if (!m_controller) return;
+    if (!isSettingsActionAllowed()) {
+        setFeedbackMessage("Connexion en cours — paramètres indisponibles");
+        return;
+    }
     if (m_waitingConfirmation || m_controller->isProfileChangeInProgress()) {
         setFeedbackMessage("Modification déjà en cours");
         return;
@@ -478,6 +522,10 @@ void SettingsScreen::onVolumeChange(int delta) {
 
 void SettingsScreen::onSaveNvsClicked() {
     if (!m_controller) return;
+    if (!isSettingsActionAllowed()) {
+        setFeedbackMessage("Connexion en cours — paramètres indisponibles");
+        return;
+    }
     if (m_waitingConfirmation || m_controller->isProfileChangeInProgress()) {
         setFeedbackMessage("Attendre fin modification");
         return;

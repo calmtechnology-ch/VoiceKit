@@ -30,12 +30,14 @@ public:
     void update();
 
     void setFeedbackMessage(const char* msg);
+    bool isSettingsActionAllowed() const;
 
 private:
     lv_obj_t* m_container = nullptr;
     AppController* m_controller = nullptr;
     std::function<void()> m_onBack;
     bool m_waitingConfirmation = false;
+    bool m_controlsBlocked = false;
 
     // Widgets LVGL 9
     lv_obj_t* m_btnGemini = nullptr;
@@ -49,6 +51,7 @@ private:
     lv_obj_t* m_btnVoice = nullptr;
     lv_obj_t* m_lblVoiceValue = nullptr;
 
+    lv_obj_t* m_btnSaveNvs = nullptr;
     lv_obj_t* m_lblVolumeValue = nullptr;
     lv_obj_t* m_lblFeedback = nullptr;
     lv_obj_t* m_lblSysInfo = nullptr;
@@ -60,6 +63,7 @@ private:
     void updateLangLabel();
     void updateVoiceLabel();
     void updateVolumeLabel();
+    void updateControlsAvailability();
 
     void onProviderClicked(VoiceProviderType prov);
     void onLangCycleClicked();

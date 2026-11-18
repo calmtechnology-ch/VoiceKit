@@ -90,9 +90,13 @@ bool AppController::begin() {
   // 2. Callbacks de VoiceInteractionController
   m_interaction.onStateChanged(
       [this](VoiceInteractionState oldSt, VoiceInteractionState newSt) {
-        Serial.printf("[PTT] Transition d'état : %s -> %s\n",
+        Serial.printf("[%lu][PTT] Transition d'état : %s -> %s\n",
+                      (unsigned long)millis(),
                       voiceInteractionStateToString(oldSt),
                       voiceInteractionStateToString(newSt));
+        if (newSt != VoiceInteractionState::INTERRUPTING) {
+          m_stopHandlingActive = false;
+        }
         m_stateChanged = true;
       });
 
@@ -212,6 +216,7 @@ bool AppController::begin() {
     Serial.println("[PTT] Début écoute micro ES7210");
     m_currentTurnUserText = "";
     m_currentTurnAssistantText = "";
+    m_turnInterruptedByStop = false;
     m_interaction.notifyListeningStarted();
   });
 
@@ -226,9 +231,27 @@ bool AppController::begin() {
   });
 
   m_voice.onSpeechFinished([this]() {
-    Serial.println("[VOICE] Fin restitution vocale");
+    Serial.printf("[%lu][VOICE] Fin restitution vocale\n", (unsigned long)millis());
     m_interaction.notifySpeechFinished();
-    if (!m_interaction.isLastTurnCancelled() && !m_currentTurnAssistantText.isEmpty()) {
+
+    if (!m_currentTurnAssistantText.isEmpty()) {
+      setThreadSafeText(m_pendingAssistantText, sizeof(m_pendingAssistantText),
+                        m_currentTurnAssistantText.c_str(), m_hasPendingAssistant);
+    }
+
+    if (!m_turnInterruptedByStop && !m_interaction.isLastTurnCancelled() && !m_currentTurnAssistantText.isEmpty()) {
+      recordTurnInHistory(m_lastUserText, m_currentTurnAssistantText);
+      m_currentTurnAssistantText = "";
+    } else if (m_turnInterruptedByStop || m_interaction.isLastTurnCancelled()) {
+      Serial.printf("[%lu][STOP_DIAG] Tour interrompu par STOP : non consigné comme réponse complète\n",
+                    (unsigned long)millis());
+      m_currentTurnAssistantText = "";
+    }
+    m_turnInterruptedByStop = false;
+  });
+
+  m_voice.onConversationFinished([this]() {
+    if (!m_turnInterruptedByStop && !m_interaction.isLastTurnCancelled() && !m_currentTurnAssistantText.isEmpty()) {
       recordTurnInHistory(m_lastUserText, m_currentTurnAssistantText);
       m_currentTurnAssistantText = "";
     }
@@ -278,7 +301,7 @@ bool AppController::begin() {
 
   // Callbacks de texte conversationnel
   m_voice.onUserText([this](const String &text, bool isFinal) {
-    if (m_interaction.isLastTurnCancelled()) {
+    if (m_turnInterruptedByStop || m_interaction.isLastTurnCancelled()) {
       return; // Discard late callbacks following STOP
     }
     if (isFinal) {
@@ -291,14 +314,19 @@ bool AppController::begin() {
   });
 
   m_voice.onAssistantText([this](const String &text) {
-    if (m_interaction.isLastTurnCancelled()) {
+    if (m_turnInterruptedByStop || m_interaction.isLastTurnCancelled()) {
       return; // Discard late callbacks following STOP
     }
-    Serial.printf("[VOICE][AI] %s\n", text.c_str());
     m_currentTurnAssistantText = text;
     m_lastAssistantText = text;
-    setThreadSafeText(m_pendingAssistantText, sizeof(m_pendingAssistantText),
-                      text.c_str(), m_hasPendingAssistant);
+
+    uint32_t now = millis();
+    // Taux de rafraîchissement régulé vers l'IHM (toutes les 60 ms) pour éviter surcharge LVGL
+    if (now - m_lastAssistantUiPushMs >= 60) {
+      m_lastAssistantUiPushMs = now;
+      setThreadSafeText(m_pendingAssistantText, sizeof(m_pendingAssistantText),
+                        text.c_str(), m_hasPendingAssistant);
+    }
   });
 
   // 6. Démarrage effectif du moteur vocal
@@ -358,8 +386,8 @@ void AppController::update(uint32_t nowMs) {
     m_lastConnCheckMs = nowMs;
 
     bool wifiCur = (WiFi.status() == WL_CONNECTED);
-    bool sessionCur =
-        (m_voice.getSession().getState() == LiveSessionState::CONNECTED);
+    LiveSessionState liveCur = m_voice.getSession().getState();
+    bool sessionCur = (liveCur == LiveSessionState::CONNECTED);
 
     if (wifiCur != m_wifiWasConnected) {
       m_wifiWasConnected = wifiCur;
@@ -374,6 +402,30 @@ void AppController::update(uint32_t nowMs) {
       }
     }
 
+    if (liveCur != m_lastObservedLiveState) {
+      LiveSessionState oldLive = m_lastObservedLiveState;
+      m_lastObservedLiveState = liveCur;
+
+      if (liveCur == LiveSessionState::RECONNECTING) {
+        Serial.printf("[%lu][SESSION_DIAG] Reconnexion en cours (depuis %s)\n",
+                      (unsigned long)nowMs, liveSessionStateToString(oldLive));
+        setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
+                          "Reconnexion session IA...", m_hasPendingStatus);
+      } else if (liveCur == LiveSessionState::CONNECTED) {
+        Serial.printf("[%lu][SESSION_DIAG] Session disponible (rétablie)\n", (unsigned long)nowMs);
+        setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
+                          "Assistant prêt", m_hasPendingStatus);
+      } else if (liveCur == LiveSessionState::CONNECTING) {
+        Serial.printf("[%lu][SESSION_DIAG] Connexion en cours\n", (unsigned long)nowMs);
+        setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
+                          "Connexion session IA...", m_hasPendingStatus);
+      } else if (liveCur == LiveSessionState::ERROR) {
+        Serial.printf("[%lu][SESSION_DIAG] Erreur session IA\n", (unsigned long)nowMs);
+        setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
+                          "Erreur session IA", m_hasPendingStatus);
+      }
+    }
+
     if (sessionCur != m_sessionWasConnected) {
       m_sessionWasConnected = sessionCur;
       if (sessionCur) {
@@ -383,14 +435,42 @@ void AppController::update(uint32_t nowMs) {
   }
 }
 
+bool AppController::isSessionReady() const {
+  if (!isWifiConnected()) return false;
+  if (m_voice.isConnecting()) return false;
+  if (m_voice.getSession().getState() != LiveSessionState::CONNECTED) return false;
+  if (isProfileChangeInProgress()) return false;
+  if (m_stopHandlingActive) return false;
+  return true;
+}
+
+bool AppController::canModifySettings() const {
+  if (!isWifiConnected()) return false;
+  if (m_voice.isConnecting()) return false;
+  if (m_voice.getSession().getState() != LiveSessionState::CONNECTED) return false;
+  if (isProfileChangeInProgress()) return false;
+  if (m_stopHandlingActive) return false;
+  VoiceInteractionState st = m_interaction.getState();
+  if (st == VoiceInteractionState::INTERRUPTING ||
+      st == VoiceInteractionState::RECOVERING ||
+      st == VoiceInteractionState::LISTENING ||
+      st == VoiceInteractionState::SPEAKING ||
+      st == VoiceInteractionState::STARTING ||
+      st == VoiceInteractionState::STOPPING_CAPTURE) {
+    return false;
+  }
+  return true;
+}
+
 void AppController::onTalkClick() {
   VoiceInteractionState st = m_interaction.getState();
   if (st == VoiceInteractionState::READY) {
-    if (!isSessionConnected() || !isWifiConnected() || m_voice.isConnecting() || isProfileChangeInProgress()) {
+    if (!isSessionReady()) {
       Serial.println("[PTT] Clic PARLER refusé : session non disponible ou modification de profil en cours");
       return;
     }
     Serial.println("[PTT] Bouton PARLER actionné");
+    m_turnInterruptedByStop = false;
     m_interaction.onTalkClick();
   } else if (st == VoiceInteractionState::LISTENING) {
     Serial.println("[PTT] Bouton TERMINER actionné");
@@ -402,8 +482,34 @@ void AppController::onTalkClick() {
 }
 
 void AppController::triggerStop() {
-  Serial.println("[PTT] Bouton STOP prioritaire actionné");
+  uint32_t now = millis();
+  Serial.printf("[%lu][STOP_DIAG] Stop demandé\n", (unsigned long)now);
+  Serial.printf("[%lu][STOP_DIAG] État avant interruption : %s (Session=%s)\n",
+                (unsigned long)now, getStateString(),
+                liveSessionStateToString(m_voice.getSession().getState()));
+
+  // Idempotence : ignorer les clics répétés rapprochés (< 400 ms) ou si déjà en arrêt
+  if (m_stopHandlingActive || (now - m_lastStopTriggerMs < 400)) {
+    Serial.printf("[%lu][STOP_DIAG] Stop ignoré (idempotence / déjà en cours)\n", (unsigned long)now);
+    return;
+  }
+
+  // Si le système est au repos et aucune lecture audio ni écoute active
+  VoiceInteractionState curSt = m_interaction.getState();
+  if (curSt == VoiceInteractionState::READY && !m_voice.isSpeaking() && !m_voice.isBusy()) {
+    Serial.printf("[%lu][STOP_DIAG] Stop ignoré : aucun tour actif\n", (unsigned long)now);
+    return;
+  }
+
+  m_lastStopTriggerMs = now;
+  m_stopHandlingActive = true;
+  m_turnInterruptedByStop = true;
+
   m_interaction.triggerStop();
+  Serial.printf("[%lu][STOP_DIAG] Tour annulé\n", (unsigned long)now);
+  Serial.printf("[%lu][STOP_DIAG] État après interruption : %s\n",
+                (unsigned long)millis(), getStateString());
+
   setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
                     "Arrêt demandé", m_hasPendingStatus);
 }
@@ -454,11 +560,11 @@ const char *AppController::getProviderName() const {
 }
 
 bool AppController::requestProfileChange(const VoiceProfile &targetProfile) {
-  // 1. Vérifier si une modification est déjà en cours
-  if (isProfileChangeInProgress() || m_voice.isConnecting()) {
-    Serial.println("[APP] Modification de profil refusée : opération déjà en cours");
+  // 1. Vérifier si les paramètres sont autorisés dans l'état actuel
+  if (!canModifySettings()) {
+    Serial.println("[APP] Modification de profil refusée : session indisponible ou opération en cours");
     setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
-                      "Modification déjà en cours", m_hasPendingStatus);
+                      "Connexion en cours — paramètres indisponibles", m_hasPendingStatus);
     return false;
   }
 
