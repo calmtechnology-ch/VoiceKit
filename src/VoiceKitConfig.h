@@ -212,7 +212,7 @@ struct VoiceToneWrapper {
 };
 
 #ifndef VOICEKIT_DEFAULT_MODEL
-#define VOICEKIT_DEFAULT_MODEL "models/gemini-3.8-live"
+#define VOICEKIT_DEFAULT_MODEL "models/gemini-2.0-flash-exp"
 #endif
 
 #ifndef VOICEKIT_DEFAULT_VOICE

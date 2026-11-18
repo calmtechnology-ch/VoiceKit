@@ -354,7 +354,11 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
                             (_config.model.isEmpty() || _config.model.indexOf("gemini") >= 0)) {
                             _config.model = OPENAI_REALTIME_DEFAULT_MODEL;
                         } else if (_config.provider == VoiceProviderType::GEMINI &&
-                                   (_config.model.isEmpty() || _config.model.indexOf("gpt-") >= 0 || _config.model.indexOf("realtime") >= 0)) {
+                                   (_config.model.isEmpty() ||
+                                    _config.model.indexOf("gpt-") >= 0 ||
+                                    _config.model.indexOf("realtime") >= 0 ||
+                                    _config.model.indexOf("gemini-3.8") >= 0 ||
+                                    _config.model.indexOf("gemini-2.5") >= 0)) {
                             _config.model = VOICEKIT_DEFAULT_MODEL;
                         }
                     }
@@ -1089,8 +1093,10 @@ void VoxCoreVoice::stop() {
     if (_wakeWordConversationController.isEnabled() && _wakeWordConversationController.isSessionInProgress()) {
         _wakeWordConversationController.stopSession(true);
     }
+    bool sessionAlreadyStopped = false;
     if (_conversationEnabled && _conversationController.isTurnActive()) {
         _conversationController.requestStop();
+        sessionAlreadyStopped = true;
     }
     _pendingText = "";
     _pendingSpeech = SpeechQueueItem();
@@ -1119,7 +1125,9 @@ void VoxCoreVoice::stop() {
         _modeSwitchPending = false;
         Serial.println("[VoiceKit] stop() : mode conversationnel precedent restaure");
     }
-    _session.requestStop();
+    if (!sessionAlreadyStopped) {
+        _session.requestStop();
+    }
     _player.setPlaybackAllowed(true);
     if (_session.getState() == LiveSessionState::CONNECTED) {
         setState(VoiceState::READY);
@@ -1233,7 +1241,11 @@ bool VoxCoreVoice::bindProviderForConfig(const VoiceKitConfig& targetCfg, String
         }
     } else {
         String resolvedModel = targetCfg.model;
-        if (resolvedModel.isEmpty() || resolvedModel.indexOf("gpt-") >= 0 || resolvedModel.indexOf("realtime") >= 0) {
+        if (resolvedModel.isEmpty() ||
+            resolvedModel.indexOf("gpt-") >= 0 ||
+            resolvedModel.indexOf("realtime") >= 0 ||
+            resolvedModel.indexOf("gemini-3.8") >= 0 ||
+            resolvedModel.indexOf("gemini-2.5") >= 0) {
             resolvedModel = VOICEKIT_DEFAULT_MODEL;
         }
         String voiceToUse = targetCfg.voice;

@@ -166,12 +166,12 @@ void ConversationController::requestStop() {
     if (_streamer && _streamer->isStreaming()) {
         _streamer->cancel();
     }
-    if (_session) {
-        _session->requestStop();
-    }
     if (_player) {
         _player->stop(AudioStopReason::USER_STOP);
         _player->setPlaybackAllowed(true);
+    }
+    if (_session) {
+        _session->requestStop();
     }
     _isTurnActive = false;
     setState(VoiceState::STOPPED);

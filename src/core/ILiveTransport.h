@@ -28,6 +28,7 @@ public:
     virtual uint32_t getMaxDisconnectDurationUs() const { return 0; }
     virtual bool isConnected() const = 0;
     virtual bool send(const char* data, size_t len) = 0;
+    virtual bool send(const char* data, size_t len, uint32_t timeoutMs) { (void)timeoutMs; return send(data, len); }
     virtual void setHandlers(ConnectHandler onConnect, DisconnectHandler onDisconnect, 
                             DataHandler onData, ErrorHandler onError) = 0;
     virtual void tick() {}

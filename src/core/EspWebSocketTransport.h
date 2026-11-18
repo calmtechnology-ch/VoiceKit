@@ -208,13 +208,18 @@ public:
     }
 
     bool send(const char* data, size_t len) override {
+        return send(data, len, 250);
+    }
+
+    bool send(const char* data, size_t len, uint32_t timeoutMs) override {
         if (!isConnected()) return false;
+        TickType_t ticks = pdMS_TO_TICKS(timeoutMs > 0 ? timeoutMs : 250);
         if (_sendMutex) {
-            if (xSemaphoreTake(_sendMutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+            if (xSemaphoreTake(_sendMutex, ticks) != pdTRUE) {
                 return false;
             }
         }
-        int sent = esp_websocket_client_send_text(_client, data, len, pdMS_TO_TICKS(1000));
+        int sent = esp_websocket_client_send_text(_client, data, len, ticks);
         if (_sendMutex) {
             xSemaphoreGive(_sendMutex);
         }

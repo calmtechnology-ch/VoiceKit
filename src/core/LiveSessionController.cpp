@@ -858,6 +858,20 @@ void LiveSessionController::finishTurn() {
     }
 
     void LiveSessionController::requestStop() {
+      // 1. Coupure locale immediate du haut-parleur en priorite absolue (0 latence, independant du reseau)
+      if (_player) {
+        _player->stop(AudioStopReason::USER_STOP);
+      }
+
+      // 2. Idempotence stricte pour un meme tour : si deja interrompu/annule pour ce turnId,
+      // ne pas reemettre d'annulation reseau redundante
+      if (_interruptedTurnId == _currentTurnId &&
+          _turnCancelled.load(std::memory_order_acquire) &&
+          !_turnActive.load(std::memory_order_acquire)) {
+        Serial.println("[LiveSession] STOP ignore : tour deja annule");
+        return;
+      }
+
       Serial.println(
           "\n[LiveSession] >>> DEMANDE INTERRUPTION STOP PRIORITAIRE <<<");
       _interruptedTurnId = _currentTurnId;
@@ -867,9 +881,6 @@ void LiveSessionController::finishTurn() {
 
       if (_provider && _provider->isConnected()) {
         _provider->sendInterruption();
-      }
-      if (_player) {
-        _player->stop(AudioStopReason::USER_STOP);
       }
       printAudioEndCheck("STOP");
       if (_state != LiveSessionState::DISCONNECTED) {

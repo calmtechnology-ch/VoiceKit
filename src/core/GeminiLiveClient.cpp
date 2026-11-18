@@ -226,9 +226,13 @@ bool GeminiLiveClient::isModelSpeechLanguageCodeSupported(const String& /*model*
 void GeminiLiveClient::sendSetupMessage() {
     // Configuration setup Gemini Live selon protocole BidiGenerateContent
     // VAD manuelle + transcriptions + instructions et outils configurables
+    String effectiveModel = _model;
+    if (!effectiveModel.isEmpty() && !effectiveModel.startsWith("models/")) {
+        effectiveModel = "models/" + effectiveModel;
+    }
     String setupJson = "{";
     setupJson += "\"setup\":{";
-    setupJson += "\"model\":\"" + escapeJsonString(_model) + "\",";
+    setupJson += "\"model\":\"" + escapeJsonString(effectiveModel) + "\",";
     setupJson += "\"generationConfig\":{";
     setupJson += "\"responseModalities\":[\"AUDIO\"],";
     setupJson += "\"speechConfig\":{";
@@ -284,8 +288,8 @@ void GeminiLiveClient::sendSetupMessage() {
     setupJson += "}";
     setupJson += "}";
 
-    Serial.printf("[LiveClient] Envoi setup Gemini Live (VAD manuelle, transcriptions, %u outil(s) declare(s))...\n",
-                  (unsigned)_tools.size());
+    Serial.printf("[LiveClient] Envoi setup Gemini Live (modele=%s, voix=%s, VAD manuelle, transcriptions, %u outil(s) declare(s))...\n",
+                  _model.c_str(), _voice.c_str(), (unsigned)_tools.size());
     _transport->send(setupJson.c_str(), setupJson.length());
 }
 
@@ -382,7 +386,7 @@ bool GeminiLiveClient::sendInterruption() {
     if (!isConnected()) return false;
     _waitingForResponse.store(false, std::memory_order_release);
     const char* intMsg = "{\"clientContent\":{\"turns\":[{\"role\":\"user\",\"parts\":[]}],\"turnComplete\":true}}";
-    return _transport->send(intMsg, strlen(intMsg));
+    return _transport->send(intMsg, strlen(intMsg), 150);
 }
 
 bool GeminiLiveClient::sendTextMessage(const String& text) {

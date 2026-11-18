@@ -549,13 +549,15 @@ bool OpenAIRealtimeClient::sendInterruption() {
     }
     Serial.println("[OpenAIClient] Interruption STOP -> response.cancel et input_audio_buffer.clear");
 
-    // Annule la réponse en cours de génération / streaming
+    // Annule la réponse en cours de génération / streaming (délai court 150 ms max)
     const char* cancelMsg = "{\"type\":\"response.cancel\"}";
-    _transport->send(cancelMsg, strlen(cancelMsg));
+    bool cancelSent = _transport->send(cancelMsg, strlen(cancelMsg), 150);
 
-    // Vide le buffer audio d'entrée
-    const char* clearMsg = "{\"type\":\"input_audio_buffer.clear\"}";
-    _transport->send(clearMsg, strlen(clearMsg));
+    // Vide le buffer audio d'entrée si le transport est toujours connecté
+    if (cancelSent || isConnected()) {
+        const char* clearMsg = "{\"type\":\"input_audio_buffer.clear\"}";
+        _transport->send(clearMsg, strlen(clearMsg), 150);
+    }
 
     if (_onInterrupted) {
         _onInterrupted();
