@@ -43,10 +43,17 @@
 AppController::AppController()
     : m_interaction(m_voice, m_interactionConfig)
 {
+#if defined(USE_OPENAI) && !defined(USE_GEMINI)
+    // Sélection par défaut OpenAI Realtime si demandé dans secrets.h
+    m_activeProfile.provider = VoiceProviderType::OPENAI;
+    m_activeProfile.language = AppConfig::DEFAULT_LANGUAGE;
+    m_activeProfile.voiceId = AppConfig::OPENAI_VOICE;
+#else
     // Profil par défaut initialisé sur Gemini Live
     m_activeProfile.provider = VoiceProviderType::GEMINI;
     m_activeProfile.language = AppConfig::DEFAULT_LANGUAGE;
     m_activeProfile.voiceId = AppConfig::GEMINI_VOICE;
+#endif
     m_activeProfile.preferredGender = VoiceGender::ANY;
     m_activeProfile.style = VoiceStyle::NATURAL;
     m_activeProfile.tone = VoiceTone::NEUTRAL;
