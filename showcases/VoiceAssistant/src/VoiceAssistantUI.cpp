@@ -11,7 +11,7 @@ void VoiceAssistantUI::init(AppController& controller) {
 
     lv_obj_t* scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0xF4F6F9), 0);
-    lv_obj_set_scrollable(scr, false);
+    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
     // =========================================================================
     // 1. Conteneur principal de la vue Conversation (320x240)
@@ -23,7 +23,7 @@ void VoiceAssistantUI::init(AppController& controller) {
     lv_obj_set_style_pad_all(m_contConv, 0, 0);
     lv_obj_set_style_border_width(m_contConv, 0, 0);
     lv_obj_set_style_radius(m_contConv, 0, 0);
-    lv_obj_set_scrollable(m_contConv, false);
+    lv_obj_remove_flag(m_contConv, LV_OBJ_FLAG_SCROLLABLE);
 
     // 1.1 Barre supérieure (y: 0, h: 24, w: 320)
     lv_obj_t* headerPnl = lv_obj_create(m_contConv);
@@ -36,7 +36,7 @@ void VoiceAssistantUI::init(AppController& controller) {
     lv_obj_set_style_radius(headerPnl, 0, 0);
     lv_obj_set_style_pad_hor(headerPnl, 8, 0);
     lv_obj_set_style_pad_ver(headerPnl, 2, 0);
-    lv_obj_set_scrollable(headerPnl, false);
+    lv_obj_remove_flag(headerPnl, LV_OBJ_FLAG_SCROLLABLE);
 
     m_lblTitle = lv_label_create(headerPnl);
     lv_label_set_text(m_lblTitle, AppConfig::APP_NAME);
@@ -71,7 +71,7 @@ void VoiceAssistantUI::init(AppController& controller) {
     lv_obj_set_style_radius(m_cardState, 4, 0);
     lv_obj_set_style_pad_hor(m_cardState, 6, 0);
     lv_obj_set_style_pad_ver(m_cardState, 2, 0);
-    lv_obj_set_scrollable(m_cardState, false);
+    lv_obj_remove_flag(m_cardState, LV_OBJ_FLAG_SCROLLABLE);
 
     m_lblState = lv_label_create(m_cardState);
     lv_label_set_text(m_lblState, "Assistant prêt");
@@ -94,7 +94,7 @@ void VoiceAssistantUI::init(AppController& controller) {
     lv_obj_set_style_border_width(m_cardUser, 1, 0);
     lv_obj_set_style_radius(m_cardUser, 6, 0);
     lv_obj_set_style_pad_all(m_cardUser, 4, 0);
-    lv_obj_set_scrollable(m_cardUser, false);
+    lv_obj_remove_flag(m_cardUser, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* lblUserHead = lv_label_create(m_cardUser);
     lv_label_set_text(lblUserHead, "VOUS");
@@ -110,7 +110,7 @@ void VoiceAssistantUI::init(AppController& controller) {
     lv_obj_set_style_text_font(m_lblUserText, &font_french_12, 0);
     lv_obj_set_style_text_color(m_lblUserText, lv_color_hex(0x212121), 0);
 
-    // 1.4 Carte ASSISTANT (y: 110, h: 60, w: 304)
+    // 1.4 Carte ASSISTANT (y: 110, h: 60, w: 304) — Défilable verticalement
     m_cardAssistant = lv_obj_create(m_contConv);
     lv_obj_set_pos(m_cardAssistant, 8, 110);
     lv_obj_set_size(m_cardAssistant, 304, 60);
@@ -119,7 +119,7 @@ void VoiceAssistantUI::init(AppController& controller) {
     lv_obj_set_style_border_width(m_cardAssistant, 1, 0);
     lv_obj_set_style_radius(m_cardAssistant, 6, 0);
     lv_obj_set_style_pad_all(m_cardAssistant, 4, 0);
-    lv_obj_set_scrollable(m_cardAssistant, false);
+    lv_obj_remove_flag(m_cardAssistant, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* lblAstHead = lv_label_create(m_cardAssistant);
     lv_label_set_text(lblAstHead, "ASSISTANT");
@@ -127,9 +127,22 @@ void VoiceAssistantUI::init(AppController& controller) {
     lv_obj_set_style_text_color(lblAstHead, lv_color_hex(0x1976D2), 0);
     lv_obj_set_pos(lblAstHead, 2, 0);
 
-    m_lblAssistantText = lv_label_create(m_cardAssistant);
-    lv_obj_set_pos(m_lblAssistantText, 2, 14);
-    lv_obj_set_size(m_lblAssistantText, 290, 40);
+    // Conteneur interne avec défilement vertical pour réponses longues (>= 10 lignes)
+    m_contAssistantScroll = lv_obj_create(m_cardAssistant);
+    lv_obj_set_pos(m_contAssistantScroll, 0, 14);
+    lv_obj_set_size(m_contAssistantScroll, 296, 40);
+    lv_obj_set_style_bg_opa(m_contAssistantScroll, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(m_contAssistantScroll, 0, 0);
+    lv_obj_set_style_pad_all(m_contAssistantScroll, 0, 0);
+    lv_obj_set_style_pad_right(m_contAssistantScroll, 4, 0);
+    lv_obj_add_flag(m_contAssistantScroll, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(m_contAssistantScroll, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(m_contAssistantScroll, LV_SCROLLBAR_MODE_AUTO);
+
+    m_lblAssistantText = lv_label_create(m_contAssistantScroll);
+    lv_obj_set_pos(m_lblAssistantText, 0, 0);
+    lv_obj_set_width(m_lblAssistantText, 280);
+    lv_obj_set_height(m_lblAssistantText, LV_SIZE_CONTENT);
     lv_label_set_long_mode(m_lblAssistantText, LV_LABEL_LONG_MODE_WRAP);
     lv_label_set_text(m_lblAssistantText, "Bonjour ! Je suis à votre écoute.");
     lv_obj_set_style_text_font(m_lblAssistantText, &font_french_12, 0);
@@ -205,7 +218,7 @@ void VoiceAssistantUI::init(AppController& controller) {
 
 void VoiceAssistantUI::showConversation() {
     if (m_contConv) {
-        lv_obj_set_hidden(m_contConv, false);
+        lv_obj_remove_flag(m_contConv, LV_OBJ_FLAG_HIDDEN);
     }
     m_settingsScreen.hide();
     refreshHeader();
@@ -213,13 +226,29 @@ void VoiceAssistantUI::showConversation() {
 
 void VoiceAssistantUI::showSettings() {
     if (m_contConv) {
-        lv_obj_set_hidden(m_contConv, true);
+        lv_obj_add_flag(m_contConv, LV_OBJ_FLAG_HIDDEN);
     }
     m_settingsScreen.show();
 }
 
 void VoiceAssistantUI::update() {
     if (!m_controller) return;
+
+    // Mise à jour de l'écran Paramètres (confirmation et feedback)
+    m_settingsScreen.update();
+
+    // Effacement immédiat de l'affichage si demandé par le bouton Effacer
+    if (m_controller->consumeHistoryCleared()) {
+        if (m_lblUserText) {
+            lv_label_set_text(m_lblUserText, "Appuyez sur PARLER pour poser une question.");
+        }
+        if (m_lblAssistantText) {
+            lv_label_set_text(m_lblAssistantText, "Bonjour ! Je suis à votre écoute.");
+        }
+        if (m_contAssistantScroll) {
+            lv_obj_scroll_to_y(m_contAssistantScroll, 0, LV_ANIM_OFF);
+        }
+    }
 
     // Consommation des messages différés vers les labels
     String text;
@@ -257,6 +286,10 @@ void VoiceAssistantUI::update() {
     if (nowMs - m_lastHeaderRefreshMs >= 500) {
         m_lastHeaderRefreshMs = nowMs;
         refreshHeader();
+        // S'assurer que le bouton PARLER reflète la disponibilité session en READY
+        if (m_controller->getState() == VoiceInteractionState::READY) {
+            updateVoiceState(VoiceInteractionState::READY);
+        }
     }
 }
 
@@ -288,7 +321,11 @@ void VoiceAssistantUI::refreshHeader() {
 }
 
 void VoiceAssistantUI::updateVoiceState(VoiceInteractionState state) {
-    if (!m_lblState || !m_btnTalk || !m_lblBtnTalk) return;
+    if (!m_lblState || !m_btnTalk || !m_lblBtnTalk || !m_controller) return;
+
+    bool sessionReady = m_controller->isSessionConnected() &&
+                        m_controller->isWifiConnected() &&
+                        !m_controller->isProfileChangeInProgress();
 
     switch (state) {
         case VoiceInteractionState::DISABLED:
@@ -296,13 +333,23 @@ void VoiceAssistantUI::updateVoiceState(VoiceInteractionState state) {
             lv_obj_set_style_text_color(m_lblState, lv_color_hex(0x757575), 0);
             lv_label_set_text(m_lblBtnTalk, "ATTENTE");
             lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0x9E9E9E), 0);
+            lv_obj_add_state(m_btnTalk, LV_STATE_DISABLED);
             break;
 
         case VoiceInteractionState::READY:
-            lv_label_set_text(m_lblState, "Assistant prêt (2 clics)");
-            lv_obj_set_style_text_color(m_lblState, lv_color_hex(0x2E7D32), 0);
-            lv_label_set_text(m_lblBtnTalk, "PARLER");
-            lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0x1976D2), 0);
+            if (!sessionReady) {
+                lv_label_set_text(m_lblState, "Connexion session IA...");
+                lv_obj_set_style_text_color(m_lblState, lv_color_hex(0xF57C00), 0);
+                lv_label_set_text(m_lblBtnTalk, "ATTENTE");
+                lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0x9E9E9E), 0);
+                lv_obj_add_state(m_btnTalk, LV_STATE_DISABLED);
+            } else {
+                lv_label_set_text(m_lblState, "Assistant prêt (2 clics)");
+                lv_obj_set_style_text_color(m_lblState, lv_color_hex(0x2E7D32), 0);
+                lv_label_set_text(m_lblBtnTalk, "PARLER");
+                lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0x1976D2), 0);
+                lv_obj_remove_state(m_btnTalk, LV_STATE_DISABLED);
+            }
             break;
 
         case VoiceInteractionState::STARTING:
@@ -310,6 +357,7 @@ void VoiceAssistantUI::updateVoiceState(VoiceInteractionState state) {
             lv_obj_set_style_text_color(m_lblState, lv_color_hex(0xF57C00), 0);
             lv_label_set_text(m_lblBtnTalk, "OUVERTURE...");
             lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0xF57C00), 0);
+            lv_obj_add_state(m_btnTalk, LV_STATE_DISABLED);
             break;
 
         case VoiceInteractionState::LISTENING:
@@ -317,6 +365,7 @@ void VoiceAssistantUI::updateVoiceState(VoiceInteractionState state) {
             lv_obj_set_style_text_color(m_lblState, lv_color_hex(0xD50000), 0);
             lv_label_set_text(m_lblBtnTalk, "TERMINER");
             lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0xD50000), 0);
+            lv_obj_remove_state(m_btnTalk, LV_STATE_DISABLED);
             break;
 
         case VoiceInteractionState::STOPPING_CAPTURE:
@@ -324,6 +373,7 @@ void VoiceAssistantUI::updateVoiceState(VoiceInteractionState state) {
             lv_obj_set_style_text_color(m_lblState, lv_color_hex(0xFF8F00), 0);
             lv_label_set_text(m_lblBtnTalk, "VALIDATION...");
             lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0xFF8F00), 0);
+            lv_obj_add_state(m_btnTalk, LV_STATE_DISABLED);
             break;
 
         case VoiceInteractionState::PROCESSING:
@@ -331,13 +381,15 @@ void VoiceAssistantUI::updateVoiceState(VoiceInteractionState state) {
             lv_obj_set_style_text_color(m_lblState, lv_color_hex(0x0288D1), 0);
             lv_label_set_text(m_lblBtnTalk, "TRAITEMENT...");
             lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0x0288D1), 0);
+            lv_obj_add_state(m_btnTalk, LV_STATE_DISABLED);
             break;
 
         case VoiceInteractionState::SPEAKING:
             lv_label_set_text(m_lblState, "Réponse vocale en cours...");
             lv_obj_set_style_text_color(m_lblState, lv_color_hex(0x7B1FA2), 0);
-            lv_label_set_text(m_lblBtnTalk, "STOP PAROLE");
-            lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0x7B1FA2), 0);
+            lv_label_set_text(m_lblBtnTalk, "PAROLE EN COURS");
+            lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0x9E9E9E), 0);
+            lv_obj_add_state(m_btnTalk, LV_STATE_DISABLED);
             break;
 
         case VoiceInteractionState::INTERRUPTING:
@@ -345,6 +397,7 @@ void VoiceAssistantUI::updateVoiceState(VoiceInteractionState state) {
             lv_obj_set_style_text_color(m_lblState, lv_color_hex(0xC62828), 0);
             lv_label_set_text(m_lblBtnTalk, "ARRÊT...");
             lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0xC62828), 0);
+            lv_obj_add_state(m_btnTalk, LV_STATE_DISABLED);
             break;
 
         case VoiceInteractionState::RECOVERING:
@@ -352,13 +405,15 @@ void VoiceAssistantUI::updateVoiceState(VoiceInteractionState state) {
             lv_obj_set_style_text_color(m_lblState, lv_color_hex(0xE65100), 0);
             lv_label_set_text(m_lblBtnTalk, "REPRISE...");
             lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0xE65100), 0);
+            lv_obj_add_state(m_btnTalk, LV_STATE_DISABLED);
             break;
 
         case VoiceInteractionState::ERROR_STATE:
             lv_label_set_text(m_lblState, "Erreur");
             lv_obj_set_style_text_color(m_lblState, lv_color_hex(0xBF360C), 0);
-            lv_label_set_text(m_lblBtnTalk, "RÉESSAYER");
+            lv_label_set_text(m_lblBtnTalk, "ERREUR");
             lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(0xBF360C), 0);
+            lv_obj_add_state(m_btnTalk, LV_STATE_DISABLED);
             break;
     }
 }

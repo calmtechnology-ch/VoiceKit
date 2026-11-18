@@ -58,6 +58,7 @@ private:
     lv_obj_t* m_lblUserText = nullptr;
 
     lv_obj_t* m_cardAssistant = nullptr;
+    lv_obj_t* m_contAssistantScroll = nullptr;
     lv_obj_t* m_lblAssistantText = nullptr;
 
     // Boutons de contrôle vocal

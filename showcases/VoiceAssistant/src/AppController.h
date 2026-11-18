@@ -121,6 +121,14 @@ public:
     const String& getLastUserText() const { return m_lastUserText; }
     const String& getLastAssistantText() const { return m_lastAssistantText; }
     void clearHistory();
+    bool consumeHistoryCleared();
+
+    // =========================================================================
+    // Suivi du basculement / modification de profil asynchrone
+    // =========================================================================
+
+    bool isProfileChangeInProgress() const;
+    bool consumeProfileChangeResult(bool& success, String& message);
 
     // =========================================================================
     // Consommation des messages différés vers l'interface LVGL (thread-safe)
@@ -167,6 +175,25 @@ private:
     bool m_wifiWasConnected = false;
     bool m_sessionWasConnected = false;
 
+    enum class ProfileOperationState {
+        IDLE,
+        PENDING_STOP,
+        APPLYING
+    };
+
+    ProfileOperationState m_profileOpState = ProfileOperationState::IDLE;
+    VoiceProfile m_pendingTargetProfile;
+    uint32_t m_profileOpStartMs = 0;
+
+    bool m_profileResultReady = false;
+    bool m_profileResultSuccess = false;
+    char m_profileResultMessage[64] = "";
+
+    bool m_historyCleared = false;
+    String m_currentTurnUserText;
+    String m_currentTurnAssistantText;
+
+    bool requestProfileChange(const VoiceProfile& targetProfile);
     void recordTurnInHistory(const String& user, const String& assistant);
     void setThreadSafeText(char* dst, size_t dstSize, const char* src, bool& flag);
 };

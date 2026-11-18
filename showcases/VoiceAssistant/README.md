@@ -19,15 +19,16 @@ VoiceAssistant démontre l'intégration native et modulaire de VoiceKit sans né
 
 ## 2. Fonctionnalités
 
-- **Push-to-Talk (PTT) à 2 clics** : un 1er clic sur `PARLER` pour ouvrir le micro, un 2nd clic sur `TERMINER` pour clôturer.
+- **Push-to-Talk (PTT) à 2 clics** : un 1er clic sur `PARLER` pour ouvrir le micro, un 2nd clic sur `TERMINER` pour clôturer. Bouton automatiquement désactivé (`LV_STATE_DISABLED`) lorsque la session IA ou le réseau n'est pas opérationnel.
 - **Anti-rebond matériel** : filtrage de 120 ms pour éviter tout double déclenchement tactile intempestif.
 - **Analyse locale VAD** : analyse d'énergie RMS sur blocs PCM 16 kHz (plancher garanti 380 RMS pour le codec ES7210).
-- **Interruption instantanée STOP** : coupe la restitution sonore sur l'amplificateur AW88298 ou la capture micro, avec purge des callbacks tardifs.
-- **Choix du fournisseur IA** : bascule dynamique entre Google Gemini Live et OpenAI Realtime depuis l'écran Paramètres.
+- **Interruption instantanée STOP** : coupe la restitution sonore sur l'amplificateur AW88298 ou la capture micro, avec purge des callbacks tardifs et protection de l'historique.
+- **Choix du fournisseur IA** : bascule dynamique et asynchrone entre Google Gemini Live et OpenAI Realtime depuis l'écran Paramètres via les API de haut niveau VoiceKit.
 - **Gestion multilingue** : sélection parmi le Français (`fr-FR`), l'Anglais (`en-US`), l'Allemand (`de-DE`), l'Italien (`it-IT`) et l'Espagnol (`es-ES`).
 - **Catalogue de voix compatibles** : affichage exclusif des voix supportées par le fournisseur choisi.
-- **Persistance des préférences (NVS)** : sauvegarde de la langue, voix et volume dans la mémoire non volatile (sans stocker de clés API).
-- **Historique local en RAM** : conservation des derniers échanges affichés sur l'écran.
+- **Persistance des préférences (NVS)** : sauvegarde du fournisseur, de la langue et de la voix dans la mémoire non volatile (sans stocker de clés API). *Note : le volume sonore est géré en mémoire vive pour la session et réinitialisé à sa valeur nominale au démarrage.*
+- **Affichage des réponses longues** : carte ASSISTANT équipée d'un conteneur défilable verticalement au toucher permettant de consulter plus de 10 lignes sans altérer l'agencement 320 × 240.
+- **Historique local en RAM** : conservation structurée des derniers échanges complets (sans duplication de fragments), avec réinitialisation visuelle immédiate via le bouton `Effacer`.
 
 ---
 

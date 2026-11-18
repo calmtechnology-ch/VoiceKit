@@ -27,6 +27,7 @@ public:
     void hide();
     bool isVisible() const;
     void refresh();
+    void update();
 
     void setFeedbackMessage(const char* msg);
 
@@ -34,6 +35,7 @@ private:
     lv_obj_t* m_container = nullptr;
     AppController* m_controller = nullptr;
     std::function<void()> m_onBack;
+    bool m_waitingConfirmation = false;
 
     // Widgets LVGL 9
     lv_obj_t* m_btnGemini = nullptr;

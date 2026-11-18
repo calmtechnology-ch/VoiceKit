@@ -45,10 +45,10 @@ void SettingsScreen::init(lv_obj_t* parent, AppController& controller, std::func
     lv_obj_set_style_pad_all(m_container, 0, 0);
     lv_obj_set_style_border_width(m_container, 0, 0);
     lv_obj_set_style_radius(m_container, 0, 0);
-    lv_obj_set_scrollable(m_container, false);
+    lv_obj_remove_flag(m_container, LV_OBJ_FLAG_SCROLLABLE);
 
     // Masqué par défaut
-    lv_obj_set_hidden(m_container, true);
+    lv_obj_add_flag(m_container, LV_OBJ_FLAG_HIDDEN);
 
     // 1. Barre supérieure d'en-tête (y: 2, h: 26)
     lv_obj_t* headerPnl = lv_obj_create(m_container);
@@ -61,7 +61,7 @@ void SettingsScreen::init(lv_obj_t* parent, AppController& controller, std::func
     lv_obj_set_style_radius(headerPnl, 0, 0);
     lv_obj_set_style_pad_hor(headerPnl, 8, 0);
     lv_obj_set_style_pad_ver(headerPnl, 2, 0);
-    lv_obj_set_scrollable(headerPnl, false);
+    lv_obj_remove_flag(headerPnl, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* lblTitle = lv_label_create(headerPnl);
     lv_label_set_text(lblTitle, "Paramètres VoiceAssistant");
@@ -94,7 +94,7 @@ void SettingsScreen::init(lv_obj_t* parent, AppController& controller, std::func
     lv_obj_set_style_border_width(cardProv, 1, 0);
     lv_obj_set_style_radius(cardProv, 6, 0);
     lv_obj_set_style_pad_all(cardProv, 4, 0);
-    lv_obj_set_scrollable(cardProv, false);
+    lv_obj_remove_flag(cardProv, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* lblProvTitle = lv_label_create(cardProv);
     lv_label_set_text(lblProvTitle, "IA :");
@@ -137,7 +137,7 @@ void SettingsScreen::init(lv_obj_t* parent, AppController& controller, std::func
     lv_obj_set_style_border_width(cardLangVoice, 1, 0);
     lv_obj_set_style_radius(cardLangVoice, 6, 0);
     lv_obj_set_style_pad_all(cardLangVoice, 4, 0);
-    lv_obj_set_scrollable(cardLangVoice, false);
+    lv_obj_remove_flag(cardLangVoice, LV_OBJ_FLAG_SCROLLABLE);
 
     // Ligne 1 : Langue
     lv_obj_t* lblLangTitle = lv_label_create(cardLangVoice);
@@ -192,7 +192,7 @@ void SettingsScreen::init(lv_obj_t* parent, AppController& controller, std::func
     lv_obj_set_style_border_width(cardVolAction, 1, 0);
     lv_obj_set_style_radius(cardVolAction, 6, 0);
     lv_obj_set_style_pad_all(cardVolAction, 4, 0);
-    lv_obj_set_scrollable(cardVolAction, false);
+    lv_obj_remove_flag(cardVolAction, LV_OBJ_FLAG_SCROLLABLE);
 
     // Contrôles Volume
     lv_obj_t* lblVolTitle = lv_label_create(cardVolAction);
@@ -278,7 +278,7 @@ void SettingsScreen::init(lv_obj_t* parent, AppController& controller, std::func
     lv_obj_set_style_border_width(cardStatus, 1, 0);
     lv_obj_set_style_radius(cardStatus, 6, 0);
     lv_obj_set_style_pad_all(cardStatus, 4, 0);
-    lv_obj_set_scrollable(cardStatus, false);
+    lv_obj_remove_flag(cardStatus, LV_OBJ_FLAG_SCROLLABLE);
 
     m_lblFeedback = lv_label_create(cardStatus);
     lv_label_set_text(m_lblFeedback, "Prêt");
@@ -298,20 +298,36 @@ void SettingsScreen::init(lv_obj_t* parent, AppController& controller, std::func
 
 void SettingsScreen::show() {
     if (m_container) {
-        lv_obj_set_hidden(m_container, false);
+        lv_obj_remove_flag(m_container, LV_OBJ_FLAG_HIDDEN);
         refresh();
     }
 }
 
 void SettingsScreen::hide() {
     if (m_container) {
-        lv_obj_set_hidden(m_container, true);
+        lv_obj_add_flag(m_container, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
 bool SettingsScreen::isVisible() const {
     if (!m_container) return false;
-    return !lv_obj_is_hidden(m_container);
+    return !lv_obj_has_flag(m_container, LV_OBJ_FLAG_HIDDEN);
+}
+
+void SettingsScreen::update() {
+    if (!m_controller) return;
+
+    bool success = false;
+    String msg;
+    if (m_controller->consumeProfileChangeResult(success, msg)) {
+        m_waitingConfirmation = false;
+        if (success) {
+            setFeedbackMessage("Modification appliquée");
+        } else {
+            setFeedbackMessage(msg.isEmpty() ? "Échec modification" : msg.c_str());
+        }
+        refresh();
+    }
 }
 
 void SettingsScreen::refresh() {
@@ -374,6 +390,14 @@ void SettingsScreen::updateVoiceLabel() {
     if (!m_lblVoiceValue || !m_controller) return;
     String curVoice = m_controller->getVoiceId();
     lv_label_set_text(m_lblVoiceValue, curVoice.isEmpty() ? "(Par défaut)" : curVoice.c_str());
+
+    std::vector<VoiceDescriptor> voices = m_controller->getAvailableVoices();
+    for (size_t i = 0; i < voices.size(); ++i) {
+        if (curVoice.equalsIgnoreCase(voices[i].id)) {
+            m_selectedVoiceIdx = i;
+            break;
+        }
+    }
 }
 
 void SettingsScreen::updateVolumeLabel() {
@@ -385,45 +409,61 @@ void SettingsScreen::updateVolumeLabel() {
 
 void SettingsScreen::onProviderClicked(VoiceProviderType prov) {
     if (!m_controller) return;
-    setFeedbackMessage("Connexion au fournisseur...");
-    bool ok = m_controller->switchProvider(prov);
-    if (ok) {
-        setFeedbackMessage("Fournisseur mis à jour");
-    } else {
-        setFeedbackMessage("Échec changement fournisseur");
+    if (m_waitingConfirmation || m_controller->isProfileChangeInProgress()) {
+        setFeedbackMessage("Modification déjà en cours");
+        return;
     }
-    refresh();
+    if (m_controller->getProvider() == prov) {
+        setFeedbackMessage("Fournisseur déjà actif");
+        return;
+    }
+    setFeedbackMessage("Modification en cours...");
+    m_waitingConfirmation = true;
+    bool ok = m_controller->switchProvider(prov);
+    if (!ok) {
+        m_waitingConfirmation = false;
+        setFeedbackMessage("Échec demande modification");
+        refresh();
+    }
 }
 
 void SettingsScreen::onLangCycleClicked() {
     if (!m_controller) return;
-    m_selectedLangIdx = (m_selectedLangIdx + 1) % kSupportedLangCount;
-    const char* targetBcp47 = kSupportedLangs[m_selectedLangIdx].bcp47;
-    setFeedbackMessage("Application langue...");
-    bool ok = m_controller->setLanguage(targetBcp47);
-    if (ok) {
-        setFeedbackMessage("Nouvelle langue appliquée");
-    } else {
-        setFeedbackMessage("Échec application langue");
+    if (m_waitingConfirmation || m_controller->isProfileChangeInProgress()) {
+        setFeedbackMessage("Modification déjà en cours");
+        return;
     }
-    refresh();
+    size_t nextIdx = (m_selectedLangIdx + 1) % kSupportedLangCount;
+    const char* targetBcp47 = kSupportedLangs[nextIdx].bcp47;
+    setFeedbackMessage("Modification en cours...");
+    m_waitingConfirmation = true;
+    bool ok = m_controller->setLanguage(targetBcp47);
+    if (!ok) {
+        m_waitingConfirmation = false;
+        setFeedbackMessage("Échec demande modification");
+        refresh();
+    }
 }
 
 void SettingsScreen::onVoiceCycleClicked() {
     if (!m_controller) return;
+    if (m_waitingConfirmation || m_controller->isProfileChangeInProgress()) {
+        setFeedbackMessage("Modification déjà en cours");
+        return;
+    }
     std::vector<VoiceDescriptor> voices = m_controller->getAvailableVoices();
     if (voices.empty()) return;
 
-    m_selectedVoiceIdx = (m_selectedVoiceIdx + 1) % voices.size();
-    String newVoiceId = voices[m_selectedVoiceIdx].id;
-    setFeedbackMessage("Application voix...");
+    size_t nextIdx = (m_selectedVoiceIdx + 1) % voices.size();
+    String newVoiceId = voices[nextIdx].id;
+    setFeedbackMessage("Modification en cours...");
+    m_waitingConfirmation = true;
     bool ok = m_controller->setVoice(newVoiceId);
-    if (ok) {
-        setFeedbackMessage("Nouvelle voix appliquée");
-    } else {
-        setFeedbackMessage("Échec application voix");
+    if (!ok) {
+        m_waitingConfirmation = false;
+        setFeedbackMessage("Échec demande modification");
+        refresh();
     }
-    refresh();
 }
 
 void SettingsScreen::onVolumeChange(int delta) {
@@ -438,6 +478,10 @@ void SettingsScreen::onVolumeChange(int delta) {
 
 void SettingsScreen::onSaveNvsClicked() {
     if (!m_controller) return;
+    if (m_waitingConfirmation || m_controller->isProfileChangeInProgress()) {
+        setFeedbackMessage("Attendre fin modification");
+        return;
+    }
     bool ok = m_controller->saveProfileToNvs();
     setFeedbackMessage(ok ? "Profil sauvegardé en NVS" : "Erreur sauvegarde NVS");
 }

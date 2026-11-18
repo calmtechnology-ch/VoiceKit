@@ -80,3 +80,22 @@ VoiceAssistant v0.1.0 préserve l'intégrité des 8 propriétés vérifiées par
 3. **Aucune duplication de code** du moteur vocal.
 4. **Fluidité tactile** sous LVGL 9 à 30 FPS.
 5. **Absence de secrets** : les clés d'API ne figurent que dans `secrets.h` ignoré par git.
+
+---
+
+## 6. Contrôles Correctifs Ciblés (COR-01 à COR-10)
+
+Ces contrôles valident l'intégration des correctifs ciblés appliqués à VoiceAssistant v0.1.0 (compatibilité LVGL 9, basculement propre de fournisseur IA, historique thread-safe, affichage défilable des réponses longues, verrouillage d'état du bouton PARLER, et synchronisation NVS) :
+
+| ID | Intitulé | Scénario opérationnel | Résultat attendu | Statut |
+|---|---|---|---|---|
+| **COR-01** | Interface LVGL compilée et navigable | Bascule répétée entre écrans Conversation et Paramètres | Interface LVGL 9 compilée et navigable sans erreur d'API ni superposition de calques | À TESTER SUR MATÉRIEL |
+| **COR-02** | Gemini vers OpenAI sans incohérence | Clic sur OpenAI Realtime dans les Paramètres | Basculement ordonné par `applyVoiceProfile()`, sans intervention directe sur la session, affichage synchronisé après confirmation | À TESTER SUR MATÉRIEL |
+| **COR-03** | Échec de connexion correctement géré | Demande de fournisseur avec clé absente ou réseau indisponible | Échec détecté et rapporté, profil précédent conservé, aucun démarrage de session concurrente | À TESTER SUR MATÉRIEL |
+| **COR-04** | Historique vidé intégralement | Clic sur le bouton « Effacer » dans Paramètres | `m_history`, `m_lastUserText` et `m_lastAssistantText` vidés, cartes IHM réinitialisées immédiatement sans couper la session IA | À TESTER SUR MATÉRIEL |
+| **COR-05** | Réponse longue défilable | Réception d'une réponse de l'assistant de plus de 10 lignes | Conteneur défilable verticalement au toucher, texte intégralement lisible, boutons PARLER et STOP visibles et stables | À TESTER SUR MATÉRIEL |
+| **COR-06** | PARLER désactivé hors connexion | Session non connectée, Wi-Fi coupé ou état transitoire | Bouton PARLER désactivé visuellement (`LV_STATE_DISABLED`), libellé « ATTENTE », action tactile fermement rejetée dans le contrôleur | À TESTER SUR MATÉRIEL |
+| **COR-07** | Langue réellement appliquée | Changement cyclique de langue dans les Paramètres | Négociation asynchrone, libellé « Modification en cours », validation serveur avant mise à jour définitive | À TESTER SUR MATÉRIEL |
+| **COR-08** | Voix réellement appliquée | Changement cyclique de voix compatible | Voix appliquée, synchronisation exacte de l'indice de sélection, confirmation reçue avant affichage | À TESTER SUR MATÉRIEL |
+| **COR-09** | Profil NVS correctement restauré | Sauvegarde NVS puis redémarrage du CoreS3 | Profil actif rechargé, compatibilité fournisseur/voix vérifiée, indices et IHM synchronisés dès le démarrage | À TESTER SUR MATÉRIEL |
+| **COR-10** | STOP et PTT sans régression | Appui sur STOP pendant écoute micro ou restitution vocale | Coupure prioritaire immédiate, aucun callback tardif ou fragment partiel injecté dans l'historique | À TESTER SUR MATÉRIEL |

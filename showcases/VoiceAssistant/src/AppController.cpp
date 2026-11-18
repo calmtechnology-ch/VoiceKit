@@ -133,19 +133,19 @@ bool AppController::begin() {
     m_activeProfile = savedProf;
 #if defined(USE_OPENAI) && !defined(USE_GEMINI)
     m_activeProfile.provider = VoiceProviderType::OPENAI;
-    if (m_activeProfile.voiceId.isEmpty() ||
-        !m_voice.getProfileManager().isValidVoiceForProvider(
-            VoiceProviderType::OPENAI, m_activeProfile.voiceId)) {
-      m_activeProfile.voiceId = AppConfig::OPENAI_VOICE;
-    }
 #elif defined(USE_GEMINI) && !defined(USE_OPENAI)
     m_activeProfile.provider = VoiceProviderType::GEMINI;
-    if (m_activeProfile.voiceId.isEmpty() ||
-        !m_voice.getProfileManager().isValidVoiceForProvider(
-            VoiceProviderType::GEMINI, m_activeProfile.voiceId)) {
-      m_activeProfile.voiceId = AppConfig::GEMINI_VOICE;
-    }
 #endif
+  }
+
+  // Vérifier la compatibilité fournisseur / voix
+  if (m_activeProfile.voiceId.isEmpty() ||
+      !m_voice.getProfileManager().isValidVoiceForProvider(
+          m_activeProfile.provider, m_activeProfile.voiceId)) {
+    m_activeProfile.voiceId =
+        (m_activeProfile.provider == VoiceProviderType::OPENAI)
+            ? AppConfig::OPENAI_VOICE
+            : AppConfig::GEMINI_VOICE;
   }
 
   // 4. Configuration VoiceKit
@@ -210,6 +210,8 @@ bool AppController::begin() {
 
   m_voice.onListeningStarted([this]() {
     Serial.println("[PTT] Début écoute micro ES7210");
+    m_currentTurnUserText = "";
+    m_currentTurnAssistantText = "";
     m_interaction.notifyListeningStarted();
   });
 
@@ -226,11 +228,21 @@ bool AppController::begin() {
   m_voice.onSpeechFinished([this]() {
     Serial.println("[VOICE] Fin restitution vocale");
     m_interaction.notifySpeechFinished();
+    if (!m_interaction.isLastTurnCancelled() && !m_currentTurnAssistantText.isEmpty()) {
+      recordTurnInHistory(m_lastUserText, m_currentTurnAssistantText);
+      m_currentTurnAssistantText = "";
+    }
   });
 
   m_voice.onError([this](const String &err) {
     Serial.printf("[ERROR] VoiceKit : %s\n", err.c_str());
     m_interaction.notifyError(err);
+    if (m_profileOpState == ProfileOperationState::APPLYING) {
+      m_profileOpState = ProfileOperationState::IDLE;
+      m_profileResultReady = true;
+      m_profileResultSuccess = false;
+      strncpy(m_profileResultMessage, "Échec modification", sizeof(m_profileResultMessage));
+    }
     setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
                       err.c_str(), m_hasPendingStatus);
   });
@@ -241,8 +253,27 @@ bool AppController::begin() {
         prof.provider == VoiceProviderType::GEMINI ? "Gemini" : "OpenAI",
         prof.voiceId.c_str(), prof.language.c_str());
     m_activeProfile = prof;
+    if (m_profileOpState == ProfileOperationState::APPLYING) {
+      m_profileOpState = ProfileOperationState::IDLE;
+      m_profileResultReady = true;
+      m_profileResultSuccess = true;
+      strncpy(m_profileResultMessage, "Modification appliquée", sizeof(m_profileResultMessage));
+    }
     setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
                       "Profil actif appliqué", m_hasPendingStatus);
+  });
+
+  m_voice.onProfileError([this](const String &err) {
+    Serial.printf("[VOICE] Erreur profil vocal : %s\n", err.c_str());
+    if (m_profileOpState == ProfileOperationState::APPLYING ||
+        m_profileOpState == ProfileOperationState::PENDING_STOP) {
+      m_profileOpState = ProfileOperationState::IDLE;
+      m_profileResultReady = true;
+      m_profileResultSuccess = false;
+      strncpy(m_profileResultMessage, err.c_str(), sizeof(m_profileResultMessage));
+    }
+    setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
+                      err.c_str(), m_hasPendingStatus);
   });
 
   // Callbacks de texte conversationnel
@@ -252,6 +283,7 @@ bool AppController::begin() {
     }
     if (isFinal) {
       Serial.printf("[USER] %s\n", text.c_str());
+      m_currentTurnUserText = text;
       m_lastUserText = text;
     }
     setThreadSafeText(m_pendingUserText, sizeof(m_pendingUserText),
@@ -263,8 +295,8 @@ bool AppController::begin() {
       return; // Discard late callbacks following STOP
     }
     Serial.printf("[VOICE][AI] %s\n", text.c_str());
+    m_currentTurnAssistantText = text;
     m_lastAssistantText = text;
-    recordTurnInHistory(m_lastUserText, text);
     setThreadSafeText(m_pendingAssistantText, sizeof(m_pendingAssistantText),
                       text.c_str(), m_hasPendingAssistant);
   });
@@ -285,6 +317,41 @@ bool AppController::begin() {
 void AppController::update(uint32_t nowMs) {
   m_voice.update();
   m_interaction.update(nowMs);
+
+  // Gestion de la machine d'état de changement de profil
+  if (m_profileOpState == ProfileOperationState::PENDING_STOP) {
+    bool stopped = (!m_voice.isBusy() && !m_voice.isSpeaking() &&
+                    m_interaction.getState() != VoiceInteractionState::INTERRUPTING &&
+                    m_interaction.getState() != VoiceInteractionState::LISTENING);
+    if (stopped || (nowMs - m_profileOpStartMs > 1500)) {
+      setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
+                        "Application profil...", m_hasPendingStatus);
+      if (!m_voice.applyVoiceProfile(m_pendingTargetProfile, true)) {
+        Serial.printf("[ERROR] Impossible d'appliquer le profil : %s\n",
+                      m_voice.getLastError().c_str());
+        m_profileOpState = ProfileOperationState::IDLE;
+        m_profileResultReady = true;
+        m_profileResultSuccess = false;
+        strncpy(m_profileResultMessage, m_voice.getLastError().c_str(), sizeof(m_profileResultMessage));
+        setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
+                          m_voice.getLastError().c_str(), m_hasPendingStatus);
+      } else {
+        m_profileOpState = ProfileOperationState::APPLYING;
+        m_profileOpStartMs = nowMs;
+      }
+    }
+  } else if (m_profileOpState == ProfileOperationState::APPLYING) {
+    // Watchdog de sécurité (18 secondes)
+    if (nowMs - m_profileOpStartMs > 18000) {
+      Serial.println("[APP] Timeout lors du changement de profil vocal");
+      m_profileOpState = ProfileOperationState::IDLE;
+      m_profileResultReady = true;
+      m_profileResultSuccess = false;
+      strncpy(m_profileResultMessage, "Délai dépassé", sizeof(m_profileResultMessage));
+      setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
+                        "Timeout changement profil", m_hasPendingStatus);
+    }
+  }
 
   // Surveillance périodique de l'état réseau et session toutes les 500 ms
   if (nowMs - m_lastConnCheckMs >= 500) {
@@ -317,8 +384,21 @@ void AppController::update(uint32_t nowMs) {
 }
 
 void AppController::onTalkClick() {
-  Serial.println("[PTT] Bouton PARLER / TERMINER actionné");
-  m_interaction.onTalkClick();
+  VoiceInteractionState st = m_interaction.getState();
+  if (st == VoiceInteractionState::READY) {
+    if (!isSessionConnected() || !isWifiConnected() || m_voice.isConnecting() || isProfileChangeInProgress()) {
+      Serial.println("[PTT] Clic PARLER refusé : session non disponible ou modification de profil en cours");
+      return;
+    }
+    Serial.println("[PTT] Bouton PARLER actionné");
+    m_interaction.onTalkClick();
+  } else if (st == VoiceInteractionState::LISTENING) {
+    Serial.println("[PTT] Bouton TERMINER actionné");
+    m_interaction.onTalkClick();
+  } else {
+    Serial.printf("[PTT] Clic PARLER refusé : action non autorisée dans l'état %s\n",
+                  voiceInteractionStateToString(st));
+  }
 }
 
 void AppController::triggerStop() {
@@ -373,37 +453,71 @@ const char *AppController::getProviderName() const {
              : "OpenAI Realtime";
 }
 
-bool AppController::switchProvider(VoiceProviderType newProvider) {
-  if (m_activeProfile.provider == newProvider) {
-    return true;
+bool AppController::requestProfileChange(const VoiceProfile &targetProfile) {
+  // 1. Vérifier si une modification est déjà en cours
+  if (isProfileChangeInProgress() || m_voice.isConnecting()) {
+    Serial.println("[APP] Modification de profil refusée : opération déjà en cours");
+    setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
+                      "Modification déjà en cours", m_hasPendingStatus);
+    return false;
   }
 
-  Serial.printf("[APP] Demande de basculement vers fournisseur : %s\n",
-                newProvider == VoiceProviderType::GEMINI ? "Gemini Live"
-                                                         : "OpenAI Realtime");
-
-  // Arrêt prioritaire si une interaction est active
-  m_interaction.triggerStop();
-  if (m_voice.isConnecting()) {
-    Serial.println("[APP] Interruption de la session en cours pour basculement fournisseur...");
-    m_voice.getSession().deactivate();
-  }
-
-  // Vérifier la présence d'une clé API valide
-  if (newProvider == VoiceProviderType::OPENAI &&
+  // 2. Vérifier la disponibilité de la clé API
+  if (targetProfile.provider == VoiceProviderType::OPENAI &&
       !m_voice.hasProviderApiKey(VoiceProviderType::OPENAI)) {
     Serial.println("[ERROR] Clé API OpenAI absente.");
     setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
                       "Clé OpenAI manquante", m_hasPendingStatus);
     return false;
   }
-  if (newProvider == VoiceProviderType::GEMINI &&
+  if (targetProfile.provider == VoiceProviderType::GEMINI &&
       !m_voice.hasProviderApiKey(VoiceProviderType::GEMINI)) {
     Serial.println("[ERROR] Clé API Gemini absente.");
     setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
                       "Clé Gemini manquante", m_hasPendingStatus);
     return false;
   }
+
+  m_pendingTargetProfile = targetProfile;
+  m_profileResultReady = false;
+
+  // 3. Si une interaction est active, demander son interruption et attendre son arrêt effectif
+  if (m_interaction.getState() != VoiceInteractionState::READY &&
+      m_interaction.getState() != VoiceInteractionState::DISABLED) {
+    Serial.println("[APP] Interruption de l'interaction active avant changement de profil...");
+    m_interaction.triggerStop();
+    m_profileOpState = ProfileOperationState::PENDING_STOP;
+    m_profileOpStartMs = millis();
+    setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
+                      "Arrêt avant modification...", m_hasPendingStatus);
+    return true;
+  }
+
+  // 4. Moteur disponible : application du profil
+  setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
+                    "Modification en cours...", m_hasPendingStatus);
+  if (!m_voice.applyVoiceProfile(targetProfile, true)) {
+    Serial.printf("[ERROR] Impossible de changer de profil : %s\n",
+                  m_voice.getLastError().c_str());
+    setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
+                      m_voice.getLastError().c_str(), m_hasPendingStatus);
+    return false;
+  }
+
+  m_profileOpState = ProfileOperationState::APPLYING;
+  m_profileOpStartMs = millis();
+  return true;
+}
+
+bool AppController::switchProvider(VoiceProviderType newProvider) {
+  if (m_activeProfile.provider == newProvider &&
+      m_profileOpState == ProfileOperationState::IDLE) {
+    return true;
+  }
+
+  Serial.printf("[APP] Demande de basculement vers fournisseur : %s\n",
+                newProvider == VoiceProviderType::GEMINI ? "Gemini Live"
+                                                         : "OpenAI Realtime");
 
   VoiceProfile targetProfile = m_activeProfile;
   targetProfile.provider = newProvider;
@@ -417,55 +531,31 @@ bool AppController::switchProvider(VoiceProviderType newProvider) {
             newProvider, VoiceGender::ANY);
   }
 
-  setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
-                    "Connexion fournisseur...", m_hasPendingStatus);
-
-  if (!m_voice.applyVoiceProfile(targetProfile, true)) {
-    Serial.printf("[ERROR] Impossible de changer de fournisseur : %s\n",
-                  m_voice.getLastError().c_str());
-    setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
-                      m_voice.getLastError().c_str(), m_hasPendingStatus);
-    return false;
-  }
-
-  m_activeProfile = targetProfile;
-  return true;
+  return requestProfileChange(targetProfile);
 }
 
 bool AppController::setLanguage(const String &bcp47) {
-  if (m_activeProfile.language.equalsIgnoreCase(bcp47)) {
+  if (m_activeProfile.language.equalsIgnoreCase(bcp47) &&
+      m_profileOpState == ProfileOperationState::IDLE) {
     return true;
   }
   Serial.printf("[APP] Changement de langue vocale vers : %s\n", bcp47.c_str());
 
   VoiceProfile targetProfile = m_activeProfile;
   targetProfile.language = bcp47;
-
-  if (!m_voice.applyVoiceProfile(targetProfile, true)) {
-    Serial.printf("[ERROR] Impossible d'appliquer la langue : %s\n",
-                  m_voice.getLastError().c_str());
-    return false;
-  }
-  m_activeProfile.language = bcp47;
-  return true;
+  return requestProfileChange(targetProfile);
 }
 
 bool AppController::setVoice(const String &voiceId) {
-  if (m_activeProfile.voiceId.equalsIgnoreCase(voiceId)) {
+  if (m_activeProfile.voiceId.equalsIgnoreCase(voiceId) &&
+      m_profileOpState == ProfileOperationState::IDLE) {
     return true;
   }
   Serial.printf("[APP] Changement de voix vers : %s\n", voiceId.c_str());
 
   VoiceProfile targetProfile = m_activeProfile;
   targetProfile.voiceId = voiceId;
-
-  if (!m_voice.applyVoiceProfile(targetProfile, true)) {
-    Serial.printf("[ERROR] Impossible d'appliquer la voix : %s\n",
-                  m_voice.getLastError().c_str());
-    return false;
-  }
-  m_activeProfile.voiceId = voiceId;
-  return true;
+  return requestProfileChange(targetProfile);
 }
 
 void AppController::setVolume(uint8_t volumePercent) {
@@ -474,6 +564,12 @@ void AppController::setVolume(uint8_t volumePercent) {
 }
 
 bool AppController::saveProfileToNvs() {
+  if (isProfileChangeInProgress()) {
+    Serial.println("[APP] Sauvegarde NVS refusée : modification de profil en cours");
+    setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
+                      "Attendre fin modification", m_hasPendingStatus);
+    return false;
+  }
   bool ok = m_voice.getProfileManager().saveActiveProfile(m_activeProfile);
   if (ok) {
     Serial.println(
@@ -501,9 +597,35 @@ void AppController::clearHistory() {
   m_history.clear();
   m_lastUserText = "";
   m_lastAssistantText = "";
+  m_currentTurnUserText = "";
+  m_currentTurnAssistantText = "";
+  m_historyCleared = true;
   Serial.println("[APP] Historique conversationnel local effacé.");
   setThreadSafeText(m_pendingStatusMsg, sizeof(m_pendingStatusMsg),
                     "Historique effacé", m_hasPendingStatus);
+}
+
+bool AppController::consumeHistoryCleared() {
+  if (m_historyCleared) {
+    m_historyCleared = false;
+    return true;
+  }
+  return false;
+}
+
+bool AppController::isProfileChangeInProgress() const {
+  return (m_profileOpState != ProfileOperationState::IDLE ||
+          m_voice.isProfileChangePending());
+}
+
+bool AppController::consumeProfileChangeResult(bool &success, String &message) {
+  if (!m_profileResultReady) {
+    return false;
+  }
+  m_profileResultReady = false;
+  success = m_profileResultSuccess;
+  message = String(m_profileResultMessage);
+  return true;
 }
 
 void AppController::recordTurnInHistory(const String &user,
