@@ -54,7 +54,7 @@ static constexpr uint32_t AUDIO_RELEASE_TIMEOUT_MS = 2500;
 // =============================================================================
 // Configuration Gemini Live WebSocket API
 // =============================================================================
-static constexpr const char *GEMINI_LIVE_MODEL = "models/gemini-2.0-flash-exp";
+static constexpr const char *GEMINI_LIVE_MODEL = "models/gemini-2.5-flash-native-audio-latest";
 static constexpr const char *GEMINI_LIVE_VOICE = "Aoede"; // Aoede, Charon, Fenrir, Kore, Puck
 static constexpr const char *GEMINI_LIVE_HOST = "generativelanguage.googleapis.com";
 static constexpr const char *GEMINI_LIVE_PATH = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";

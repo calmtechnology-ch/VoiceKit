@@ -564,6 +564,32 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
         return;
     }
 
+    // 0. Erreurs ou avis de fermeture serveur (error / goAway)
+    cJSON* errObj = cJSON_GetObjectItemCaseSensitive(root, "error");
+    if (errObj) {
+        String errMsg = "Erreur serveur Gemini Live";
+        cJSON* msgItem = cJSON_GetObjectItemCaseSensitive(errObj, "message");
+        cJSON* codeItem = cJSON_GetObjectItemCaseSensitive(errObj, "code");
+        if (msgItem && cJSON_IsString(msgItem) && msgItem->valuestring) {
+            errMsg = msgItem->valuestring;
+            if (codeItem && cJSON_IsNumber(codeItem)) {
+                errMsg = String("Gemini error ") + String(codeItem->valueint) + ": " + errMsg;
+            }
+        }
+        Serial.printf("[LiveClient] ERREUR serveur Gemini : %s\n", errMsg.c_str());
+        _lastError = errMsg;
+        if (_onError) _onError(_lastError);
+        cJSON_Delete(root);
+        return;
+    }
+
+    cJSON* goAway = cJSON_GetObjectItemCaseSensitive(root, "goAway");
+    if (goAway) {
+        cJSON* timeLeft = cJSON_GetObjectItemCaseSensitive(goAway, "timeLeft");
+        Serial.printf("[LiveClient] Avis goAway recu du serveur Gemini (timeLeft=%s)\n",
+                      (timeLeft && cJSON_IsString(timeLeft) && timeLeft->valuestring) ? timeLeft->valuestring : "N/A");
+    }
+
     // 1. Confirmation de configuration (setupComplete)
     cJSON* setupComplete = cJSON_GetObjectItemCaseSensitive(root, "setupComplete");
     if (setupComplete) {

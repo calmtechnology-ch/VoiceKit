@@ -528,6 +528,10 @@ void LiveSessionController::finishTurn() {
         Serial.printf(
             "[LiveSession] Deconnexion WebSocket session (deconnexion #%u)\n",
             (unsigned)_disconnectCount);
+        if (_deactivating) {
+          Serial.println("[LiveSession] Deconnexion attendue pendant requestDeactivate()");
+          return;
+        }
         if (_state != LiveSessionState::DISCONNECTED &&
             _state != LiveSessionState::ERROR) {
           if (_turnActive.load(std::memory_order_acquire)) {
@@ -547,6 +551,9 @@ void LiveSessionController::finishTurn() {
         strncpy(_lastError, err.c_str(), sizeof(_lastError) - 1);
         _lastError[sizeof(_lastError) - 1] = '\0';
         Serial.printf("[LiveSession] Erreur client : %s\n", _lastError);
+        if (_deactivating) {
+          return;
+        }
         if (_turnActive.load(std::memory_order_acquire)) {
           abortTurnLocally();
         }

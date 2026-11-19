@@ -31,13 +31,17 @@ public:
 
     void setFeedbackMessage(const char* msg);
     bool isSettingsActionAllowed() const;
+    bool isProviderSwitchAllowed() const;
 
 private:
     lv_obj_t* m_container = nullptr;
     AppController* m_controller = nullptr;
     std::function<void()> m_onBack;
     bool m_waitingConfirmation = false;
-    bool m_controlsBlocked = false;
+    bool m_availabilityInitialized = false;
+    SettingsBlockReason m_lastSettingsReason = SettingsBlockReason::ALLOWED;
+    SettingsBlockReason m_lastProviderReason = SettingsBlockReason::ALLOWED;
+    bool m_lastSaveDisabled = false;
 
     // Widgets LVGL 9
     lv_obj_t* m_btnGemini = nullptr;

@@ -241,9 +241,27 @@ public:
     bool setAccent(const String& accent);
 
     /**
-     * @brief Indique si une connexion ou reconnexion vers Gemini Live est en cours.
+     * @brief Indique si une connexion ou reconnexion vers le fournisseur vocal est en cours.
      */
     bool isConnecting() const;
+
+    /**
+     * @brief Demande la fermeture propre et non bloquante de la session active ou en reconnexion.
+     *        Suspend la reconnexion automatique jusqu'à la prochaine activation explicite
+     *        (applyVoiceProfile, say, askAi ou resumeAutoReconnect).
+     * @return true si la demande de déconnexion est engagée ou déjà satisfaite.
+     */
+    bool requestDisconnectSession();
+
+    /**
+     * @brief Indique si une fermeture non bloquante de session est actuellement en cours.
+     */
+    bool isSessionDisconnecting() const { return _session.isDeactivating(); }
+
+    /**
+     * @brief Réautorise la reconnexion automatique après un requestDisconnectSession().
+     */
+    void resumeAutoReconnect() { _autoReconnectSuspended = false; }
 
     /**
      * @brief Indique si un changement de profil vocal est en cours de négociation avec Gemini Live.
@@ -660,6 +678,8 @@ private:
     // Suivi sécurisé des transitions de mode TTS <-> Conversation (v0.4.1.1)
     bool _modeSwitchPending = false;
     bool _previousConversationMode = false;
+    bool _autoReconnectSuspended = false;
+    std::atomic<bool> _pendingProfileDropRollback{false};
 
     // Callbacks utilisateurs
     VoidCallback _onReady;

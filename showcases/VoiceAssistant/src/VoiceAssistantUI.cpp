@@ -347,6 +347,10 @@ void VoiceAssistantUI::updateVoiceState(VoiceInteractionState state) {
             if (!sessionReady) {
                 if (!m_controller->isWifiConnected()) {
                     lv_label_set_text(m_lblState, "Wi-Fi non connecté");
+                } else if (m_controller->isProfileChangeInProgress()) {
+                    lv_label_set_text(m_lblState, "Changement de profil IA...");
+                } else if (m_controller->isStopInProgress()) {
+                    lv_label_set_text(m_lblState, "Stabilisation arrêt...");
                 } else if (m_controller->getVoice().getSession().getState() == LiveSessionState::RECONNECTING) {
                     lv_label_set_text(m_lblState, "Reconnexion session IA...");
                 } else {

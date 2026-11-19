@@ -130,6 +130,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
     _profileChangePending = false;
     _pendingProviderSwitch = false;
     _modeSwitchPending = false;
+    _autoReconnectSuspended = false;
 
     // Synchronisation bidirectionnelle des clés API dédiées (v0.6.6)
     if (_config.provider == VoiceProviderType::OPENAI) {
@@ -356,9 +357,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
                         } else if (_config.provider == VoiceProviderType::GEMINI &&
                                    (_config.model.isEmpty() ||
                                     _config.model.indexOf("gpt-") >= 0 ||
-                                    _config.model.indexOf("realtime") >= 0 ||
-                                    _config.model.indexOf("gemini-3.8") >= 0 ||
-                                    _config.model.indexOf("gemini-2.5") >= 0)) {
+                                    _config.model.indexOf("realtime") >= 0)) {
                             _config.model = VOICEKIT_DEFAULT_MODEL;
                         }
                     }
@@ -398,14 +397,9 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
             }
             case LiveSessionState::RECONNECTING:
                 if (_profileChangePending) {
-                    String dropErr = "Deconnexion reseau pendant le changement de profil vocal";
-                    _session.deactivate();
-                    rollbackPendingProfileChange(dropErr, true);
-                    _lastError = dropErr;
-                    setState(VoiceState::ERROR_STATE);
-                    if (_onError) {
-                        _onError(_lastError);
-                    }
+                    // Ne jamais appeler _session.deactivate() depuis websocket_task (risque de blocage/crash FreeRTOS) :
+                    // différer le rollback propre sur loopTask dans update().
+                    _pendingProfileDropRollback.store(true, std::memory_order_release);
                 }
                 break;
             case LiveSessionState::WAITING_RESPONSE:
@@ -653,12 +647,35 @@ void VoxCoreVoice::update() {
 
     const String activeApiKey = _config.getApiKeyForProvider(_config.provider);
 
+    // 0. Rollback différé sur loopTask si la connexion a chuté pendant un changement de profil
+    if (_pendingProfileDropRollback.exchange(false, std::memory_order_acq_rel)) {
+        if (_profileChangePending) {
+            String dropErr = "Deconnexion reseau pendant le changement de profil vocal";
+            _session.deactivate();
+            rollbackPendingProfileChange(dropErr, true);
+            _lastError = dropErr;
+            setState(VoiceState::ERROR_STATE);
+            if (_onError) {
+                _onError(_lastError);
+            }
+        }
+    }
+
+    // 0b. Progression non bloquante d'une fermeture de session demandée
+    if (_session.isDeactivating()) {
+        if (_session.pollDeactivate()) {
+            _connectingStartTimeMs = 0;
+            setState(VoiceState::DISCONNECTED);
+            Serial.println("[VoiceKit] Session fermee proprement (DISCONNECTED)");
+        }
+    }
+
     // 1. Mise à jour réseau Wi-Fi / SNTP si en mode MANAGED_WIFI
     if (_config.wifiMode == WiFiMode::MANAGED_WIFI) {
         _wifi.tick();
         _connectionMetrics.lastWifiTickDurationUs = _wifi.getLastTickDurationUs();
         _connectionMetrics.maxWifiTickDurationUs = _wifi.getMaxTickDurationUs();
-        if (!_config.connectOnDemand && !_wakeWordConversationController.isEnabled() && _wifi.isConnected() && _wifi.isTimeSynced() && !activeApiKey.isEmpty()) {
+        if (!_autoReconnectSuspended && !_session.isDeactivating() && !_config.connectOnDemand && !_wakeWordConversationController.isEnabled() && _wifi.isConnected() && _wifi.isTimeSynced() && !activeApiKey.isEmpty()) {
             if (_state == VoiceState::CONNECTING_WIFI || _state == VoiceState::IDLE || _state == VoiceState::DISCONNECTED || _state == VoiceState::ERROR_STATE) {
                 if ((!_activeProvider || !_activeProvider->isConnected()) && (_session.getState() == LiveSessionState::DISCONNECTED || _session.getState() == LiveSessionState::ERROR)) {
                     Serial.println("[VoiceKit] Wi-Fi et NTP valides -> Connexion au service vocal...");
@@ -680,7 +697,7 @@ void VoxCoreVoice::update() {
     } else {
         // En mode EXTERNAL_WIFI : connexion automatique dès que l'application hôte a établi le réseau (si une clé API est fournie)
         if (_state == VoiceState::IDLE || _state == VoiceState::CONNECTING_WIFI || _state == VoiceState::DISCONNECTED || _state == VoiceState::ERROR_STATE) {
-            if (!_config.connectOnDemand && !_wakeWordConversationController.isEnabled() && !activeApiKey.isEmpty() && WiFi.status() == WL_CONNECTED && isSystemTimeValid()) {
+            if (!_autoReconnectSuspended && !_session.isDeactivating() && !_config.connectOnDemand && !_wakeWordConversationController.isEnabled() && !activeApiKey.isEmpty() && WiFi.status() == WL_CONNECTED && isSystemTimeValid()) {
                 if ((!_activeProvider || !_activeProvider->isConnected()) && (_session.getState() == LiveSessionState::DISCONNECTED || _session.getState() == LiveSessionState::ERROR)) {
                     Serial.println("[VoiceKit] Reseau hote & NTP valides -> Connexion au service vocal...");
                     setState(VoiceState::CONNECTING_SERVICE);
@@ -927,6 +944,7 @@ bool VoxCoreVoice::say(const String& text) {
 
     // Session déconnectée ou en erreur : tentative d'activation
     Serial.printf("[VoiceKit] Session deconnectee -> Activation de session... (speechId=%u)\n", (unsigned)speechId);
+    _autoReconnectSuspended = false;
     _pendingSpeech = {text, speechId};
     _pendingText = text;
     _connectingStartTimeMs = millis();
@@ -1055,6 +1073,7 @@ bool VoxCoreVoice::askAi(const String& question) {
 
     // Session deconnectee ou en erreur : tentative d'activation
     Serial.printf("[VoiceKit] Session deconnectee -> Activation de session pour IA... (speechId=%u)\n", (unsigned)speechId);
+    _autoReconnectSuspended = false;
     _pendingSpeech = {question, speechId, true};
     _pendingText = question;
     _connectingStartTimeMs = millis();
@@ -1169,8 +1188,62 @@ bool VoxCoreVoice::isConnecting() const {
     return (_state == VoiceState::CONNECTING_SERVICE ||
             _session.getState() == LiveSessionState::CONNECTING ||
             _session.getState() == LiveSessionState::RECONNECTING ||
+            _session.isDeactivating() ||
             _profileChangePending ||
             _modeSwitchPending);
+}
+
+bool VoxCoreVoice::requestDisconnectSession() {
+    Serial.printf("[VoiceKit] Demande fermeture propre de session (Voice=%s, Session=%s, WS=%d)\n",
+                  voiceStateToString(_state),
+                  liveSessionStateToString(_session.getState()),
+                  (_activeProvider && _activeProvider->isConnected()) ? 1 : 0);
+
+    _autoReconnectSuspended = true;
+    _connectingStartTimeMs = 0;
+
+    if (_profileChangePending) {
+        _config = _rollbackConfig;
+        _preferredGender = _rollbackPreferredGender;
+        _profileChangePending = false;
+        _pendingProviderSwitch = false;
+    }
+    if (_modeSwitchPending) {
+        _conversationEnabled = _previousConversationMode;
+        _config.enableConversation = _previousConversationMode;
+        _modeSwitchPending = false;
+    }
+
+    if (_conversationEnabled && _conversationController.isTurnActive()) {
+        _conversationController.abortTurnForSessionClose();
+    }
+    _pendingText = "";
+    _pendingSpeech = SpeechQueueItem();
+    _activeSpeechId = 0;
+    while (!_textQueue.empty()) {
+        _textQueue.pop();
+    }
+    if (_streamer.isStreaming() || isListening() || isTranscribing()) {
+        _streamer.cancel();
+        _cancelledCaptureTurnId = (_activeCaptureTurnId != 0) ? _activeCaptureTurnId : _pendingTranscriptionTurnId;
+        _activeCaptureTurnId = 0;
+        _pendingTranscriptionTurnId = 0;
+        _transcriptionPending = false;
+        _finalTranscriptionReceived = false;
+    }
+    _player.setPlaybackAllowed(true);
+
+    if (_session.getState() != LiveSessionState::DISCONNECTED ||
+        (_activeProvider && _activeProvider->isConnected()) ||
+        _session.isDeactivating()) {
+        _session.requestDeactivate();
+        if (_session.pollDeactivate()) {
+            setState(VoiceState::DISCONNECTED);
+        }
+    } else {
+        setState(VoiceState::DISCONNECTED);
+    }
+    return true;
 }
 
 void VoxCoreVoice::setVolume(uint8_t percent) {
@@ -1243,9 +1316,7 @@ bool VoxCoreVoice::bindProviderForConfig(const VoiceKitConfig& targetCfg, String
         String resolvedModel = targetCfg.model;
         if (resolvedModel.isEmpty() ||
             resolvedModel.indexOf("gpt-") >= 0 ||
-            resolvedModel.indexOf("realtime") >= 0 ||
-            resolvedModel.indexOf("gemini-3.8") >= 0 ||
-            resolvedModel.indexOf("gemini-2.5") >= 0) {
+            resolvedModel.indexOf("realtime") >= 0) {
             resolvedModel = VOICEKIT_DEFAULT_MODEL;
         }
         String voiceToUse = targetCfg.voice;
@@ -1464,6 +1535,7 @@ bool VoxCoreVoice::applyVoiceProfile(const VoiceProfile& profile, bool connectIf
 
     // Désactivation intentionnelle de la session précédente avant d'armer _profileChangePending
     // afin que la fermeture volontaire ne soit pas interprétée comme une coupure réseau accidentelle.
+    _autoReconnectSuspended = false;
     _session.deactivate();
 
     _profileChangePending = true;

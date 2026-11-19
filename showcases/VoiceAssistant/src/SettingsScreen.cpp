@@ -319,17 +319,38 @@ bool SettingsScreen::isSettingsActionAllowed() const {
     return m_controller->canModifySettings();
 }
 
+bool SettingsScreen::isProviderSwitchAllowed() const {
+    if (!m_controller) return false;
+    return m_controller->canSwitchProvider();
+}
+
 void SettingsScreen::updateControlsAvailability() {
-    bool allowed = isSettingsActionAllowed();
-    if (allowed == !m_controlsBlocked) {
+    if (!m_controller) return;
+
+    SettingsBlockReason settingsReason = m_controller->getSettingsBlockReason();
+    SettingsBlockReason providerReason = m_controller->getProviderSwitchBlockReason();
+    bool saveDisabled = m_controller->isProfileChangeInProgress();
+
+    if (m_availabilityInitialized &&
+        settingsReason == m_lastSettingsReason &&
+        providerReason == m_lastProviderReason &&
+        saveDisabled == m_lastSaveDisabled) {
         return;
     }
-    m_controlsBlocked = !allowed;
 
-    lv_obj_t* btns[] = {m_btnGemini, m_btnOpenAi, m_btnLang, m_btnVoice, m_btnSaveNvs};
-    for (lv_obj_t* b : btns) {
+    m_availabilityInitialized = true;
+    m_lastSettingsReason = settingsReason;
+    m_lastProviderReason = providerReason;
+    m_lastSaveDisabled = saveDisabled;
+
+    bool providerBlocked = (providerReason != SettingsBlockReason::ALLOWED);
+    bool acousticBlocked = (settingsReason != SettingsBlockReason::ALLOWED);
+
+    // 1. Boutons fournisseur (indépendants de la reconnexion/erreur de la session courante)
+    lv_obj_t* providerBtns[] = {m_btnGemini, m_btnOpenAi};
+    for (lv_obj_t* b : providerBtns) {
         if (b) {
-            if (m_controlsBlocked) {
+            if (providerBlocked) {
                 lv_obj_add_state(b, LV_STATE_DISABLED);
             } else {
                 lv_obj_remove_state(b, LV_STATE_DISABLED);
@@ -337,10 +358,33 @@ void SettingsScreen::updateControlsAvailability() {
         }
     }
 
-    if (m_controlsBlocked) {
-        setFeedbackMessage("Connexion en cours — paramètres indisponibles");
-    } else if (!m_waitingConfirmation) {
-        setFeedbackMessage("Prêt");
+    // 2. Paramètres acoustiques (langue et voix : exigent une session stable CONNECTED)
+    lv_obj_t* acousticBtns[] = {m_btnLang, m_btnVoice};
+    for (lv_obj_t* b : acousticBtns) {
+        if (b) {
+            if (acousticBlocked) {
+                lv_obj_add_state(b, LV_STATE_DISABLED);
+            } else {
+                lv_obj_remove_state(b, LV_STATE_DISABLED);
+            }
+        }
+    }
+
+    // 3. Sauvegarde NVS (disponible hors changement de profil en cours)
+    if (m_btnSaveNvs) {
+        if (saveDisabled) {
+            lv_obj_add_state(m_btnSaveNvs, LV_STATE_DISABLED);
+        } else {
+            lv_obj_remove_state(m_btnSaveNvs, LV_STATE_DISABLED);
+        }
+    }
+
+    if (!m_waitingConfirmation) {
+        if (acousticBlocked) {
+            setFeedbackMessage(AppController::settingsBlockReasonToFrenchMessage(settingsReason));
+        } else {
+            setFeedbackMessage("Prêt");
+        }
     }
 }
 
@@ -354,7 +398,7 @@ void SettingsScreen::update() {
     if (m_controller->consumeProfileChangeResult(success, msg)) {
         m_waitingConfirmation = false;
         if (success) {
-            setFeedbackMessage("Modification appliquée");
+            setFeedbackMessage(msg.isEmpty() ? "Modification appliquée" : msg.c_str());
         } else {
             setFeedbackMessage(msg.isEmpty() ? "Échec modification" : msg.c_str());
         }
@@ -441,32 +485,41 @@ void SettingsScreen::updateVolumeLabel() {
 
 void SettingsScreen::onProviderClicked(VoiceProviderType prov) {
     if (!m_controller) return;
-    if (!isSettingsActionAllowed()) {
-        setFeedbackMessage("Connexion en cours — paramètres indisponibles");
+    SettingsBlockReason reason = m_controller->getProviderSwitchBlockReason();
+    if (reason != SettingsBlockReason::ALLOWED) {
+        setFeedbackMessage(AppController::settingsBlockReasonToFrenchMessage(reason));
         return;
     }
     if (m_waitingConfirmation || m_controller->isProfileChangeInProgress()) {
         setFeedbackMessage("Modification déjà en cours");
         return;
     }
-    if (m_controller->getProvider() == prov) {
+    if (m_controller->getProvider() == prov && m_controller->isSessionConnected()) {
         setFeedbackMessage("Fournisseur déjà actif");
         return;
     }
-    setFeedbackMessage("Modification en cours...");
+    setFeedbackMessage(prov == VoiceProviderType::GEMINI ? "Passage à Gemini Live..."
+                                                         : "Passage à OpenAI Realtime...");
     m_waitingConfirmation = true;
     bool ok = m_controller->switchProvider(prov);
     if (!ok) {
         m_waitingConfirmation = false;
-        setFeedbackMessage("Échec demande modification");
+        bool dummyOk = false;
+        String errMsg;
+        if (m_controller->consumeProfileChangeResult(dummyOk, errMsg) && !errMsg.isEmpty()) {
+            setFeedbackMessage(errMsg.c_str());
+        } else {
+            setFeedbackMessage("Échec demande changement IA");
+        }
         refresh();
     }
 }
 
 void SettingsScreen::onLangCycleClicked() {
     if (!m_controller) return;
-    if (!isSettingsActionAllowed()) {
-        setFeedbackMessage("Connexion en cours — paramètres indisponibles");
+    SettingsBlockReason reason = m_controller->getSettingsBlockReason();
+    if (reason != SettingsBlockReason::ALLOWED) {
+        setFeedbackMessage(AppController::settingsBlockReasonToFrenchMessage(reason));
         return;
     }
     if (m_waitingConfirmation || m_controller->isProfileChangeInProgress()) {
@@ -475,20 +528,27 @@ void SettingsScreen::onLangCycleClicked() {
     }
     size_t nextIdx = (m_selectedLangIdx + 1) % kSupportedLangCount;
     const char* targetBcp47 = kSupportedLangs[nextIdx].bcp47;
-    setFeedbackMessage("Modification en cours...");
+    setFeedbackMessage("Changement de langue...");
     m_waitingConfirmation = true;
     bool ok = m_controller->setLanguage(targetBcp47);
     if (!ok) {
         m_waitingConfirmation = false;
-        setFeedbackMessage("Échec demande modification");
+        bool dummyOk = false;
+        String errMsg;
+        if (m_controller->consumeProfileChangeResult(dummyOk, errMsg) && !errMsg.isEmpty()) {
+            setFeedbackMessage(errMsg.c_str());
+        } else {
+            setFeedbackMessage("Échec demande modification");
+        }
         refresh();
     }
 }
 
 void SettingsScreen::onVoiceCycleClicked() {
     if (!m_controller) return;
-    if (!isSettingsActionAllowed()) {
-        setFeedbackMessage("Connexion en cours — paramètres indisponibles");
+    SettingsBlockReason reason = m_controller->getSettingsBlockReason();
+    if (reason != SettingsBlockReason::ALLOWED) {
+        setFeedbackMessage(AppController::settingsBlockReasonToFrenchMessage(reason));
         return;
     }
     if (m_waitingConfirmation || m_controller->isProfileChangeInProgress()) {
@@ -500,12 +560,18 @@ void SettingsScreen::onVoiceCycleClicked() {
 
     size_t nextIdx = (m_selectedVoiceIdx + 1) % voices.size();
     String newVoiceId = voices[nextIdx].id;
-    setFeedbackMessage("Modification en cours...");
+    setFeedbackMessage("Changement de voix...");
     m_waitingConfirmation = true;
     bool ok = m_controller->setVoice(newVoiceId);
     if (!ok) {
         m_waitingConfirmation = false;
-        setFeedbackMessage("Échec demande modification");
+        bool dummyOk = false;
+        String errMsg;
+        if (m_controller->consumeProfileChangeResult(dummyOk, errMsg) && !errMsg.isEmpty()) {
+            setFeedbackMessage(errMsg.c_str());
+        } else {
+            setFeedbackMessage("Échec demande modification");
+        }
         refresh();
     }
 }
@@ -522,10 +588,6 @@ void SettingsScreen::onVolumeChange(int delta) {
 
 void SettingsScreen::onSaveNvsClicked() {
     if (!m_controller) return;
-    if (!isSettingsActionAllowed()) {
-        setFeedbackMessage("Connexion en cours — paramètres indisponibles");
-        return;
-    }
     if (m_waitingConfirmation || m_controller->isProfileChangeInProgress()) {
         setFeedbackMessage("Attendre fin modification");
         return;

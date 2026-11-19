@@ -597,6 +597,11 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
         return;
     }
 
+    struct CJsonGuard {
+        cJSON* ptr;
+        ~CJsonGuard() { if (ptr) cJSON_Delete(ptr); }
+    } rootGuard{root};
+
     cJSON* typeItem = cJSON_GetObjectItemCaseSensitive(root, "type");
     if (!typeItem || !cJSON_IsString(typeItem) || !typeItem->valuestring) {
         uint32_t errIdx = _jsonErrorCount.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -604,7 +609,6 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
         _lastError = "Erreur parsing JSON recu";
         Serial.printf("[OpenAIClient][PARSE ERR #%u] Categorie: %s | Taille: %u octets\n",
                       (unsigned)errIdx, _lastParseErrorCategory.c_str(), (unsigned)len);
-        cJSON_Delete(root);
         return;
     }
 
@@ -912,6 +916,4 @@ void OpenAIRealtimeClient::handleIncomingMessage(const char* data, size_t len) {
             }
         }
     }
-
-    cJSON_Delete(root);
 }
