@@ -1,0 +1,8 @@
+.pio/
+.vscode/
+include/secrets.h
+*.bin
+*.elf
+*.map
+tests/test_station_core.exe
+tests/test_station_core
