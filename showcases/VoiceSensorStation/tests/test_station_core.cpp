@@ -1,6 +1,6 @@
 /**
  * @file test_station_core.cpp
- * @brief Tests unitaires natifs (sans matériel) pour VoiceSensorStation v0.1.0.
+ * @brief Tests unitaires natifs (sans matériel) pour VoiceSensorStation v0.1.0.1.
  *
  * Couvre :
  * - Validation des mesures BME688 (bornes physiques, NaN, Inf, gaz=0)
@@ -25,6 +25,7 @@
 #include "sensors/EnvSensor.h"
 #include "sensors/SensorManager.h"
 #include "voice/SensorCommands.h"
+#include "voice/ProfileSwitchLogic.h"
 
 static int g_passed = 0;
 static int g_failed = 0;
@@ -228,15 +229,92 @@ static void testFrenchResponseFormatting() {
     CHECK(aiNoData.find("INDISPONIBLES") != std::string::npos, "Contexte IA signale explicitement l'absence de données");
 }
 
+static void testProviderSwitchLogic() {
+    using namespace StationSwitch;
+
+    // 1. OpenAI (CONNECTED, idle) -> Gemini avec clé présente : APPLY_NOW direct (pas de disconnect redondant)
+    CHECK(decideSwitchAction(OpState::IDLE, false, false, true,
+                             Provider::OPENAI, Provider::GEMINI, true,
+                             true, SessionState::CONNECTED, false, false) == RequestAction::APPLY_NOW,
+          "OpenAI CONNECTED -> Gemini délègue directement à applyVoiceProfile (APPLY_NOW)");
+
+    // 2. Gemini (CONNECTED, idle) -> OpenAI avec clé présente : APPLY_NOW direct
+    CHECK(decideSwitchAction(OpState::IDLE, false, false, true,
+                             Provider::GEMINI, Provider::OPENAI, true,
+                             true, SessionState::CONNECTED, false, false) == RequestAction::APPLY_NOW,
+          "Gemini CONNECTED -> OpenAI délègue directement à applyVoiceProfile (APPLY_NOW)");
+
+    // 3. Déjà actif et connecté sur Gemini -> ALREADY_ACTIVE
+    CHECK(decideSwitchAction(OpState::IDLE, false, false, true,
+                             Provider::GEMINI, Provider::GEMINI, true,
+                             true, SessionState::CONNECTED, false, false) == RequestAction::ALREADY_ACTIVE,
+          "Demande Gemini alors que Gemini déjà CONNECTED -> ALREADY_ACTIVE");
+
+    // 4. Clé Gemini absente -> REJECT_NO_KEY
+    CHECK(decideSwitchAction(OpState::IDLE, false, false, true,
+                             Provider::OPENAI, Provider::GEMINI, false,
+                             true, SessionState::CONNECTED, false, false) == RequestAction::REJECT_NO_KEY,
+          "Bascule OpenAI -> Gemini sans clé Gemini -> REJECT_NO_KEY");
+
+    // 5. Moteur actif (parole ou écoute) -> NEED_STOP
+    CHECK(decideSwitchAction(OpState::IDLE, false, false, true,
+                             Provider::OPENAI, Provider::GEMINI, true,
+                             false, SessionState::PLAYING, false, false) == RequestAction::NEED_STOP,
+          "Bascule pendant parole/écoute -> NEED_STOP");
+
+    // 6. Session en RECONNECTING -> NEED_DISCONNECT (pour débloquer applyVoiceProfile)
+    CHECK(decideSwitchAction(OpState::IDLE, false, false, true,
+                             Provider::OPENAI, Provider::GEMINI, true,
+                             true, SessionState::RECONNECTING, true, false) == RequestAction::NEED_DISCONNECT,
+          "Session en RECONNECTING -> NEED_DISCONNECT avant applyVoiceProfile");
+
+    // 7. Opération déjà en cours ou STOP actif ou VoiceKit profile pending -> REJECT_BUSY
+    CHECK(decideSwitchAction(OpState::APPLYING, false, false, true,
+                             Provider::OPENAI, Provider::GEMINI, true,
+                             true, SessionState::CONNECTING, true, false) == RequestAction::REJECT_BUSY,
+          "Bascule déjà en APPLYING -> REJECT_BUSY");
+    CHECK(decideSwitchAction(OpState::IDLE, true, false, true,
+                             Provider::OPENAI, Provider::GEMINI, true,
+                             true, SessionState::CONNECTING, true, false) == RequestAction::REJECT_BUSY,
+          "VoiceKit isProfileChangePending() -> REJECT_BUSY");
+    CHECK(decideSwitchAction(OpState::IDLE, false, true, true,
+                             Provider::OPENAI, Provider::GEMINI, true,
+                             true, SessionState::CONNECTED, false, false) == RequestAction::REJECT_BUSY,
+          "STOP actif -> REJECT_BUSY");
+
+    // 8. Validation onProfileApplied : confirme Gemini uniquement si APPLYING et fournisseur correspondant
+    CHECK(doesProfileAppliedConfirm(OpState::APPLYING, true, Provider::GEMINI, Provider::GEMINI),
+          "onProfileApplied(Gemini) confirme bascule vers Gemini");
+    CHECK(!doesProfileAppliedConfirm(OpState::APPLYING, true, Provider::GEMINI, Provider::OPENAI),
+          "Callback tardif onProfileApplied(OpenAI) rejeté pendant bascule vers Gemini");
+    CHECK(!doesProfileAppliedConfirm(OpState::IDLE, true, Provider::GEMINI, Provider::GEMINI),
+          "onProfileApplied ignoré comme confirmation de bascule si OpState::IDLE");
+
+    // 9. Validation onReady fallback (si onReady arrive sans onProfileApplied)
+    CHECK(evaluateOnReadyDuringSwitch(OpState::APPLYING, false, SessionState::CONNECTED,
+                                      Provider::GEMINI, Provider::GEMINI) == ReadyDecision::CONFIRM_SWITCH,
+          "onReady confirme bascule si VoiceKit CONNECTED sur fournisseur cible et !profilePending");
+    CHECK(evaluateOnReadyDuringSwitch(OpState::APPLYING, true, SessionState::CONNECTED,
+                                      Provider::GEMINI, Provider::GEMINI) == ReadyDecision::IGNORE,
+          "onReady ignoré si VoiceKit a encore _profileChangePending=true");
+    CHECK(evaluateOnReadyDuringSwitch(OpState::APPLYING, false, SessionState::CONNECTED,
+                                      Provider::OPENAI, Provider::GEMINI) == ReadyDecision::IGNORE,
+          "onReady tardif de l'ancien fournisseur (OpenAI) ignoré pendant bascule vers Gemini");
+    CHECK(evaluateOnReadyDuringSwitch(OpState::APPLYING, false, SessionState::CONNECTING,
+                                      Provider::GEMINI, Provider::GEMINI) == ReadyDecision::IGNORE,
+          "onReady ignoré si session non CONNECTED");
+}
+
 int main() {
     testSensorValidation();
     testAgeAndFreshness();
     testSensorManagerStateMachine();
     testLocalCommandClassification();
     testFrenchResponseFormatting();
+    testProviderSwitchLogic();
 
     std::cout << "========================================\n";
-    std::cout << "VoiceSensorStation v0.1.0 — Unit Tests\n";
+    std::cout << "VoiceSensorStation " << AppConfig::APP_VERSION << " — Unit Tests\n";
     std::cout << "PASS : " << g_passed << " | FAIL : " << g_failed << "\n";
     std::cout << "========================================\n";
     return (g_failed == 0) ? 0 : 1;

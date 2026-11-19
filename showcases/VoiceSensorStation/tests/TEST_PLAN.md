@@ -1,4 +1,4 @@
-# Plan de Tests — VoiceSensorStation v0.1.0
+# Plan de Tests — VoiceSensorStation v0.1.0.1
 
 Ce document distingue strictement :
 1. **Les tests unitaires natifs** (exécutables sans matériel CoreS3 ni capteur physique).
@@ -42,3 +42,20 @@ Couvre la logique métier réelle compilée en C++17 natif :
 | **VSS-14** | Conversation prolongée | Enchaîner 5 questions analytiques (ex. confort, humidité, BME688) sur plusieurs minutes. | Interface tactile réactive, mesures rafraîchies pendant la parole, heap/PSRAM stables. | NOT RUN |
 | **VSS-15** | Paramètres hors ligne | Sans Wi-Fi, cliquer sur `RÉGLAGES`, ajuster le volume, ouvrir `Diagnostics`. | Écran réglages et diagnostics immédiatement accessibles et fonctionnels. | NOT RUN |
 | **VSS-16** | Mesure périmée | Débrancher le capteur après une lecture valide, attendre > 10 s, demander la température. | Aucune valeur périmée annoncée comme actuelle (« Capteur indisponible » ou « Je n'ai pas de mesure récente... »). | NOT RUN |
+
+---
+
+## 3. Scénarios matériels de bascule fournisseur IA (v0.1.0.1 — SW-01 à SW-10)
+
+| ID | Test | Attendu | Statut |
+|---|---|---|---|
+| **SW-01** | Démarrage direct OpenAI | READY | NOT RUN |
+| **SW-02** | OpenAI → Gemini | Gemini READY | NOT RUN |
+| **SW-03** | Question température avec Gemini | Réponse correcte | NOT RUN |
+| **SW-04** | Gemini → OpenAI | OpenAI READY | NOT RUN |
+| **SW-05** | Trois bascules consécutives | Aucun blocage | NOT RUN |
+| **SW-06** | STOP après bascule | Interruption correcte | NOT RUN |
+| **SW-07** | Clé Gemini absente | Erreur contrôlée | NOT RUN |
+| **SW-08** | Connexion Gemini impossible | Récupération contrôlée | NOT RUN |
+| **SW-09** | Capteur pendant bascule | Acquisition continue | NOT RUN |
+| **SW-10** | PTT après bascule | Conversation normale | NOT RUN |

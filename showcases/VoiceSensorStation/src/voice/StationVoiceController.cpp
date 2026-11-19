@@ -77,6 +77,56 @@ void StationVoiceController::pushThreadSafeText(char* dst, size_t dstSize,
     portEXIT_CRITICAL(&m_mux);
 }
 
+StationSwitch::Provider StationVoiceController::toSwitchProvider(VoiceProviderType p) {
+    return (p == VoiceProviderType::OPENAI) ? StationSwitch::Provider::OPENAI
+                                            : StationSwitch::Provider::GEMINI;
+}
+
+StationSwitch::SessionState StationVoiceController::toSwitchSessionState(LiveSessionState st) {
+    switch (st) {
+        case LiveSessionState::DISCONNECTED:     return StationSwitch::SessionState::DISCONNECTED;
+        case LiveSessionState::CONNECTING:       return StationSwitch::SessionState::CONNECTING;
+        case LiveSessionState::CONNECTED:        return StationSwitch::SessionState::CONNECTED;
+        case LiveSessionState::WAITING_RESPONSE: return StationSwitch::SessionState::WAITING_RESPONSE;
+        case LiveSessionState::PLAYING:          return StationSwitch::SessionState::PLAYING;
+        case LiveSessionState::INTERRUPTING:     return StationSwitch::SessionState::INTERRUPTING;
+        case LiveSessionState::RECONNECTING:     return StationSwitch::SessionState::RECONNECTING;
+        case LiveSessionState::ERROR:
+        default:                                 return StationSwitch::SessionState::ERROR;
+    }
+}
+
+const char* StationVoiceController::providerLabel(VoiceProviderType p) {
+    return (p == VoiceProviderType::OPENAI) ? "OpenAI" : "Gemini";
+}
+
+void StationVoiceController::logSwitchState(const char* eventMsg, const char* detail) const {
+    const char* activeName = providerLabel(m_activeProfile.provider);
+    const char* targetName = (m_profileOp != ProfileOpState::IDLE)
+                                 ? providerLabel(m_pendingProfile.provider)
+                                 : activeName;
+    if (detail && detail[0] != '\0') {
+        Serial.printf("[%lu][SWITCH] %s (%s) | Active=%s Target=%s Voice=%s Session=%s Op=%s\n",
+                      (unsigned long)millis(),
+                      eventMsg ? eventMsg : "",
+                      detail,
+                      activeName,
+                      targetName,
+                      voiceStateToString(m_voice.getState()),
+                      liveSessionStateToString(m_voice.getSession().getState()),
+                      StationSwitch::opStateToString(m_profileOp));
+    } else {
+        Serial.printf("[%lu][SWITCH] %s | Active=%s Target=%s Voice=%s Session=%s Op=%s\n",
+                      (unsigned long)millis(),
+                      eventMsg ? eventMsg : "",
+                      activeName,
+                      targetName,
+                      voiceStateToString(m_voice.getState()),
+                      liveSessionStateToString(m_voice.getSession().getState()),
+                      StationSwitch::opStateToString(m_profileOp));
+    }
+}
+
 bool StationVoiceController::begin(const SensorManager& sensorManager) {
     Serial.println("[VOICE] Initialisation de StationVoiceController...");
 
@@ -188,6 +238,9 @@ bool StationVoiceController::begin(const SensorManager& sensorManager) {
     m_voice.onReady([this]() {
         Serial.println("[VOICE] Session vocale prête.");
         m_interaction.notifyReady();
+        portENTER_CRITICAL(&m_mux);
+        m_evtVoiceReady = true;
+        portEXIT_CRITICAL(&m_mux);
         pushThreadSafeText(m_pendingStatus, sizeof(m_pendingStatus),
                            "Assistant prêt", m_hasPendingStatus);
     });
@@ -239,42 +292,48 @@ bool StationVoiceController::begin(const SensorManager& sensorManager) {
         if (!isWifiConnected() || m_voice.getSession().getState() != LiveSessionState::CONNECTED) {
             m_diag.connectionErrorCount++;
         }
-        m_lastError = err;
         Serial.printf("[VOICE][ERROR] %s\n", err.c_str());
         m_interaction.notifyError(err);
-        if (m_profileOp == ProfileOpState::APPLYING) {
-            finishProfileFailure(err.isEmpty() ? "Échec changement profil" : err.c_str());
-        }
+        const char* safeErr = err.isEmpty() ? "Erreur vocale" : err.c_str();
+        portENTER_CRITICAL(&m_mux);
+        strncpy(m_evtVoiceErrorMsg, safeErr, sizeof(m_evtVoiceErrorMsg) - 1);
+        m_evtVoiceErrorMsg[sizeof(m_evtVoiceErrorMsg) - 1] = '\0';
+        m_evtVoiceError = true;
+        portEXIT_CRITICAL(&m_mux);
         pushThreadSafeText(m_pendingStatus, sizeof(m_pendingStatus),
-                           err.isEmpty() ? "Erreur vocale" : err.c_str(), m_hasPendingStatus);
+                           safeErr, m_hasPendingStatus);
     });
 
     m_voice.onProfileApplied([this](const VoiceProfile& prof) {
-        m_activeProfile = prof;
-        Serial.printf("[VOICE] Profil confirmé : %s | %s | %s\n",
-                      getProviderName(), prof.voiceId.c_str(), prof.language.c_str());
-        if (m_profileOp == ProfileOpState::APPLYING) {
-            bool wasSwitch = m_pendingIsProviderSwitch;
-            m_profileOp = ProfileOpState::IDLE;
-            m_pendingIsProviderSwitch = false;
-            m_profileResultReady = true;
-            m_profileResultSuccess = true;
-            const char* msg = wasSwitch
-                                  ? (prof.provider == VoiceProviderType::GEMINI ? "Gemini actif" : "OpenAI actif")
-                                  : "Réglage appliqué";
-            strncpy(m_profileResultMsg, msg, sizeof(m_profileResultMsg) - 1);
-            m_profileResultMsg[sizeof(m_profileResultMsg) - 1] = '\0';
-        }
-        pushThreadSafeText(m_pendingStatus, sizeof(m_pendingStatus),
-                           "Assistant prêt", m_hasPendingStatus);
+        Serial.printf("[%lu][VOICE] Profil confirmé : %s | %s | %s\n",
+                      (unsigned long)millis(),
+                      providerLabel(prof.provider),
+                      prof.voiceId.c_str(),
+                      prof.language.c_str());
+        portENTER_CRITICAL(&m_mux);
+        m_evtAppliedSnapshot.provider = prof.provider;
+        m_evtAppliedSnapshot.preferredGender = prof.preferredGender;
+        m_evtAppliedSnapshot.style = prof.style;
+        m_evtAppliedSnapshot.tone = prof.tone;
+        strncpy(m_evtAppliedSnapshot.language, prof.language.c_str(), sizeof(m_evtAppliedSnapshot.language) - 1);
+        m_evtAppliedSnapshot.language[sizeof(m_evtAppliedSnapshot.language) - 1] = '\0';
+        strncpy(m_evtAppliedSnapshot.voiceId, prof.voiceId.c_str(), sizeof(m_evtAppliedSnapshot.voiceId) - 1);
+        m_evtAppliedSnapshot.voiceId[sizeof(m_evtAppliedSnapshot.voiceId) - 1] = '\0';
+        strncpy(m_evtAppliedSnapshot.accent, prof.accent.c_str(), sizeof(m_evtAppliedSnapshot.accent) - 1);
+        m_evtAppliedSnapshot.accent[sizeof(m_evtAppliedSnapshot.accent) - 1] = '\0';
+        m_evtProfileApplied = true;
+        portEXIT_CRITICAL(&m_mux);
     });
 
     m_voice.onProfileError([this](const String& err) {
         m_diag.voiceErrorCount++;
-        m_lastError = err;
-        if (m_profileOp != ProfileOpState::IDLE) {
-            finishProfileFailure(err.isEmpty() ? "Erreur profil" : err.c_str());
-        }
+        const char* safeErr = err.isEmpty() ? "Erreur profil" : err.c_str();
+        Serial.printf("[%lu][VOICE][PROFILE_ERR] %s\n", (unsigned long)millis(), safeErr);
+        portENTER_CRITICAL(&m_mux);
+        strncpy(m_evtProfileErrorMsg, safeErr, sizeof(m_evtProfileErrorMsg) - 1);
+        m_evtProfileErrorMsg[sizeof(m_evtProfileErrorMsg) - 1] = '\0';
+        m_evtProfileError = true;
+        portEXIT_CRITICAL(&m_mux);
     });
 
     // 6. Démarrage du moteur VoiceKit (non bloquant ; si hors ligne, la station capteurs reste active)
@@ -337,6 +396,9 @@ void StationVoiceController::update(uint32_t nowMs) {
     m_interaction.update(nowMs);
     m_commands.getRegistry().update();
 
+    // 0. Traitement déterministe sur loopTask des callbacks asynchrones de VoiceKit (zéro race FreeRTOS)
+    processDeferredSwitchEvents(nowMs);
+
     // 1. Stabilisation de STOP (sans reconnexion forcée)
     if (m_stopActive) {
         constexpr uint32_t STOP_MIN_HOLD_MS = 120;
@@ -358,47 +420,74 @@ void StationVoiceController::update(uint32_t nowMs) {
         }
     }
 
-    // 2. Machine d'état non bloquante de bascule de fournisseur / profil (avec timeouts explicites)
+    // 2. Suivi des transitions réelles de session/moteur durant une bascule
+    if (m_profileOp != ProfileOpState::IDLE) {
+        LiveSessionState curSess = m_voice.getSession().getState();
+        VoiceState curVoice = m_voice.getState();
+        if (curSess != m_lastLoggedSwitchSessionState || curVoice != m_lastLoggedSwitchVoiceState) {
+            m_lastLoggedSwitchSessionState = curSess;
+            m_lastLoggedSwitchVoiceState = curVoice;
+            logSwitchState("State transition");
+        }
+    }
+
+    // 3. Machine d'état non bloquante de bascule de fournisseur / profil (délégation native à VoiceKit)
     if (m_profileOp == ProfileOpState::PENDING_STOP) {
         if (isEngineIdleForTransition() && !m_stopActive) {
-            if (m_pendingIsProviderSwitch ||
-                m_voice.isConnecting() ||
-                m_voice.getSession().getState() != LiveSessionState::CONNECTED) {
+            if (m_voice.isConnecting() || m_voice.isSessionDisconnecting() ||
+                m_voice.getSession().getState() == LiveSessionState::CONNECTING ||
+                m_voice.getSession().getState() == LiveSessionState::RECONNECTING) {
+                logSwitchState("Disconnect requested after stop");
                 m_voice.requestDisconnectSession();
                 m_profileOp = ProfileOpState::DISCONNECTING_SESSION;
                 m_profileOpStartMs = nowMs;
+                m_disconnectSettleMs = 0;
             } else {
                 beginProfileApply(nowMs);
             }
         } else if (nowMs - m_profileOpStartMs > 4000) {
+            logSwitchState("Result: FAILED", "Timeout arrêt vocal");
             finishProfileFailure("Timeout arrêt vocal");
         }
     } else if (m_profileOp == ProfileOpState::DISCONNECTING_SESSION) {
         bool disconnected = (!m_voice.isSessionDisconnecting() &&
                              !m_voice.isConnecting() &&
                              !m_voice.isBusy() &&
-                             m_voice.getSession().getState() == LiveSessionState::DISCONNECTED);
+                             (m_voice.getSession().getState() == LiveSessionState::DISCONNECTED ||
+                              m_voice.getSession().getState() == LiveSessionState::ERROR));
         if (disconnected) {
             if (m_disconnectSettleMs == 0) m_disconnectSettleMs = nowMs;
-            if (nowMs - m_disconnectSettleMs >= 180) {
+            if (nowMs - m_disconnectSettleMs >= 50) {
                 m_disconnectSettleMs = 0;
+                logSwitchState("Session disconnected -> applying profile");
                 beginProfileApply(nowMs);
             }
         } else {
             m_disconnectSettleMs = 0;
-            if (nowMs - m_profileOpStartMs > 5000) {
+            if (nowMs - m_profileOpStartMs > 3000) {
+                logSwitchState("Result: FAILED", "Timeout fermeture session");
+                m_voice.stop();
                 m_voice.resumeAutoReconnect();
+                m_activeProfile = m_voice.getVoiceProfile();
                 finishProfileFailure("Timeout fermeture session");
             }
         }
     } else if (m_profileOp == ProfileOpState::APPLYING) {
-        if (nowMs - m_profileOpStartMs > 15000) {
+        // Watchdog de sécurité supérieur aux timeouts natifs VoiceKit (Gemini ~12 s, OpenAI 15 s)
+        // afin de laisser le rollback natif de VoiceKit agir en priorité.
+        if (nowMs - m_profileOpStartMs > 18000) {
+            logSwitchState("Watchdog timeout in APPLYING");
+            if (m_voice.isProfileChangePending() || m_voice.isConnecting()) {
+                m_voice.stop(); // Force le rollback propre dans VoiceKit
+            }
             m_voice.resumeAutoReconnect();
+            m_activeProfile = m_voice.getVoiceProfile();
+            logSwitchState("Result: FAILED", "Délai connexion dépassé");
             finishProfileFailure("Délai connexion dépassé");
         }
     }
 
-    // 3. Surveillance réseau légère (toutes les 500 ms)
+    // 4. Surveillance réseau légère (toutes les 500 ms)
     if (nowMs - m_lastNetCheckMs >= 500) {
         m_lastNetCheckMs = nowMs;
         bool wifiNow = (WiFi.status() == WL_CONNECTED);
@@ -435,8 +524,10 @@ void StationVoiceController::triggerStop() {
     if (m_stopActive || (now - m_lastStopMs < 400)) {
         return; // Idempotence
     }
+    const bool switchInProgress = (m_profileOp != ProfileOpState::IDLE || m_voice.isProfileChangePending());
     VoiceInteractionState st = m_interaction.getState();
-    if (st == VoiceInteractionState::READY && !m_voice.isSpeaking() && !m_voice.isBusy()) {
+    if (!switchInProgress &&
+        st == VoiceInteractionState::READY && !m_voice.isSpeaking() && !m_voice.isBusy()) {
         return;
     }
 
@@ -446,6 +537,15 @@ void StationVoiceController::triggerStop() {
     m_stopStableSinceMs = 0;
     m_turnInterrupted = true;
 
+    if (switchInProgress) {
+        logSwitchState("STOP requested during switch");
+        // Interruption propre de la bascule sans reconnexion incontrôlée
+        m_voice.stop();
+        m_activeProfile = m_voice.getVoiceProfile();
+        finishProfileFailure("Bascule annulée (STOP)");
+        logSwitchState("Result: CANCELLED", "STOP");
+    }
+
     m_interaction.triggerStop();
     pushThreadSafeText(m_pendingStatus, sizeof(m_pendingStatus),
                        "Interrompu (STOP)", m_hasPendingStatus);
@@ -453,6 +553,11 @@ void StationVoiceController::triggerStop() {
 
 bool StationVoiceController::isWifiConnected() const {
     return (WiFi.status() == WL_CONNECTED);
+}
+
+bool StationVoiceController::isNetworkReadyForOnlineApply() const {
+    return isWifiConnected() &&
+           (m_voice.getWiFiManager().isTimeSynced() || VoxCoreVoice::isSystemTimeValid());
 }
 
 bool StationVoiceController::isSessionReady() const {
@@ -519,9 +624,35 @@ bool StationVoiceController::isEngineIdleForTransition() const {
     return true;
 }
 
+void StationVoiceController::finishProfileSuccess(const VoiceProfile& confirmed, const char* sourceTag) {
+    bool wasSwitch = m_pendingIsProviderSwitch;
+    m_activeProfile = confirmed;
+    m_profileOp = ProfileOpState::IDLE;
+    m_pendingIsProviderSwitch = false;
+    m_disconnectSettleMs = 0;
+    m_profileResultReady = true;
+    m_profileResultSuccess = true;
+
+    const char* msg = wasSwitch
+                          ? (confirmed.provider == VoiceProviderType::GEMINI ? "Gemini actif" : "OpenAI actif")
+                          : "Réglage appliqué";
+    strncpy(m_profileResultMsg, msg, sizeof(m_profileResultMsg) - 1);
+    m_profileResultMsg[sizeof(m_profileResultMsg) - 1] = '\0';
+
+    if (m_voice.isReady() && m_interaction.getState() != VoiceInteractionState::READY) {
+        m_interaction.notifyReady();
+    }
+
+    logSwitchState("Profile confirmed", sourceTag);
+    logSwitchState("Result: SUCCESS", msg);
+    pushThreadSafeText(m_pendingStatus, sizeof(m_pendingStatus),
+                       "Assistant prêt", m_hasPendingStatus);
+}
+
 void StationVoiceController::finishProfileFailure(const char* msg) {
     m_profileOp = ProfileOpState::IDLE;
     m_pendingIsProviderSwitch = false;
+    m_disconnectSettleMs = 0;
     m_profileResultReady = true;
     m_profileResultSuccess = false;
     const char* safeMsg = (msg && msg[0] != '\0') ? msg : "Échec modification";
@@ -530,80 +661,268 @@ void StationVoiceController::finishProfileFailure(const char* msg) {
     pushThreadSafeText(m_pendingStatus, sizeof(m_pendingStatus), safeMsg, m_hasPendingStatus);
 }
 
+void StationVoiceController::processDeferredSwitchEvents(uint32_t /*nowMs*/) {
+    bool hasApplied = false;
+    PendingAppliedSnapshot appliedSnap;
+    bool hasProfileErr = false;
+    char profErrBuf[96] = "";
+    bool hasVoiceErr = false;
+    char voiceErrBuf[96] = "";
+    bool hasReady = false;
+
+    portENTER_CRITICAL(&m_mux);
+    if (m_evtProfileApplied) {
+        hasApplied = true;
+        appliedSnap = m_evtAppliedSnapshot;
+        m_evtProfileApplied = false;
+    }
+    if (m_evtProfileError) {
+        hasProfileErr = true;
+        strncpy(profErrBuf, m_evtProfileErrorMsg, sizeof(profErrBuf) - 1);
+        profErrBuf[sizeof(profErrBuf) - 1] = '\0';
+        m_evtProfileError = false;
+    }
+    if (m_evtVoiceError) {
+        hasVoiceErr = true;
+        strncpy(voiceErrBuf, m_evtVoiceErrorMsg, sizeof(voiceErrBuf) - 1);
+        voiceErrBuf[sizeof(voiceErrBuf) - 1] = '\0';
+        m_evtVoiceError = false;
+    }
+    if (m_evtVoiceReady) {
+        hasReady = true;
+        m_evtVoiceReady = false;
+    }
+    portEXIT_CRITICAL(&m_mux);
+
+    // 1. Confirmation explicite par onProfileApplied()
+    if (hasApplied) {
+        VoiceProfile confirmed;
+        confirmed.provider = appliedSnap.provider;
+        confirmed.preferredGender = appliedSnap.preferredGender;
+        confirmed.style = appliedSnap.style;
+        confirmed.tone = appliedSnap.tone;
+        confirmed.language = String(appliedSnap.language);
+        confirmed.voiceId = String(appliedSnap.voiceId);
+        confirmed.accent = String(appliedSnap.accent);
+
+        if (m_profileOp == ProfileOpState::APPLYING) {
+            if (StationSwitch::doesProfileAppliedConfirm(
+                    m_profileOp, m_pendingIsProviderSwitch,
+                    toSwitchProvider(m_pendingProfile.provider),
+                    toSwitchProvider(confirmed.provider))) {
+                finishProfileSuccess(confirmed, "onProfileApplied");
+            } else {
+                // Callback tardif d'un autre fournisseur : synchroniser sans annoncer la réussite
+                m_activeProfile = m_voice.getVoiceProfile();
+                logSwitchState("Ignored stale onProfileApplied", providerLabel(confirmed.provider));
+            }
+        } else {
+            // Hors bascule active : simple synchronisation de l'état actif
+            m_activeProfile = confirmed;
+        }
+    }
+
+    // 2. Erreur profil dédiée (onProfileError) -> rollback déjà effectué dans VoiceKit
+    if (hasProfileErr) {
+        m_lastError = String(profErrBuf);
+        m_activeProfile = m_voice.getVoiceProfile();
+        if (m_profileOp != ProfileOpState::IDLE) {
+            m_voice.resumeAutoReconnect();
+            logSwitchState("Result: FAILED", profErrBuf);
+            finishProfileFailure(profErrBuf);
+        }
+    }
+
+    // 3. Erreur vocale générale (onError)
+    if (hasVoiceErr) {
+        m_lastError = String(voiceErrBuf);
+        if (m_profileOp == ProfileOpState::APPLYING && !m_voice.isProfileChangePending()) {
+            m_activeProfile = m_voice.getVoiceProfile();
+            m_voice.resumeAutoReconnect();
+            logSwitchState("Result: FAILED", voiceErrBuf);
+            finishProfileFailure(voiceErrBuf);
+        }
+    }
+
+    // 4. Réception onReady() : réconciliation uniquement si VoiceKit confirme le fournisseur cible
+    if (hasReady) {
+        if (m_profileOp == ProfileOpState::APPLYING) {
+            StationSwitch::ReadyDecision dec = StationSwitch::evaluateOnReadyDuringSwitch(
+                m_profileOp,
+                m_voice.isProfileChangePending(),
+                toSwitchSessionState(m_voice.getSession().getState()),
+                toSwitchProvider(m_voice.getProviderType()),
+                toSwitchProvider(m_pendingProfile.provider));
+            if (dec == StationSwitch::ReadyDecision::CONFIRM_SWITCH) {
+                finishProfileSuccess(m_voice.getVoiceProfile(), "onReady");
+            } else {
+                logSwitchState("Ignored stale onReady during APPLYING");
+            }
+        } else if (m_profileOp == ProfileOpState::IDLE &&
+                   m_voice.getSession().getState() == LiveSessionState::CONNECTED) {
+            // Garder m_activeProfile fidèle au fournisseur réellement connecté
+            m_activeProfile = m_voice.getVoiceProfile();
+        }
+    }
+}
+
 bool StationVoiceController::beginProfileApply(uint32_t nowMs) {
     if (m_voice.isConnecting() || m_voice.isSessionDisconnecting() || m_voice.isBusy()) {
+        logSwitchState("Result: FAILED", "Session en transition");
         finishProfileFailure("Session en transition");
         return false;
     }
-    bool connectNow = isWifiConnected() && m_voice.hasProviderApiKey(m_pendingProfile.provider);
+
+    bool connectNow = isNetworkReadyForOnlineApply() &&
+                      m_voice.hasProviderApiKey(m_pendingProfile.provider);
+
+    Serial.printf("[%lu][SWITCH] Applying %s profile (voice=%s, lang=%s, connectNow=%s)\n",
+                  (unsigned long)millis(),
+                  providerLabel(m_pendingProfile.provider),
+                  m_pendingProfile.voiceId.c_str(),
+                  m_pendingProfile.language.c_str(),
+                  connectNow ? "YES" : "NO");
+
+    // IMPORTANT (v0.1.0.1) : armer APPLYING *AVANT* d'appeler applyVoiceProfile()
+    // afin qu'un callback synchrone (ex. hasSameAcousticConfig) ou très rapide sur websocket_task
+    // ne soit jamais manqué ni écrasé par un retour ultérieur de beginProfileApply().
+    if (connectNow) {
+        m_profileOp = ProfileOpState::APPLYING;
+        m_profileOpStartMs = nowMs;
+        m_lastLoggedSwitchSessionState = m_voice.getSession().getState();
+        m_lastLoggedSwitchVoiceState = m_voice.getState();
+    }
+
     if (!m_voice.applyVoiceProfile(m_pendingProfile, connectNow)) {
         String err = m_voice.getLastError();
         m_voice.resumeAutoReconnect();
-        finishProfileFailure(err.isEmpty() ? "Échec application" : err.c_str());
+        m_activeProfile = m_voice.getVoiceProfile();
+        const char* errText = err.isEmpty() ? "Échec application" : err.c_str();
+        // Traiter les événements synchrones éventuels avant de finaliser
+        processDeferredSwitchEvents(nowMs);
+        if (m_profileOp != ProfileOpState::IDLE || !m_profileResultReady) {
+            logSwitchState("Result: FAILED", errText);
+            finishProfileFailure(errText);
+        }
         return false;
     }
+
     if (!connectNow) {
         // Hors ligne : profil mémorisé localement immédiatement
-        m_activeProfile = m_pendingProfile;
+        m_activeProfile = m_voice.getVoiceProfile();
         m_profileOp = ProfileOpState::IDLE;
         m_pendingIsProviderSwitch = false;
         m_profileResultReady = true;
         m_profileResultSuccess = true;
         strncpy(m_profileResultMsg, "Profil mis à jour (hors ligne)", sizeof(m_profileResultMsg) - 1);
         m_profileResultMsg[sizeof(m_profileResultMsg) - 1] = '\0';
+        logSwitchState("Result: SUCCESS", "Offline profile updated");
         return true;
     }
-    m_profileOp = ProfileOpState::APPLYING;
-    m_profileOpStartMs = nowMs;
+
+    Serial.printf("[%lu][SWITCH] %s connection started (Voice=%s, Session=%s, Op=%s)\n",
+                  (unsigned long)millis(),
+                  providerLabel(m_pendingProfile.provider),
+                  voiceStateToString(m_voice.getState()),
+                  liveSessionStateToString(m_voice.getSession().getState()),
+                  StationSwitch::opStateToString(m_profileOp));
+
+    // Si VoiceKit a déjà émis onProfileApplied de manière synchrone (ex. profil acoustique identique),
+    // le consommer immédiatement sans attendre le prochain cycle.
+    processDeferredSwitchEvents(nowMs);
     return true;
 }
 
 bool StationVoiceController::requestProfileUpdate(const VoiceProfile& target, bool isProviderSwitch) {
-    if (isProfileChangeInProgress() || m_stopActive) {
+    const uint32_t nowMs = millis();
+    const bool hasKey = m_voice.hasProviderApiKey(target.provider);
+    const bool engineIdle = isEngineIdleForTransition();
+
+    Serial.printf("[%lu][SWITCH] Request: %s -> %s (isSwitch=%s, Voice=%s, Session=%s, Op=%s)\n",
+                  (unsigned long)nowMs,
+                  providerLabel(m_activeProfile.provider),
+                  providerLabel(target.provider),
+                  isProviderSwitch ? "YES" : "NO",
+                  voiceStateToString(m_voice.getState()),
+                  liveSessionStateToString(m_voice.getSession().getState()),
+                  StationSwitch::opStateToString(m_profileOp));
+    Serial.printf("[%lu][SWITCH] Target API key: %s | Stop required: %s\n",
+                  (unsigned long)nowMs,
+                  hasKey ? "PRESENT" : "ABSENT",
+                  engineIdle ? "NO" : "YES");
+
+    StationSwitch::RequestAction action = StationSwitch::decideSwitchAction(
+        m_profileOp,
+        m_voice.isProfileChangePending(),
+        m_stopActive,
+        isProviderSwitch,
+        toSwitchProvider(m_activeProfile.provider),
+        toSwitchProvider(target.provider),
+        hasKey,
+        engineIdle,
+        toSwitchSessionState(m_voice.getSession().getState()),
+        m_voice.isConnecting(),
+        m_voice.isSessionDisconnecting());
+
+    if (action == StationSwitch::RequestAction::REJECT_BUSY) {
+        logSwitchState("Result: REJECTED", "Opération déjà en cours");
         finishProfileFailure("Opération déjà en cours");
         return false;
     }
 
-    if (isProviderSwitch && !m_voice.hasProviderApiKey(target.provider)) {
-        finishProfileFailure(target.provider == VoiceProviderType::OPENAI
-                                 ? "Clé OpenAI absente"
-                                 : "Clé Gemini absente");
+    if (action == StationSwitch::RequestAction::ALREADY_ACTIVE) {
+        const char* msg = (target.provider == VoiceProviderType::GEMINI) ? "Gemini déjà actif" : "OpenAI déjà actif";
+        m_profileResultReady = true;
+        m_profileResultSuccess = true;
+        strncpy(m_profileResultMsg, msg, sizeof(m_profileResultMsg) - 1);
+        m_profileResultMsg[sizeof(m_profileResultMsg) - 1] = '\0';
+        logSwitchState("Result: NOOP", msg);
+        return true;
+    }
+
+    if (action == StationSwitch::RequestAction::REJECT_NO_KEY) {
+        const char* err = (target.provider == VoiceProviderType::OPENAI)
+                              ? "Clé OpenAI absente"
+                              : "Clé Gemini absente";
+        logSwitchState("Result: FAILED", err);
+        finishProfileFailure(err);
         return false;
     }
+
+    // Purger d'éventuels anciens événements résiduels avant d'engager la nouvelle opération
+    portENTER_CRITICAL(&m_mux);
+    m_evtProfileApplied = false;
+    m_evtProfileError = false;
+    m_evtVoiceError = false;
+    m_evtVoiceReady = false;
+    portEXIT_CRITICAL(&m_mux);
 
     m_pendingProfile = target;
     m_pendingIsProviderSwitch = isProviderSwitch;
     m_profileResultReady = false;
-    uint32_t nowMs = millis();
+    m_disconnectSettleMs = 0;
 
-    if (!isEngineIdleForTransition()) {
+    if (action == StationSwitch::RequestAction::NEED_STOP) {
         m_interaction.triggerStop();
         m_profileOp = ProfileOpState::PENDING_STOP;
         m_profileOpStartMs = nowMs;
+        logSwitchState("Waiting for engine idle (PENDING_STOP)");
         return true;
     }
 
-    bool needDisconnect = isProviderSwitch &&
-                          (m_voice.getSession().getState() != LiveSessionState::DISCONNECTED ||
-                           m_voice.isConnecting() ||
-                           m_voice.getProvider().isConnected());
-    if (needDisconnect) {
+    if (action == StationSwitch::RequestAction::NEED_DISCONNECT) {
+        logSwitchState("Disconnect requested (session was connecting/reconnecting)");
         m_voice.requestDisconnectSession();
         m_profileOp = ProfileOpState::DISCONNECTING_SESSION;
         m_profileOpStartMs = nowMs;
         return true;
     }
 
+    // Cas nominal (CONNECTED / DISCONNECTED / ERROR) : délégation directe à VoxCoreVoice::applyVoiceProfile()
     return beginProfileApply(nowMs);
 }
 
 bool StationVoiceController::switchProvider(VoiceProviderType newProvider) {
-    if (m_activeProfile.provider == newProvider &&
-        m_profileOp == ProfileOpState::IDLE &&
-        m_voice.getSession().getState() == LiveSessionState::CONNECTED) {
-        return true;
-    }
-
     VoiceProfile target = m_activeProfile;
     target.provider = newProvider;
     if (!m_voice.getProfileManager().isValidVoiceForProvider(newProvider, target.voiceId)) {

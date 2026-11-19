@@ -8,10 +8,11 @@
 #include "AppConfig.h"
 #include "sensors/SensorManager.h"
 #include "voice/SensorCommands.h"
+#include "voice/ProfileSwitchLogic.h"
 
 /**
  * @file StationVoiceController.h
- * @brief Contrôleur vocal applicatif de VoiceSensorStation v0.1.0.
+ * @brief Contrôleur vocal applicatif de VoiceSensorStation v0.1.0.1.
  *
  * Orchestre VoiceKit v0.6.7.1 sans modifier la bibliothèque :
  * - VoxCoreVoice en mode unitaire (STT + TTS say() + IA askAi())
@@ -85,17 +86,30 @@ public:
     const VoiceInteractionController& getInteraction() const { return m_interaction; }
 
 private:
-    enum class ProfileOpState : uint8_t {
-        IDLE = 0,
-        PENDING_STOP,
-        DISCONNECTING_SESSION,
-        APPLYING
+    using ProfileOpState = StationSwitch::OpState;
+
+    struct PendingAppliedSnapshot {
+        VoiceProviderType provider = VoiceProviderType::GEMINI;
+        VoiceGender preferredGender = VoiceGender::ANY;
+        VoiceStyle style = VoiceStyle::NATURAL;
+        VoiceTone tone = VoiceTone::NEUTRAL;
+        char language[16] = "";
+        char voiceId[32] = "";
+        char accent[65] = "";
     };
 
     static String sanitizeSecret(const char* raw);
+    static StationSwitch::Provider toSwitchProvider(VoiceProviderType p);
+    static StationSwitch::SessionState toSwitchSessionState(LiveSessionState st);
+    static const char* providerLabel(VoiceProviderType p);
+
+    bool isNetworkReadyForOnlineApply() const;
     bool isEngineIdleForTransition() const;
     bool beginProfileApply(uint32_t nowMs);
+    void finishProfileSuccess(const VoiceProfile& confirmed, const char* sourceTag);
     void finishProfileFailure(const char* msg);
+    void processDeferredSwitchEvents(uint32_t nowMs);
+    void logSwitchState(const char* eventMsg, const char* detail = nullptr) const;
     bool requestProfileUpdate(const VoiceProfile& target, bool isProviderSwitch);
     void handleFinalTranscription(const String& text, uint32_t turnId);
     void pushThreadSafeText(char* dst, size_t dstSize, const char* src, bool& flag);
@@ -116,12 +130,14 @@ private:
     uint32_t m_stopStableSinceMs = 0;
     bool m_turnInterrupted = false;
 
-    // Machine d'état non bloquante de changement de profil / fournisseur
+    // Machine d'état non bloquante de changement de profil / fournisseur (loopTask uniquement)
     ProfileOpState m_profileOp = ProfileOpState::IDLE;
     VoiceProfile m_pendingProfile;
     bool m_pendingIsProviderSwitch = false;
     uint32_t m_profileOpStartMs = 0;
     uint32_t m_disconnectSettleMs = 0;
+    LiveSessionState m_lastLoggedSwitchSessionState = LiveSessionState::DISCONNECTED;
+    VoiceState m_lastLoggedSwitchVoiceState = VoiceState::UNINITIALIZED;
 
     bool m_profileResultReady = false;
     bool m_profileResultSuccess = false;
@@ -131,10 +147,19 @@ private:
     uint32_t m_lastNetCheckMs = 0;
     bool m_wifiWasConnected = false;
 
-    // Découplage thread-safe vers LVGL 9
+    // Découplage thread-safe (websocket_task -> loopTask -> LVGL 9)
     portMUX_TYPE m_mux = portMUX_INITIALIZER_UNLOCKED;
     char m_pendingStatus[128] = "";
     bool m_hasPendingStatus = false;
     char m_pendingInteraction[256] = "";
     bool m_hasPendingInteraction = false;
+
+    // Événements de bascule/callbacks capturés sous m_mux puis traités sur loopTask
+    bool m_evtProfileApplied = false;
+    PendingAppliedSnapshot m_evtAppliedSnapshot;
+    bool m_evtProfileError = false;
+    char m_evtProfileErrorMsg[96] = "";
+    bool m_evtVoiceError = false;
+    char m_evtVoiceErrorMsg[96] = "";
+    bool m_evtVoiceReady = false;
 };

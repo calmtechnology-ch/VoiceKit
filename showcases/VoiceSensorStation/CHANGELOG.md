@@ -1,5 +1,17 @@
 # Changelog — VoiceSensorStation
 
+## [v0.1.0.1] — 2026-11-19
+
+### Diagnostic et correctif (bascule OpenAI ↔ Gemini)
+- **Suppression de la double déconnexion redondante** : `StationVoiceController` ne lance plus `requestDisconnectSession()` + attente `DISCONNECTING_SESSION` (180 ms) avant `applyVoiceProfile()` lorsque la session est `CONNECTED`. La fermeture de la session précédente et la connexion au nouveau fournisseur sont désormais déléguées directement et atomiquement à `VoxCoreVoice::applyVoiceProfile()` (VoiceKit v0.6.7.1). `DISCONNECTING_SESSION` n'est conservé que si VoiceKit est déjà en `CONNECTING` / `RECONNECTING`.
+- **Correction de la condition de course dans `beginProfileApply()`** : l'état `APPLYING` est désormais armé *avant* l'appel à `m_voice.applyVoiceProfile()` afin qu'un callback synchrone (`hasSameAcousticConfig`) ou rapide sur `websocket_task` ne soit jamais manqué ni écrasé.
+- **Élimination des courses inter-tâches FreeRTOS (`websocket_task` ↔ `loopTask`)** : les callbacks `onReady`, `onProfileApplied`, `onProfileError` et `onError` capturent désormais leurs événements dans des tampons protégés par `portMUX_TYPE`, puis sont traités de façon déterministe sur `loopTask` dans `StationVoiceController::update()`.
+- **Vérification stricte des callbacks et rejet des événements tardifs** : `m_activeProfile` n'est jamais mis à jour de manière optimiste ; les callbacks tardifs de l'ancien fournisseur sont ignorés ; le cas `onReady()` sans `onProfileApplied()` est réconcilié uniquement si VoiceKit confirme le fournisseur cible (`!isProfileChangePending()`, `CONNECTED`, fournisseur actif concordant).
+- **Récupération sur échec, timeout et STOP pendant bascule** : watchdog de sécurité aligné au-dessus des timeouts natifs VoiceKit (18 s vs 12 s Gemini / 15 s OpenAI) forçant `m_voice.stop()` si VoiceKit reste en transition ; annulation propre lors d'un `STOP` en cours de bascule ; restauration cohérente du profil précédent et reprise de `resumeAutoReconnect()`.
+- **Correction bouton `PARLER` LVGL (`SensorStationUI`)** : suivi de la couleur de fond (`m_lastRenderedTalkBg`) afin que le bouton `PARLER` ne reste jamais bloqué en gris après une bascule réussie ; réinitialisation de la couleur du message de statut lors d'une nouvelle demande.
+- **Instrumentation série `[SWITCH]`** : traces légères horodatées (`millis()`) sans jamais exposer aucune clé API.
+- **Tests logiciels de non-régression** : ajout de `ProfileSwitchLogic.h` et de 14 assertions unitaires dans `tests/test_station_core.cpp`, ainsi que de la matrice matérielle `SW-01` à `SW-10` dans `tests/TEST_PLAN.md` (validation matérielle CoreS3 requise).
+
 ## [v0.1.0] — 2026-11-19
 
 ### Ajouté

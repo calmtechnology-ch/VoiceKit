@@ -5,13 +5,13 @@
 
 /**
  * @file AppConfig.h
- * @brief Paramètres centralisés de VoiceSensorStation v0.1.0 pour M5Stack CoreS3.
+ * @brief Paramètres centralisés de VoiceSensorStation v0.1.0.1 pour M5Stack CoreS3.
  */
 
 namespace AppConfig {
     // Métadonnées applicatives
     constexpr const char* APP_NAME          = "VoiceSensorStation";
-    constexpr const char* APP_VERSION       = "v0.1.0";
+    constexpr const char* APP_VERSION       = "v0.1.0.1";
     constexpr const char* VOICEKIT_VERSION  = "0.6.7.1";
 
     // Écran M5Stack CoreS3 (320x240 paysage)

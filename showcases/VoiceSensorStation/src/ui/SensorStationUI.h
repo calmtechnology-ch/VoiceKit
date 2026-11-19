@@ -8,7 +8,7 @@
 
 /**
  * @file SensorStationUI.h
- * @brief Interface graphique LVGL 9 (thème clair, 320x240) de VoiceSensorStation v0.1.0.
+ * @brief Interface graphique LVGL 9 (thème clair, 320x240) de VoiceSensorStation v0.1.0.1.
  *
  * - Écran principal : tableau de bord environnemental (Température, Humidité, Pression, Gaz),
  *   barre d'état capteur/assistant et boutons tactiles [PARLER] [STOP] [RÉGLAGES].
@@ -114,6 +114,7 @@ private:
     char m_cacheDiag[512] = "";
 
     VoiceInteractionState m_lastRenderedVoiceState = VoiceInteractionState::DISABLED;
+    uint32_t m_lastRenderedTalkBg = 0;
     bool m_lastRenderedWifi = false;
     SensorState m_lastRenderedSensorState = SensorState::INITIALIZING;
 

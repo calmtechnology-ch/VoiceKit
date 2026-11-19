@@ -206,7 +206,9 @@ void SensorStationUI::buildSettingsScreen() {
 
     lv_obj_t* lblTitle = lv_label_create(topBar);
     lv_obj_set_pos(lblTitle, 8, 6);
-    lv_label_set_text(lblTitle, "Réglages — v0.1.0");
+    char settingsTitle[32];
+    snprintf(settingsTitle, sizeof(settingsTitle), "Réglages — %s", AppConfig::APP_VERSION);
+    lv_label_set_text(lblTitle, settingsTitle);
     lv_obj_set_style_text_font(lblTitle, &font_french_14, 0);
     lv_obj_set_style_text_color(lblTitle, lv_color_hex(COL_TEXT_DARK), 0);
 
@@ -350,7 +352,9 @@ void SensorStationUI::buildDiagnosticsScreen() {
 
     lv_obj_t* lblTitle = lv_label_create(topBar);
     lv_obj_set_pos(lblTitle, 8, 6);
-    lv_label_set_text(lblTitle, "Diagnostics — v0.1.0");
+    char diagTitle[32];
+    snprintf(diagTitle, sizeof(diagTitle), "Diagnostics — %s", AppConfig::APP_VERSION);
+    lv_label_set_text(lblTitle, diagTitle);
     lv_obj_set_style_text_font(lblTitle, &font_french_14, 0);
     lv_obj_set_style_text_color(lblTitle, lv_color_hex(COL_TEXT_DARK), 0);
 
@@ -529,8 +533,9 @@ void SensorStationUI::updateDashboard(uint32_t nowMs) {
     }
 
     setLabelIfChanged(m_lblBtnTalk, m_cacheTalkBtn, sizeof(m_cacheTalkBtn), talkLabel);
-    if (vState != m_lastRenderedVoiceState || !wifiOk) {
+    if (vState != m_lastRenderedVoiceState || talkBg != m_lastRenderedTalkBg || !wifiOk) {
         m_lastRenderedVoiceState = vState;
+        m_lastRenderedTalkBg = talkBg;
         lv_obj_set_style_bg_color(m_btnTalk, lv_color_hex(talkBg), 0);
     }
 }
@@ -650,6 +655,9 @@ void SensorStationUI::onProviderGeminiClicked(lv_event_t* e) {
     if (!self || !self->m_voice) return;
     setLabelIfChanged(self->m_lblSettingsFeedback, self->m_cacheSettingsFeedback,
                       sizeof(self->m_cacheSettingsFeedback), "Bascule vers Gemini...");
+    if (self->m_lblSettingsFeedback) {
+        lv_obj_set_style_text_color(self->m_lblSettingsFeedback, lv_color_hex(COL_PRIMARY), 0);
+    }
     self->m_voice->switchProvider(VoiceProviderType::GEMINI);
 }
 
@@ -658,6 +666,9 @@ void SensorStationUI::onProviderOpenAiClicked(lv_event_t* e) {
     if (!self || !self->m_voice) return;
     setLabelIfChanged(self->m_lblSettingsFeedback, self->m_cacheSettingsFeedback,
                       sizeof(self->m_cacheSettingsFeedback), "Bascule vers OpenAI...");
+    if (self->m_lblSettingsFeedback) {
+        lv_obj_set_style_text_color(self->m_lblSettingsFeedback, lv_color_hex(COL_PRIMARY), 0);
+    }
     self->m_voice->switchProvider(VoiceProviderType::OPENAI);
 }
 
