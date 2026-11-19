@@ -24,10 +24,8 @@
 
 - [x] Licence MIT du projet VoiceKit vérifiée (`LICENSE`, `library.json`, `README.md`).
 - [x] `cJSON` (utilisé dans `tests/native_mock/`) : licence MIT compatible.
-- [ ] **ACTION HUMAINE P1 — Vérification ESP-SR / WakeNet :**
-  - Le dépôt embarque le binaire précompilé `src/esp_sr/lib/esp32s3/libesp_sr_wakenet_s3.a`, les en-têtes `src/esp_sr/include/*.h` et le modèle `src/esp_sr/srmodels_bonjouresp.c` (`wn9l_fr_bonjouresp_tts3`) issus d'Espressif ESP-SR.
-  - **Attention :** La licence MIT de VoiceKit ne couvre pas ces composants tiers. Les binaires et modèles WakeNet d'Espressif sont distribués sous les conditions de la licence **Espressif ESP-SR** (usage autorisé sur matériel Espressif uniquement, avec mentions de copyright/licence requises).
-  - **Action recommandée avant publication publique :** Ajouter un fichier `THIRD_PARTY_NOTICES.md` (ou `src/esp_sr/LICENSE`) reproduisant les termes exacts et l'attribution officielle de la version d'Espressif ESP-SR dont proviennent `libesp_sr_wakenet_s3.a` et `wn9l_fr_bonjouresp_tts3`.
+- [x] `THIRD_PARTY_NOTICES.md` ajouté à la racine pour documenter les conditions de licence **Espressif ESP-SR / WakeNet** (`libesp_sr_wakenet_s3.a`, `wn9l_fr_bonjouresp_tts3`, en-têtes `src/esp_sr/include/`) et `cJSON`.
+  - **Rappel :** La licence MIT de VoiceKit ne couvre pas les composants précompilés Espressif (usage réservé au matériel Espressif selon la licence `espressif/esp-sr`).
 
 ---
 
@@ -48,11 +46,10 @@
 
 - [x] Workflow CI GitHub Actions créé (`.github/workflows/ci.yml`).
 - [x] `tests/run_tests.bat` et `tests/test_voicekit_all.cpp` corrigés pour le chemin archivé `archive/examples/OrientationClockVoice/`.
-- [x] Tests natifs C++17 exécutés et consignés honnêtement (`TEST_RESULTS.md`).
+- [x] Tests natifs C++17 exécutés à 100 % (**3 807 / 3 807 PASS**, 0 échec) (`TEST_RESULTS.md`).
 - [x] 11 exemples PlatformIO compilés via `tools/validation/validate_examples.py` (`EXAMPLES_VALIDATION.md`).
 - [x] Projet consommateur externe autonome compilé sans `symlink://` (`INSTALLATION_VALIDATION.md`).
 - [ ] **ACTION HUMAINE P1 :** Exécuter la campagne de validation matérielle CoreS3 `v0.6.7.2` (MAT-01..MAT-08 + 8 scénarios bi-fournisseurs) selon le plan manuel dans `TEST_RESULTS.md`.
-- [ ] **ACTION HUMAINE P2 :** Corriger les 7 assertions obsolètes de la suite de tests natifs (`FrenchTimeFormatter` archivé et comptage `pollDeactivate` dans `test_voicekit_all.cpp`) afin que le job CI `native-tests` passe à 100 %.
 
 ---
 

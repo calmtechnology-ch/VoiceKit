@@ -67,19 +67,19 @@ void test_french_time_formatting() {
               "00h05 -> Il est minuit cinq.");
   TEST_ASSERT(formatTimeInFrench(1, 1) == "Il est une heure une.",
               "01h01 -> Il est une heure une.");
-  TEST_ASSERT(formatTimeInFrench(1, 15) == "Il est une heure quinze.",
+  TEST_ASSERT(formatTimeInFrench(1, 15, TimeSpeechStyle::EXACT) == "Il est une heure quinze.",
               "01h15 -> Il est une heure quinze.");
-  TEST_ASSERT(formatTimeInFrench(12, 30) == "Il est midi trente.",
+  TEST_ASSERT(formatTimeInFrench(12, 30, TimeSpeechStyle::EXACT) == "Il est midi trente.",
               "12h30 -> Il est midi trente.");
   TEST_ASSERT(formatTimeInFrench(21, 1) == "Il est vingt et une heures une.",
               "21h01 -> Il est vingt et une heures une.");
   TEST_ASSERT(formatTimeInFrench(21, 21) ==
                   "Il est vingt et une heures vingt et un.",
               "21h21 -> Il est vingt et une heures vingt et un.");
-  TEST_ASSERT(formatTimeInFrench(22, 45) ==
+  TEST_ASSERT(formatTimeInFrench(22, 45, TimeSpeechStyle::EXACT) ==
                   "Il est vingt-deux heures quarante-cinq.",
               "22h45 -> Il est vingt-deux heures quarante-cinq.");
-  TEST_ASSERT(formatTimeInFrench(23, 59) ==
+  TEST_ASSERT(formatTimeInFrench(23, 59, TimeSpeechStyle::EXACT) ==
                   "Il est vingt-trois heures cinquante-neuf.",
               "23h59 -> Il est vingt-trois heures cinquante-neuf.");
 }
@@ -296,7 +296,7 @@ void test_announced_and_displayed_time_coherence() {
   int hour = 14;
   int minute = 30;
 
-  String verbal = formatTimeInFrench(hour, minute);
+  String verbal = formatTimeInFrench(hour, minute, TimeSpeechStyle::EXACT);
   TEST_ASSERT(verbal == "Il est quatorze heures trente.",
               "Formatage 14h30 coherent");
 
@@ -8100,9 +8100,9 @@ void test_v0631_latency_instrumentation_and_nonblocking_session_teardown() {
   setMockMillisOffset(1700000000UL * 1000UL);
 
   MockLiveTransport mockTransport;
-  // Simuler une tâche WebSocket qui met 4 ticks d'update() avant de signaler
-  // STOPPED_BIT
-  mockTransport.setSimulatedAsyncDisconnectPolls(4);
+  // Simuler une tâche WebSocket asynchrone restant active pendant 3 cycles
+  // d'update() (chaque update() sollicite pollDeactivate() deux fois : session + contrôleur)
+  mockTransport.setSimulatedAsyncDisconnectPolls(7);
 
   VoiceKit vk;
   VoiceKitConfig cfg;

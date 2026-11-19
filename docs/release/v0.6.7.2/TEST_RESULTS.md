@@ -10,7 +10,7 @@
 | Catégorie | Commande / Outil | Résultat réel | Remarques |
 |---|---|---|---|
 | **Métadonnées & liens locaux** | Script Python CI | ✅ **PASS** | Versions alignées (`0.6.7.2`), 0 lien local cassé |
-| **Tests natifs C++17** | `tests\run_tests.bat` (`g++ -std=gnu++17`) | ⚠️ **3 800 PASS / 7 FAIL** (3 807 assertions) | 7 échecs préexistants documentés ci-dessous (0 régression introduite par v0.6.7.2) |
+| **Tests natifs C++17** | `tests\run_tests.bat` (`g++ -std=gnu++17`) | ✅ **3 807 PASS / 0 FAIL** (100 %) | Toutes les suites (1 à 152) réussies après mise à jour des 7 assertions obsolètes |
 | **Exemples PlatformIO (11)** | `python tools/validation/validate_examples.py` | ✅ **11 / 11 PASS** | Voir [`EXAMPLES_VALIDATION.md`](EXAMPLES_VALIDATION.md) |
 | **Exemple Arduino IDE (1)** | `MinimalTTS_Arduino` | ⚠️ **NOT TESTED (CLI)** | `arduino-cli` non installé sur l'hôte |
 | **Projet consommateur externe** | `pio run` (hors dépôt, sans `symlink://`) | ✅ **PASS** (`91.95 s`) | Voir [`INSTALLATION_VALIDATION.md`](INSTALLATION_VALIDATION.md) |
@@ -23,18 +23,12 @@
 ### Correction appliquée pour restaurer la compilation des tests
 Le script `tests\run_tests.bat` et `tests\test_voicekit_all.cpp` référençaient encore l'ancien chemin `showcases/OrientationClockVoice/`, déplacé vers `archive/examples/OrientationClockVoice/`. Les chemins d'inclusion ont été corrigés.
 
-### Résultat d'exécution : **3 800 PASS / 7 FAIL**
-Les **Suites 149, 150 (Universal Voice Profiles), 151 (State Coordination v0.6.6.1) et 152 (Voice Interaction Stabilization v0.6.7.1 — 20/20 scénarios)** passent intégralement (**100 % PASS**).
+### Résultat d'exécution : **3 807 PASS / 0 FAIL (100 %)**
+L'ensemble des suites (Suites 1 à 152, incluant `Universal Voice Profiles`, `State Coordination v0.6.6.1` et `Voice Interaction Stabilization v0.6.7.1`) réussit intégralement.
 
-Les **7 échecs** proviennent exclusivement de **deux décalages préexistants** antérieurs à la branche v0.6.7.2 :
-
-1. **Suites 1 & 7 — `FrenchTimeFormatter` archivé (`tests/test_voicekit_all.cpp` lignes 70, 72, 79, 82, 300 — 5 échecs, Priorité P2) :**
-   - `archive/examples/OrientationClockVoice/src/FrenchTimeFormatter.cpp` utilise `TimeSpeechStyle::NATURAL` par défaut (`"Il est une heure et quart."`, `"Il est midi et demi."`, `"Il est vingt-trois heures moins le quart."`), alors que les anciennes assertions testent le style numérique (`"Il est une heure quinze."`, etc.).
-   - **Impact VoiceKit :** Aucun (code d'exemple archivé hors `src/`).
-
-2. **Test d'arrêt non bloquant WakeWordConversation (`tests/test_voicekit_all.cpp` lignes 8161 et 8165 — 2 échecs au 3e tour de boucle `poll == 3`, Priorité P2) :**
-   - Les appels `poll == 1` et `poll == 2` réussissent ; le passage à `RETURNING_TO_WAKE` intervient un cycle `update()` plus tôt suite aux évolutions de `LiveSessionController` dans le commit `1766a88` (validées sur matériel CoreS3 dans `PROVIDER_SWITCH_AUDIT.md`).
-   - **Impact VoiceKit :** Aucune régression audio/STOP ; mise à jour du compteur de boucle attendue dans le test mock (P2).
+Deux décalages préexistants identifiés lors du premier passage (`3 800 PASS / 7 FAIL`) ont été corrigés dans `tests/test_voicekit_all.cpp` :
+1. **Suites 1 & 7 (`FrenchTimeFormatter` archivé) :** passage explicite de `TimeSpeechStyle::EXACT` pour les 5 assertions testant le format numérique (le défaut ayant évolué vers `TimeSpeechStyle::NATURAL`).
+2. **Suite 101 (`WakeWordConversation`, arrêt non bloquant) :** ajustement de `setSimulatedAsyncDisconnectPolls(7)` pour refléter les 2 appels `pollDeactivate()` par cycle `update()` (session + contrôleur).
 
 ---
 

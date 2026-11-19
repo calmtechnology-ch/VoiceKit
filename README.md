@@ -231,5 +231,5 @@ VoiceKit dispose d'une validation automatisée reproductible :
 - **Licence VoiceKit :** [MIT License](LICENSE) — Copyright (c) 2026 Philippe AD / VoxCore Project.
 - **Composants tiers :**
   - `cJSON` (tests natifs) : licence MIT.
-  - **ESP-SR / WakeNet** (`src/esp_sr/`, incluant `libesp_sr_wakenet_s3.a` et le modèle `wn9l_fr_bonjouresp_tts3`) : fourni par Espressif Systems sous les conditions de licence ESP-SR (utilisation destinée au matériel Espressif ; non couvert par la licence MIT de VoiceKit). Voir **[docs/release/v0.6.7.2/RELEASE_CHECKLIST.md](docs/release/v0.6.7.2/RELEASE_CHECKLIST.md)** pour la vérification de redistribution.
+  - **ESP-SR / WakeNet** (`src/esp_sr/`, incluant `libesp_sr_wakenet_s3.a` et le modèle `wn9l_fr_bonjouresp_tts3`) : fourni par Espressif Systems sous les conditions de licence ESP-SR (utilisation destinée au matériel Espressif ; non couvert par la licence MIT de VoiceKit). Voir **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)**.
 - **Contributions & sécurité :** Les Pull Requests et retours sont les bienvenus. Pour toute question de sécurité, consultez **[SECURITY.md](SECURITY.md)**.
