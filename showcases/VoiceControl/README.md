@@ -71,7 +71,7 @@ Tous les réglages sont centralisés dans `src/config/VoiceControlConfig.h` :
 | Paramètre | Valeur par défaut | Description |
 |---|---|---|
 | `VC_LANGUAGE` | `"fr"` | Langue système unique (`"fr"` ou `"en"`), appliquée à l'UI, au STT et au TTS |
-| `VC_AI_PROVIDER` | `VC_PROVIDER_OPENAI` | Fournisseur IA au démarrage (`VC_PROVIDER_OPENAI` ou `VC_PROVIDER_GEMINI`) |
+| `VC_AI_PROVIDER` | `VC_PROVIDER_GEMINI` | Fournisseur IA au démarrage (`VC_PROVIDER_GEMINI` ou `VC_PROVIDER_OPENAI`) |
 | `VC_OPENAI_MODEL` | `"gpt-realtime-2.1-mini"` | Modèle OpenAI Realtime |
 | `VC_GEMINI_MODEL` | `"models/gemini-2.5-flash-native-audio-latest"` | Modèle Google Gemini Live |
 | `VC_TIMEZONE_NAME` | `"Europe/Zurich"` | Fuseau horaire de référence |

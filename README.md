@@ -1,77 +1,65 @@
-# VoiceKit — Framework Vocal Multi-Fournisseurs pour M5Stack CoreS3
+# VoiceKit — Bibliothèque Vocale pour M5Stack CoreS3
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
 [![ESP32-S3](https://img.shields.io/badge/Target-M5Stack%20CoreS3%20(ESP32--S3)-blue.svg)](https://docs.m5stack.com/en/core/CoreS3)
-[![Tests: 3807 PASS](https://img.shields.io/badge/Tests-3807%20Passed-brightgreen.svg)](tests/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version: v0.6.7.1](https://img.shields.io/badge/Version-v0.6.7.1--Stabilization-blue.svg)](docs/VOICE_INTERACTION.md)
+[![Version: v0.6.7.2](https://img.shields.io/badge/Version-v0.6.7.2-blue.svg)](CHANGELOG.md)
+
+**Découvrir → Installer → Faire parler → Converser → Développer**
 
 ---
 
 ## 1. Présentation de VoiceKit
 
-**VoiceKit** est une bibliothèque logicielle C++17 pour microcontrôleur **ESP32-S3**, spécialement conçue pour transformer le boîtier **M5Stack CoreS3** en terminal vocal intelligent, interactif et temps réel.
-
-VoiceKit propose une architecture audio et réseau unifiée supportant les deux principaux moteurs d'IA conversationnelle multimodale :
-- **Google Gemini Live** (`wss://generativelanguage.googleapis.com/...`)
-- **OpenAI Realtime API** (`wss://api.openai.com/v1/realtime`)
-
-La bibliothèque gère l'ensemble de la chaîne technique : acquisition microphonique I2S 16 kHz, streaming bidirectionnel chiffré TLS, décodage et restitution audio haute fidélité 24 kHz sur le haut-parleur interne, gestion des tours conversationnels, exécution de commandes matérielles locales hors ligne (`ToolRegistry`) et détection locale de mot de réveil (Wake Word).
+**VoiceKit** est une bibliothèque C++17 pour **M5Stack CoreS3** permettant de créer des applications vocales avec **Google Gemini Live** ou **OpenAI Realtime**. Elle gère les microphones, le haut-parleur, la connexion aux services IA et les interactions vocales, afin de simplifier le développement d'applications sur ESP32-S3.
 
 ---
 
-## 2. Matériel Officiellement Pris en Charge
+## 2. Ce que l'on peut réaliser
 
-| Composant | Référence / Spécification | Rôle dans VoiceKit |
+Avec VoiceKit, vous pouvez créer rapidement :
+
+- **Faire parler le CoreS3 (TTS)** : synthétiser et lire à voix haute des phrases en français, anglais, allemand, espagnol ou italien.
+- **Reconnaître la parole (STT)** : capturer la voix en Push-to-Talk (PTT) et obtenir sa transcription.
+- **Converser en temps réel** : dialoguer naturellement à la voix avec Google Gemini Live ou OpenAI Realtime, avec interaction tactile à deux clics (`PARLER` / `TERMINER`), rejet local du silence (VAD) et arrêt immédiat (`STOP`).
+- **Exécuter des commandes locales** : router des commandes matérielles ou métier déterministes hors ligne via un registre sécurisé (`ToolRegistry`).
+- **Changer de voix et de langue** : choisir parmi les profils vocaux Gemini et OpenAI avec sauvegarde locale en mémoire NVS (sans jamais enregistrer de clé API).
+- **Détecter un mot de réveil hors ligne (expérimental)** : réveiller l'appareil localement avec « Bonjour ESP » (WakeNet 9 / ESP-SR).
+
+---
+
+## 3. Matériel nécessaire
+
+| Élément | Requis | Détails |
 |---|---|---|
-| **Boîtier cible** | **M5Stack CoreS3** | Plateforme matérielle de référence exclusive |
-| **Microcontrôleur** | **ESP32-S3** (dual-core Xtensa LX7 @ 240 MHz) | Traitement audio FreeRTOS & chiffrement TLS |
-| **Mémoire** | **16 Mo Flash + 8 Mo PSRAM** (Octal SPI) | Tampons circulaires audio & interfaces graphiques |
-| **Microphones** | **Double micro numérique ES7210** | Acquisition I2S DMA 16 kHz haute précision |
-| **Haut-parleur** | **Amplificateur AW88298 & HP 1 W** | Restitution sonore claire PCM 24 kHz |
-| **Écran** | **IPS LCD 320 × 240 (2 pouces) tactile** | Interface utilisateur visuelle (LVGL 9 ou M5GFX) |
-| **Connectivité** | **Wi-Fi 2.4 GHz (802.11 b/g/n)** | Streaming WebSocket sécurisé (TLS 1.2/1.3) |
+| **Carte cible** | **M5Stack CoreS3** | ESP32-S3, 16 Mo Flash, 8 Mo PSRAM, écran tactile 320 × 240, double micro ES7210 et haut-parleur AW88298 intégrés |
+| **Câble USB-C** | Données + alimentation | 5 V / 1 A minimum recommandé pour le haut-parleur |
+| **Réseau Wi-Fi** | **2.4 GHz uniquement** | L'ESP32-S3 ne supporte pas les réseaux 5 GHz |
+| **Clé API IA** | Gemini ou OpenAI | [Google AI Studio](https://aistudio.google.com/) (Gemini Live) ou [OpenAI Platform](https://platform.openai.com/) (OpenAI Realtime) |
+
+> **Remarque :** Seul le **M5Stack CoreS3** est officiellement supporté. Les modèles Core Basic, Core2, Atom ou StickC ne sont pas compatibles.
 
 ---
 
-## 3. Fonctionnalités Stables
+## 4. Installation rapide
 
-- **Synthèse Vocale (TTS 24 kHz) :** Énonciation fluide de phrases textuelles avec préservation de la dernière syllabe.
-- **Reconnaissance Vocale Push-to-Talk (STT) :** Capture vocale manuelle fiable (`startListening` / `stopListening`) sans duplication ni transcription fantôme.
-- **Conversation Bidirectionnelle Temps Réel :** Échange vocal continu avec Google Gemini Live ou OpenAI Realtime.
-- **Pipeline Vocal Intégré (`IntegratedVoicePipeline`) :** Orchestrateur autonome coordonnant l'écoute, la transcription, la décision locale, l'IA et la réponse vocale.
-- **Gestionnaire de Profils Vocaux Universels (`VoiceProfileManager`) :** Catalogue de 20 voix (10 Gemini, 10 OpenAI), gestion du multilingue (français, anglais, allemand, espagnol, italien) et persistance sécurisée en mémoire NVS (CRC32, sans clé API).
-- **Registre Local d'Outils Sécurisé (`ToolRegistry`) :** Exécution déterministe de commandes locales avec niveaux de privilèges (`READ_ONLY`, `WRITE`, `SENSITIVE`) et confirmation obligatoire pour les actions sensibles.
-- **STOP Prioritaire Universel :** Interruption matérielle et logicielle immédiate (< 50 ms), arrêt du décodage audio et retour garanti à l'état `READY`.
+L'environnement recommandé est **[Visual Studio Code](https://code.visualstudio.com/)** avec l'extension **[PlatformIO IDE](https://platformio.org/)**.
 
----
+### Option A — Tester un exemple fourni (recommandé pour débuter)
 
-## 4. Interaction Vocale Stabilisée (v0.6.7.1)
+```bash
+git clone https://github.com/calmtechnology-ch/VoiceKit.git
+cd VoiceKit
+```
 
-- **Machine à États Push-to-Talk à Deux Clics (`VoiceInteractionController`) :** Contrôleur universel indépendant de LVGL implémentant le cycle `READY -> STARTING -> LISTENING -> STOPPING_CAPTURE -> PROCESSING -> SPEAKING -> READY`, filtrage anti-rebond matériel (120 ms), arbitrage STOP prioritaire instantané, surveillance par watchdogs déterministes (15 s) et immunisation stricte contre les callbacks tardifs.
-- **Validation Vocale Locale & VAD Holistique (`VoiceCaptureValidator`) :** Évaluation locale de l'activité vocale sur micro ES7210 (durée minimale 350 ms, parole cumulée 250 ms, segment continu 120 ms, plancher RMS 380 et seuil adaptatif) avec rejet catégorique du silence et des bruits transitoires sans aucune requête réseau superflue.
-- **Détection Locale de Mot de Réveil (`WakeWordFoundation`) :** Reconnaissance vocale locale hors ligne de l'amorce « Bonjour ESP » basée sur WakeNet 9 (ESP-SR).
-- **Écoute Continue Adaptative (`ContinuousSTT`) :** Détection automatique d'activité vocale (VAD) par énergie acoustique sans appui sur un bouton.
+1. Ouvrez un dossier d'exemple dans VS Code, par exemple `examples/MinimalTTS`.
+2. Copiez `include/secrets.example.h` en `include/secrets.h`.
+3. Renseignez votre Wi-Fi 2.4 GHz et votre clé API dans `include/secrets.h`.
+4. Compilez et téléversez avec PlatformIO (`pio run -t upload`).
 
----
+### Option B — Utiliser VoiceKit dans votre propre projet PlatformIO
 
-## 5. Prérequis Logiciels
-
-- **Environnement recommandé :** [VS Code](https://code.visualstudio.com/) avec l'extension **PlatformIO IDE**.
-- **Framework :** Arduino pour ESP32 (`espressif32@6.9.0` ou version compatible).
-- **Standard de compilation :** **C++17** obligatoire (`-std=gnu++17`).
-- **Dépendances matérielles officielles :**
-  - `m5stack/M5CoreS3@1.0.0`
-  - `m5stack/M5Unified@0.2.23`
-  - Optionnel : `lvgl/lvgl@^9.2.2` (uniquement pour les exemples graphiques tactiles).
-
----
-
-## 6. Installation
-
-### Dans un projet PlatformIO existant
-
-Ajoutez VoiceKit et ses dépendances dans la section `lib_deps` de votre `platformio.ini` :
+Ajoutez VoiceKit dans votre `platformio.ini` (voir le parcours détaillé et complet dans **[docs/QUICK_START.md](docs/QUICK_START.md)**) :
 
 ```ini
 [env:m5stack-cores3]
@@ -89,16 +77,16 @@ build_flags =
 lib_deps =
     m5stack/M5CoreS3@1.0.0
     m5stack/M5Unified@0.2.23
-    https://github.com/calmtechnology-ch/VoiceKit.git#v0.6.6.2
+    https://github.com/calmtechnology-ch/VoiceKit.git#main
 ```
 
-Copiez également le fichier de partition `no_ota.csv` (présent à la racine du dépôt VoiceKit) dans votre répertoire de projet.
-
-Pour un guide pas à pas complet, consultez le **[Guide de Démarrage Rapide (QUICK_START.md)](docs/QUICK_START.md)**.
+> **Note de version :** Remplacez `#main` par `#v0.6.7.2` une fois la release officielle `v0.6.7.2` publiée sur GitHub. Placez également le fichier `no_ota.csv` (à la racine de ce dépôt) dans votre projet.
 
 ---
 
-## 7. Premier Exemple : Synthèse Vocale (TTS)
+## 5. Première démonstration vocale
+
+Pour un nouveau projet, le point d'entrée recommandé est la façade haut niveau `<VoiceKit.h>` :
 
 ```cpp
 #include <Arduino.h>
@@ -107,6 +95,7 @@ Pour un guide pas à pas complet, consultez le **[Guide de Démarrage Rapide (QU
 #include "secrets.h"
 
 static VoiceKit voice;
+static bool spoken = false;
 
 void setup() {
     auto cfg = M5.config();
@@ -122,8 +111,14 @@ void setup() {
     vcfg.volume = 75;
 
     voice.onReady([]() {
-        Serial.println("VoiceKit prêt ! Énonciation de la phrase...");
-        voice.say("Bonjour ! VoiceKit est opérationnel sur M5Stack CoreS3.");
+        if (!spoken) {
+            spoken = true;
+            voice.say("Bonjour ! VoiceKit fonctionne sur M5Stack CoreS3.");
+        }
+    });
+
+    voice.onError([](const String& err) {
+        Serial.printf("[VoiceKit Erreur] %s\n", err.c_str());
     });
 
     voice.begin(vcfg);
@@ -136,97 +131,105 @@ void loop() {
 }
 ```
 
----
-
-## 8. Configuration Wi-Fi et Clés API
-
-Créez votre fichier `secrets.h` dans le dossier `include/` à partir du fichier modèle `secrets.example.h` :
-
-```cpp
-#pragma once
-
-#define WIFI_SSID     "VOTRE_SSID_WIFI_2.4GHZ"
-#define WIFI_PASSWORD "VOTRE_MOT_DE_PASSE"
-
-// Clé d'API Google Gemini Live (gratuite sur https://aistudio.google.com/)
-#define GEMINI_KEY    "AIzaSy..."
-
-// Optionnel : Clé OpenAI Realtime (si fournisseur OPENAI sélectionné)
-#define OPENAI_KEY    "sk-proj-..."
-```
-
-> **Sécurité :** Ne commitez jamais `secrets.h` dans un dépôt public. Ce fichier est exclu par défaut par le `.gitignore`. Consultez **[SECURITY.md](SECURITY.md)** pour les bonnes pratiques.
+Guide pas à pas complet et dépannage : **[docs/QUICK_START.md](docs/QUICK_START.md)**.
 
 ---
 
-## 9. Choix du Fournisseur : Gemini Live vs OpenAI Realtime
+## 6. Choisir Gemini ou OpenAI
 
-VoiceKit permet de choisir le moteur lors de l'initialisation ou dynamiquement à chaud :
+VoiceKit prend en charge les deux fournisseurs temps réel avec la même API :
 
 ```cpp
-// Option 1 : Google Gemini Live (par défaut)
+// Google Gemini Live
 vcfg.provider = VoiceProviderType::GEMINI;
 vcfg.apiKey = GEMINI_KEY;
 
-// Option 2 : OpenAI Realtime
+// OpenAI Realtime
 vcfg.provider = VoiceProviderType::OPENAI;
 vcfg.apiKey = OPENAI_KEY;
 ```
 
----
-
-## 10. Liste des 12 Exemples Officiels
-
-| Répertoire | Type | Description |
+| Critère | Google Gemini Live | OpenAI Realtime |
 |---|---|---|
-| [`examples/MinimalTTS`](examples/MinimalTTS) | PlatformIO | Synthèse vocale unitaire simple (TTS 24 kHz) |
-| [`examples/MinimalSTT`](examples/MinimalSTT) | PlatformIO | Reconnaissance vocale Push-to-Talk fiabilisée |
-| [`examples/MinimalConversation`](examples/MinimalConversation) | PlatformIO | Dialogue bidirectionnel natif avec Google Gemini Live |
-| [`examples/MinimalTTS_Arduino`](examples/MinimalTTS_Arduino) | Arduino IDE | Compatibilité autonome Arduino IDE (.ino) |
-| [`examples/WakeWordFoundation`](examples/WakeWordFoundation) | PlatformIO | Détection locale hors ligne « Bonjour ESP » (WakeNet) |
-| [`examples/WakeWordConversation`](examples/WakeWordConversation) | PlatformIO | Cycle mains libres : Mot de Réveil -> Conversation |
-| [`examples/LocalToolRegistryDemo`](examples/LocalToolRegistryDemo) | PlatformIO | Registre local d'outils matériels sécurisés hors ligne |
-| [`examples/VoiceDiagnostics`](examples/VoiceDiagnostics) | PlatformIO | Tableau de bord de télémétrie et métriques système |
-| [`examples/VoiceSettingsDemo`](examples/VoiceSettingsDemo) | PlatformIO | Démonstrateur multilingue, profils vocaux et LVGL 9 |
-| [`examples/OpenAIConversationLVGL`](examples/OpenAIConversationLVGL) | PlatformIO | Conversation OpenAI Realtime avec interface graphique LVGL |
-| [`examples/IntegratedVoiceDemo`](examples/IntegratedVoiceDemo) | PlatformIO | **Exemple de référence principal** : orchestrateur complet |
-| [`examples/TwoClickConversationLVGL`](examples/TwoClickConversationLVGL) | PlatformIO | **Exemple de référence interaction vocale v0.6.7.1** : PTT 2 clics & VAD holistique |
+| **Modèle par défaut** | `models/gemini-2.5-flash-native-audio-latest` | `gpt-4o-realtime-preview` (configurable) |
+| **Clé API** | Google AI Studio (`AIza...`) | OpenAI Platform (`sk-proj-...`) |
+| **Changement dynamique** | Supporté via `applyVoiceProfile()` / `setProvider()` | Supporté via `applyVoiceProfile()` / `setProvider()` |
+
+> **Coûts API :** L'utilisation des API cloud Gemini et OpenAI peut engendrer des frais selon votre forfait et votre consommation. Surveillez vos quotas sur les consoles des fournisseurs.
 
 ---
 
-## 11. Limitations Connues
+## 7. Exemples disponibles
 
-Pour une vue complète et détaillée des contraintes opérationnelles, consultez **[docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)** :
-- Bande Wi-Fi 2.4 GHz obligatoire (ESP32-S3 ne gère pas le 5 GHz).
-- Standard C++17 requis pour la compilation.
-- Partition Flash de 8 Mo (`partitions_16MB.csv`) requise pour les projets avec interface tactile LVGL 9.
-- Aucune clé d'API n'est sauvegardée en mémoire NVS (politique de sécurité stricte).
+Le dépôt fournit **12 exemples officiels** (11 projets PlatformIO et 1 sketch Arduino IDE), classés par niveau de difficulté dans **[examples/README.md](examples/README.md)** :
 
----
-
-## 12. Tests et Validation
-
-VoiceKit dispose d'une infrastructure de validation logicielle et matérielle à double niveau :
-
-- **3 807 tests unitaires et d'intégration natifs (100 % PASS)** exécutés sans régression (`tests/run_tests.bat`).
-- **Audit de structure et compilation automatisée des 11 exemples PlatformIO (100 % PASS)** via `tools/validation/validate_examples.py`.
-- **Validation matérielle sur M5Stack CoreS3 physique :**
-  - **8/8 PASS** sur l'interaction vocale 2 clics (MAT-01 à MAT-08, confirmé utilisateur).
-  - **19/20 PASS** sur la suite de diffusion publique v0.6.6.2 ([VALIDATION_CORES3.md](docs/release/v0.6.6.2/VALIDATION_CORES3.md)).
+| Niveau | Exemples | Objectif |
+|---|---|---|
+| **Niveau 1 — Débutant** | [`MinimalTTS`](examples/MinimalTTS), [`MinimalSTT`](examples/MinimalSTT), [`MinimalConversation`](examples/MinimalConversation), [`TwoClickConversationLVGL`](examples/TwoClickConversationLVGL) | Faire parler, reconnaître la voix, première conversation Gemini, conversation tactile PTT 2 clics |
+| **Niveau 2 — Intermédiaire** | [`OpenAIConversationLVGL`](examples/OpenAIConversationLVGL), [`VoiceSettingsDemo`](examples/VoiceSettingsDemo), [`VoiceDiagnostics`](examples/VoiceDiagnostics), [`WakeWordFoundation`](examples/WakeWordFoundation) | OpenAI + LVGL 9, profils vocaux multilingues NVS, diagnostics, mot de réveil hors ligne |
+| **Niveau 3 — Avancé** | [`IntegratedVoiceDemo`](examples/IntegratedVoiceDemo), [`WakeWordConversation`](examples/WakeWordConversation), [`LocalToolRegistryDemo`](examples/LocalToolRegistryDemo) | Orchestrateur complet, conversation mains libres par mot de réveil, outils matériels locaux |
+| **Arduino IDE** | [`MinimalTTS_Arduino`](examples/MinimalTTS_Arduino) | Démonstration TTS autonome au format `.ino` |
 
 ---
 
-## 13. Dépannage
+## 8. Applications showcases
 
-- **Erreur de compilation C++17 :** Vérifiez que `-std=gnu++11` est retiré via `build_unflags = -std=gnu++11` et remplacé par `build_flags = -std=gnu++17`.
-- **Dépassement de partition (`overflowed by ...`) :** Utilisez `partitions_16MB.csv` dans `board_build.partitions`.
-- **Erreur de connexion Wi-Fi :** Assurez-vous que votre box diffuse sur le canal 2.4 GHz et que vos identifiants dans `secrets.h` sont exacts.
-- **Fermeture de session WebSocket (`code 1007` ou `code 1008`) :** Vérifiez la validité de votre clé d'API sur Google AI Studio ou OpenAI Platform.
+Le répertoire **[showcases/](showcases/README.md)** présente trois applications complètes construites sur les API publiques de VoiceKit :
+
+- **[`VoiceAssistant`](showcases/VoiceAssistant)** : assistant vocal conversationnel tactile (LVGL 9, Gemini Live & OpenAI Realtime, PTT 2 clics, VAD, STOP, réglages multilingues). Vitrine principale pour démontrer VoiceKit.
+- **[`VoiceSensorStation`](showcases/VoiceSensorStation)** : station environnementale vocale utilisant le capteur externe **M5Stack ENV Pro U169 (Bosch BME688)** (application spécialisée).
+- **[`VoiceControl`](showcases/VoiceControl)** : centre de commandes vocales dédié à l'heure suisse et à la date, avec configuration centralisée en fichier unique (FR/EN, Gemini/OpenAI).
+
+Consultez **[showcases/README.md](showcases/README.md)** pour leur état exact de validation.
 
 ---
 
-## 14. Licence et Contributions
+## 9. Documentation avancée
 
-- **Licence principale :** [MIT License](LICENSE) — Copyright (c) 2026 Philippe AD / VoxCore Project.
-- **Composants tiers :** ESP-SR / WakeNet sous licence Apache 2.0 (Espressif Systems), cJSON sous licence MIT.
-- **Contributions :** Les contributions sont les bienvenues via Pull Requests sur la branche de développement. Pour tout signalement de faille de sécurité, consultez **[SECURITY.md](SECURITY.md)**.
+- **[Guide de démarrage rapide](docs/QUICK_START.md)** — Installation pas à pas (exemples et projet personnel) et dépannage.
+- **[Catalogue pédagogique des exemples](examples/README.md)** — Choix de l'exemple adapté et comparaison `VoiceKit.h` vs `VoxCoreVoice.h`.
+- **[Index complet de la documentation](docs/README.md)** — Architecture, rapports techniques et guides spécialisés.
+- **[Interaction vocale 2 clics & VAD](docs/VOICE_INTERACTION.md)** — `VoiceInteractionController` et `VoiceCaptureValidator`.
+- **[Registre d'outils locaux & MCP](docs/architecture_tools_registry_ai_mcp.md)** — Commandes matérielles sécurisées.
+- **[Politique de sécurité](SECURITY.md)** — Gestion des clés API, masquage série, NVS et signalement de vulnérabilités.
+- **[Journal des modifications](CHANGELOG.md)** — Historique détaillé des versions.
+
+---
+
+## 10. Fonctionnalités et limitations
+
+### Stables
+- Synthèse vocale (TTS 24 kHz), reconnaissance vocale Push-to-Talk (STT 16 kHz), conversation bidirectionnelle temps réel (Gemini Live & OpenAI Realtime).
+- Interaction vocale à deux clics (`VoiceInteractionController`), validation locale VAD (`VoiceCaptureValidator`) et `STOP` prioritaire.
+- Profils vocaux multilingues avec persistance NVS (hors clés API) et registre d'outils locaux (`ToolRegistry`).
+
+### Expérimentales
+- Détection locale de mot de réveil hors ligne (`WakeWordFoundation` / `WakeWordConversation`, modèle « Bonjour ESP »).
+- Mode d'écoute continue adaptative (`ContinuousSTT`).
+
+### Principales limitations
+- **M5Stack CoreS3** et **Wi-Fi 2.4 GHz** requis.
+- Standard **C++17** (`-std=gnu++17`) obligatoire.
+- Partition Flash 8 Mo (`partitions_16MB.csv`) nécessaire pour les projets combinant LVGL 9 et polices UTF-8.
+- Détail complet dans **[docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)**.
+
+---
+
+## 11. Tests et stabilité
+
+VoiceKit dispose d'une validation automatisée reproductible :
+
+- **Tests natifs C++17** (`tests/run_tests.bat`) : validation de la logique métier, des machines à états, du VAD, du PTT 2 clics, du `STOP` prioritaire et de la sécurité NVS.
+- **Validation des exemples** (`python tools/validation/validate_examples.py`) : contrôle de structure et compilation PlatformIO des 11 exemples PlatformIO.
+- **Projet consommateur externe** : compilation vérifiée hors dépôt.
+- **Validation matérielle sur M5Stack CoreS3** : référence historique v0.6.7.1 sur les 8 scénarios MAT-01 à MAT-08 et les 8 scénarios de bascule fournisseur ; voir les résultats détaillés de la release dans **[docs/release/v0.6.7.2/TEST_RESULTS.md](docs/release/v0.6.7.2/TEST_RESULTS.md)**.
+
+---
+
+## 12. Licence et contributions
+
+- **Licence VoiceKit :** [MIT License](LICENSE) — Copyright (c) 2026 Philippe AD / VoxCore Project.
+- **Composants tiers :**
+  - `cJSON` (tests natifs) : licence MIT.
+  - **ESP-SR / WakeNet** (`src/esp_sr/`, incluant `libesp_sr_wakenet_s3.a` et le modèle `wn9l_fr_bonjouresp_tts3`) : fourni par Espressif Systems sous les conditions de licence ESP-SR (utilisation destinée au matériel Espressif ; non couvert par la licence MIT de VoiceKit). Voir **[docs/release/v0.6.7.2/RELEASE_CHECKLIST.md](docs/release/v0.6.7.2/RELEASE_CHECKLIST.md)** pour la vérification de redistribution.
+- **Contributions & sécurité :** Les Pull Requests et retours sont les bienvenus. Pour toute question de sécurité, consultez **[SECURITY.md](SECURITY.md)**.

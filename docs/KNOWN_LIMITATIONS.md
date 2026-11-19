@@ -1,6 +1,6 @@
-# VoiceKit v0.6.6.2 — Limitations Connues & Périmètre Opérationnel
+# VoiceKit v0.6.7.2 — Limitations Connues & Périmètre Opérationnel
 
-Ce document détaille de manière transparente les contraintes physiques, réseau, cloud et logicielles identifiées lors du cycle de validation de **VoiceKit v0.6.6.2**.
+Ce document détaille de manière transparente les contraintes physiques, réseau, cloud et logicielles identifiées pour **VoiceKit v0.6.7.2**.
 
 ---
 
@@ -52,7 +52,7 @@ Ce document détaille de manière transparente les contraintes physiques, résea
 
 - **Standard C++17 obligatoire :** Le code utilise des fonctionnalités C++17 (`std::string_view`, liaisons déstructurées, lambdas génériques). Les configurations avec `-std=gnu++11` échouent à la compilation.
 - **PlatformIO vs Arduino IDE :**
-  - **PlatformIO :** Environnement de référence validé à 100 % sur les 10 exemples officiels.
+  - **PlatformIO :** Environnement de référence validé sur les 11 exemples PlatformIO officiels.
   - **Arduino IDE :** L'exemple autonome `MinimalTTS_Arduino.ino` est fourni pour compatibilité. Toutefois, en raison de la complexité des bibliothèques de partitionnement et des binaires statiques (`libesp_sr_wakenet_s3.a`), l'environnement PlatformIO est formellement recommandé pour toute application avancée.
 - **Partitionnement Flash :**
   - Les exemples intégrant LVGL 9 et plusieurs polices de caractères (`IntegratedVoiceDemo`, `VoiceSettingsDemo`) dépassent la taille de partition par défaut de 2 Mo (`no_ota.csv`) et exigent impérativement l'utilisation de `partitions_16MB.csv` (8 Mo d'application).

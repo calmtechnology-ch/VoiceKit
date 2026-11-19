@@ -5,10 +5,10 @@
 #include <iostream>
 #include <vector>
 
-#include "../showcases/OrientationClockVoice/include/FrenchTimeFormatter.h"
-#include "../showcases/OrientationClockVoice/include/WiFiTimeSync.h"
-#include "../showcases/OrientationClockVoice/src/FrenchTimeFormatter.cpp"
-#include "../showcases/OrientationClockVoice/src/WiFiTimeSync.cpp"
+#include "../archive/examples/OrientationClockVoice/include/FrenchTimeFormatter.h"
+#include "../archive/examples/OrientationClockVoice/include/WiFiTimeSync.h"
+#include "../archive/examples/OrientationClockVoice/src/FrenchTimeFormatter.cpp"
+#include "../archive/examples/OrientationClockVoice/src/WiFiTimeSync.cpp"
 #include "ContinuousListeningController.h"
 #include "Utf8Utils.h"
 #include "VoiceActivityDetector.h"
@@ -4620,13 +4620,15 @@ void test_v0531_facade_modes_transitions_and_resilience() {
   cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
   vk.begin(cfg);
 
-  // 1. Constante de version alignée sur v0.6.6.2 (ou versions précédentes)
-  TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.6.2") == 0 ||
+  // 1. Constante de version alignée sur v0.6.7.2 (ou versions précédentes)
+  TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.7.2") == 0 ||
+                  strcmp(VOICEKIT_VERSION, "v0.6.7.1") == 0 ||
+                  strcmp(VOICEKIT_VERSION, "v0.6.6.2") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.6") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.5.2") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.5.1") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.5") == 0,
-              "VOICEKIT_VERSION est v0.6.6.2");
+              "VOICEKIT_VERSION est v0.6.7.2");
 
   // 2. Mode par défaut IDLE
   TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode initial = IDLE");
