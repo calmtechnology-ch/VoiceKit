@@ -260,10 +260,20 @@ void ConversationController::tick() {
 }
 
 void ConversationController::handleUserTranscription(const String& text, bool isFinal) {
-    _lastUserText = text;
-    _metrics.userText = text;
-    if (_onUserText) {
-        _onUserText(text, isFinal);
+    if (text.isEmpty()) return;
+
+    if (isFinal) {
+        LiveSessionController::appendTranscriptionFragment(_lastUserText, text);
+        _metrics.userText = _lastUserText;
+        if (_onUserText) {
+            _onUserText(_lastUserText, true);
+        }
+    } else {
+        String preview = _lastUserText;
+        LiveSessionController::appendTranscriptionFragment(preview, text);
+        if (_onUserText) {
+            _onUserText(preview, false);
+        }
     }
 }
 

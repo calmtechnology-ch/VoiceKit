@@ -659,8 +659,10 @@ void GeminiLiveClient::handleIncomingMessage(const char* data, size_t len) {
                 bool msgHadAudio = false;
                 cJSON* part = nullptr;
                 cJSON_ArrayForEach(part, parts) {
+                    cJSON* thought = cJSON_GetObjectItemCaseSensitive(part, "thought");
+                    bool isThought = cJSON_IsTrue(thought);
                     cJSON* text = cJSON_GetObjectItemCaseSensitive(part, "text");
-                    if (text && cJSON_IsString(text) && text->valuestring) {
+                    if (!isThought && text && cJSON_IsString(text) && text->valuestring) {
                         String txtVal(text->valuestring);
                         if (_onText) _onText(txtVal);
                         if (!hasOutputTrans && _onOutputTranscription) {
