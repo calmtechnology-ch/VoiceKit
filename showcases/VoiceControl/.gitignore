@@ -1,0 +1,8 @@
+.pio/
+.vscode/
+include/secrets.h
+*.bin
+*.elf
+*.map
+tests/test_voicecontrol_core.exe
+tests/test_voicecontrol_core
