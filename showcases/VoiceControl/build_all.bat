@@ -15,11 +15,11 @@ echo.
 echo ========================================================
 echo   [OK] Les 4 variantes ont ete compilees avec succes.
 echo ========================================================
-echo %cmdcmdline% | find /i "/c """ >nul && pause
+if "%~1"=="" echo %cmdcmdline% | find /i "/c """"" >nul && pause
 exit /b 0
 
 :fail
 echo.
 echo [ERREUR] La compilation d'une variante a echoue.
-echo %cmdcmdline% | find /i "/c """ >nul && pause
+if "%~1"=="" echo %cmdcmdline% | find /i "/c """"" >nul && pause
 exit /b 1
