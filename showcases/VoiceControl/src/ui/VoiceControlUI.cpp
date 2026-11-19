@@ -20,6 +20,13 @@ static constexpr uint32_t COL_DANGER      = 0xDC2626;
 static constexpr uint32_t COL_DISABLED    = 0x94A3B8;
 static constexpr uint32_t COL_PROVIDER_BG = 0xE2E8F0;
 
+// Géométrie fixe de l'horloge ("HH:MM:SS" en 8 cellules tabulaires)
+// Dans lv_font_montserrat_40 : chiffre le plus large ('4') = 26.8 px, ':' = 9.1 px, line_height = 44 px.
+static constexpr int32_t CLOCK_DIGIT_W = 28;
+static constexpr int32_t CLOCK_COLON_W = 14;
+static constexpr int32_t CLOCK_TOTAL_W = 6 * CLOCK_DIGIT_W + 2 * CLOCK_COLON_W; // 196 px
+static constexpr int32_t CLOCK_ROW_H   = 44;
+
 void VoiceControlUI::setLabelIfChanged(lv_obj_t* label, char* cache, size_t cacheSize, const char* text) {
     if (!label || !cache || !text) return;
     if (strncmp(cache, text, cacheSize) == 0) {
@@ -28,6 +35,24 @@ void VoiceControlUI::setLabelIfChanged(lv_obj_t* label, char* cache, size_t cach
     strncpy(cache, text, cacheSize - 1);
     cache[cacheSize - 1] = '\0';
     lv_label_set_text(label, cache);
+}
+
+void VoiceControlUI::setTimeTextIfChanged(const char* text) {
+    if (!text) return;
+    if (strncmp(m_cacheTime, text, sizeof(m_cacheTime)) == 0) {
+        return;
+    }
+    const size_t len = strlen(text);
+    for (size_t i = 0; i < kClockSlotCount; ++i) {
+        if (!m_lblTimeSlots[i]) continue;
+        const char nextCh = (i < len) ? text[i] : ' ';
+        if (m_cacheTime[i] != nextCh) {
+            char buf[2] = { nextCh, '\0' };
+            lv_label_set_text(m_lblTimeSlots[i], buf);
+        }
+    }
+    strncpy(m_cacheTime, text, sizeof(m_cacheTime) - 1);
+    m_cacheTime[sizeof(m_cacheTime) - 1] = '\0';
 }
 
 void VoiceControlUI::onTalkBtnEvent(lv_event_t* e) {
@@ -104,18 +129,41 @@ void VoiceControlUI::buildMainScreen() {
     lv_obj_set_style_pad_all(clockCard, 6, 0);
     lv_obj_remove_flag(clockCard, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Heure suisse en gros caractères (24h)
-    m_lblTime = lv_label_create(clockCard);
-    lv_obj_align(m_lblTime, LV_ALIGN_TOP_MID, 0, 2);
-    lv_label_set_text(m_lblTime, "--:--:--");
-    lv_obj_set_style_text_font(m_lblTime, &lv_font_montserrat_40, 0);
-    lv_obj_set_style_text_color(m_lblTime, lv_color_hex(COL_TEXT_DARK), 0);
+    // Heure suisse en gros caractères (24h) à largeur constante (8 cellules tabulaires)
+    lv_obj_t* clockRow = lv_obj_create(clockCard);
+    lv_obj_set_size(clockRow, CLOCK_TOTAL_W, CLOCK_ROW_H);
+    lv_obj_align(clockRow, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_opa(clockRow, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(clockRow, 0, 0);
+    lv_obj_set_style_pad_all(clockRow, 0, 0);
+    lv_obj_remove_flag(clockRow, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Date du jour (format suisse JJ.MM.AAAA)
+    static const char kInitialTime[] = "--:--:--";
+    int32_t xPos = 0;
+    for (size_t i = 0; i < kClockSlotCount; ++i) {
+        const bool isColon = (i == 2 || i == 5);
+        const int32_t slotW = isColon ? CLOCK_COLON_W : CLOCK_DIGIT_W;
+
+        lv_obj_t* slot = lv_label_create(clockRow);
+        lv_obj_set_pos(slot, xPos, 0);
+        lv_obj_set_size(slot, slotW, CLOCK_ROW_H);
+        lv_obj_set_style_text_align(slot, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_font(slot, &lv_font_montserrat_40, 0);
+        lv_obj_set_style_text_color(slot, lv_color_hex(COL_TEXT_DARK), 0);
+
+        char ch[2] = { kInitialTime[i], '\0' };
+        lv_label_set_text(slot, ch);
+        m_lblTimeSlots[i] = slot;
+        xPos += slotW;
+    }
+    strncpy(m_cacheTime, kInitialTime, sizeof(m_cacheTime) - 1);
+    m_cacheTime[sizeof(m_cacheTime) - 1] = '\0';
+
+    // Date du jour (format suisse JJ.MM.AAAA) — police 16 px gras pour une meilleure lisibilité
     m_lblDate = lv_label_create(clockCard);
-    lv_obj_align(m_lblDate, LV_ALIGN_TOP_MID, 0, 50);
+    lv_obj_align(m_lblDate, LV_ALIGN_TOP_MID, 0, 48);
     lv_label_set_text(m_lblDate, str.dateNotSynced);
-    lv_obj_set_style_text_font(m_lblDate, &font_french_14, 0);
+    lv_obj_set_style_text_font(m_lblDate, &font_french_bold_16, 0);
     lv_obj_set_style_text_color(m_lblDate, lv_color_hex(COL_TEXT_MUTED), 0);
 
     // Ligne inférieure de la carte : Fuseau horaire (gauche) & État NTP (droite)
@@ -227,7 +275,7 @@ void VoiceControlUI::updateClockDisplay(uint32_t nowMs) {
 
             char timeBuf[16];
             SwissTime::formatTimeHHMMSS(localTm, timeBuf, sizeof(timeBuf));
-            setLabelIfChanged(m_lblTime, m_cacheTime, sizeof(m_cacheTime), timeBuf);
+            setTimeTextIfChanged(timeBuf);
 
             char dateOnly[16];
             SwissTime::formatDateDDMMYYYY(localTm, dateOnly, sizeof(dateOnly));
@@ -242,7 +290,7 @@ void VoiceControlUI::updateClockDisplay(uint32_t nowMs) {
             setLabelIfChanged(m_lblTz, m_cacheTz, sizeof(m_cacheTz), tzBuf);
         }
     } else {
-        setLabelIfChanged(m_lblTime, m_cacheTime, sizeof(m_cacheTime), "--:--:--");
+        setTimeTextIfChanged("--:--:--");
         setLabelIfChanged(m_lblDate, m_cacheDate, sizeof(m_cacheDate), str.dateNotSynced);
         setLabelIfChanged(m_lblTz, m_cacheTz, sizeof(m_cacheTz), VC_TIMEZONE_NAME);
         m_lastDisplayedSec = -1;

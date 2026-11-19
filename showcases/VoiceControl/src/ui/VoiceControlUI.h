@@ -37,14 +37,17 @@ private:
     void buildMainScreen();
     void updateClockDisplay(uint32_t nowMs);
     void updateVoiceDisplay();
+    void setTimeTextIfChanged(const char* text);
+
+    static constexpr size_t kClockSlotCount = 8; // "HH:MM:SS"
 
     VoiceController* m_voice = nullptr;
     VoiceControlConfig::LanguageCode m_uiLang = VoiceControlConfig::LanguageCode::FR;
 
     // Widgets LVGL 9
-    lv_obj_t* m_screen       = nullptr;
-    lv_obj_t* m_lblTime      = nullptr;
-    lv_obj_t* m_lblDate      = nullptr;
+    lv_obj_t* m_screen                        = nullptr;
+    lv_obj_t* m_lblTimeSlots[kClockSlotCount] = {};
+    lv_obj_t* m_lblDate                       = nullptr;
     lv_obj_t* m_lblTz        = nullptr;
     lv_obj_t* m_lblNtp       = nullptr;
     lv_obj_t* m_pillVoice    = nullptr;

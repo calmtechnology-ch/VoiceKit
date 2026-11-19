@@ -115,6 +115,23 @@ pio run -t upload
 pio device monitor
 ```
 
+### Scripts BATCH Windows (variantes FR/EN × Gemini/OpenAI)
+
+Des scripts `.bat` prêts à l'emploi sont disponibles directement dans `showcases/VoiceControl/` (compilation + téléversement direct sur CoreS3) :
+
+| Script | Variante | Environnement PlatformIO |
+|---|---|---|
+| `build_fr_gemini.bat` | Français + Google Gemini Live | `fr-gemini` |
+| `build_fr_openai.bat` | Français + OpenAI Realtime | `fr-openai` |
+| `build_en_gemini.bat` | Anglais + Google Gemini Live | `en-gemini` |
+| `build_en_openai.bat` | Anglais + OpenAI Realtime | `en-openai` |
+| `build_menu.bat` | Menu interactif de sélection | Tous |
+| `build_all.bat` | Compile les 4 variantes sans téléverser | Tous |
+
+Options facultatives en ligne de commande :
+- Spécifier un port série : `build_fr_gemini.bat COM4`
+- Compiler sans téléverser : `build_fr_gemini.bat --build-only`
+
 ### Exemples de traces série attendues
 
 ```text
