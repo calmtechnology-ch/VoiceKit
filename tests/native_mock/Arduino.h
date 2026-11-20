@@ -19,7 +19,7 @@ public:
     String(unsigned int val) : std::string(std::to_string(val)) {}
     String(long val) : std::string(std::to_string(val)) {}
     String(unsigned long val) : std::string(std::to_string(val)) {}
-    String(uint64_t val) : std::string(std::to_string(val)) {}
+    String(unsigned long long val) : std::string(std::to_string(val)) {}
 
     bool isEmpty() const { return empty(); }
     int indexOf(char c, size_t fromIndex = 0) const { auto pos = find(c, fromIndex); return pos == std::string::npos ? -1 : (int)pos; }
