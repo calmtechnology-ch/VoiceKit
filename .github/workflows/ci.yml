@@ -1,0 +1,226 @@
+name: VoiceKit CI
+
+on:
+  push:
+    branches: [ main, "release/**" ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  metadata-and-docs:
+    name: Metadata, Required Files & Local Links
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check metadata versions, required files and local markdown links
+        run: |
+          python3 - <<'EOF'
+          import json, os, re, sys
+          from pathlib import Path
+
+          root = Path(".")
+          errors = []
+
+          # 1. Required files
+          required = [
+              "README.md", "LICENSE", "SECURITY.md", "CHANGELOG.md",
+              "library.json", "library.properties", "no_ota.csv", "extra_script.py",
+              "docs/README.md", "docs/QUICK_START.md", "docs/KNOWN_LIMITATIONS.md",
+              "examples/README.md", "showcases/README.md",
+          ]
+          for f in required:
+              if not (root / f).is_file():
+                  errors.append(f"Missing required file: {f}")
+
+          # 2. Version consistency
+          lib_json = json.loads((root / "library.json").read_text(encoding="utf-8"))
+          v_json = lib_json.get("version", "")
+          props = (root / "library.properties").read_text(encoding="utf-8")
+          m_prop = re.search(r"^version=(.+)$", props, re.M)
+          v_prop = m_prop.group(1).strip() if m_prop else ""
+          hub_cfg = (root / "src/core/VoiceHubConfig.h").read_text(encoding="utf-8")
+          m_hdr = re.search(r'VOICEKIT_VERSION\s*=\s*"v?([^"]+)"', hub_cfg)
+          v_hdr = m_hdr.group(1).strip() if m_hdr else ""
+
+          print(f"Versions: library.json={v_json}, library.properties={v_prop}, VoiceHubConfig.h={v_hdr}")
+          if not (v_json and v_json == v_prop == v_hdr):
+              errors.append(f"Version mismatch: json={v_json}, properties={v_prop}, header={v_hdr}")
+
+          # 3. Local markdown links in core onboarding docs
+          docs_to_check = [
+              "README.md", "docs/README.md", "docs/QUICK_START.md",
+              "docs/KNOWN_LIMITATIONS.md", "examples/README.md", "showcases/README.md",
+          ]
+          link_re = re.compile(r'\[[^\]]*\]\(([^)]+)\)')
+          fence_re = re.compile(r'```[\s\S]*?```')
+          inline_code_re = re.compile(r'`[^`]*`')
+          for doc in docs_to_check:
+              p = root / doc
+              if not p.is_file():
+                  continue
+              text = inline_code_re.sub("", fence_re.sub("", p.read_text(encoding="utf-8")))
+              for m in link_re.finditer(text):
+                  target = m.group(1).strip().split("#")[0]
+                  if not target or target.startswith(("http://", "https://", "mailto:")):
+                      continue
+                  resolved = (p.parent / target).resolve()
+                  if not resolved.exists():
+                      errors.append(f"Broken local link in {doc}: {target}")
+
+          if errors:
+              for e in errors:
+                  print(f"[ERROR] {e}")
+              sys.exit(1)
+          print("[OK] Metadata, required files and local markdown links verified.")
+          EOF
+
+  native-tests:
+    name: Native C++17 Unit & Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compile and run native C++17 test suite
+        run: |
+          g++ -std=gnu++17 -O2 -Isrc -Itests/native_mock -Itests -Iarchive/examples/OrientationClockVoice/include \
+            tests/native_mock/cJSON.c \
+            src/core/AudioTraceLog.cpp \
+            src/core/AudioResampler.cpp \
+            src/core/LiveAudioPlayer.cpp \
+            src/core/GeminiLiveClient.cpp \
+            src/core/GeminiVoiceProvider.cpp \
+            src/core/OpenAIRealtimeClient.cpp \
+            src/core/LiveSessionController.cpp \
+            src/core/LiveAudioStreamer.cpp \
+            src/core/ConversationController.cpp \
+            src/core/WiFiManager.cpp \
+            src/core/ContinuousListeningController.cpp \
+            src/core/WakeWordAudioBridge.cpp \
+            src/core/WakeWordManager.cpp \
+            src/core/WakeWordConversationController.cpp \
+            src/core/interaction/VoiceCaptureValidator.cpp \
+            src/core/interaction/VoiceInteractionController.cpp \
+            src/core/tools/ToolRegistry.cpp \
+            src/core/voiceux/TextGate.cpp \
+            src/core/voiceux/VoiceIntentRouter.cpp \
+            src/core/voiceux/ReplyMemory.cpp \
+            src/core/voiceux/VoiceUxController.cpp \
+            src/core/voiceux/VoiceUxLiveBridge.cpp \
+            src/core/pipeline/VoiceCommandDispatcher.cpp \
+            src/core/pipeline/IntegratedVoicePipeline.cpp \
+            src/hal/M5AudioOutput.cpp \
+            src/hal/M5AudioInput.cpp \
+            src/VoiceProfileManager.cpp \
+            src/VoxCoreVoice.cpp \
+            src/VoiceKit.cpp \
+            tests/test_voicekit_all.cpp \
+            -o tests/test_voicekit_all
+          ./tests/test_voicekit_all
+
+  build-examples-and-consumer:
+    name: PlatformIO Examples & External Consumer Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-pio-${{ hashFiles('library.json', 'examples/*/platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Validate and build all 11 PlatformIO examples
+        run: python3 tools/validation/validate_examples.py
+
+      - name: Build independent external consumer project (no symlink)
+        run: |
+          WORK_DIR="/tmp/voicekit-external-consumer"
+          rm -rf "$WORK_DIR"
+          mkdir -p "$WORK_DIR/src" "$WORK_DIR/include" "$WORK_DIR/lib/VoiceKit"
+          cp no_ota.csv "$WORK_DIR/no_ota.csv"
+          cp library.json library.properties extra_script.py "$WORK_DIR/lib/VoiceKit/"
+          cp -r src "$WORK_DIR/lib/VoiceKit/src"
+          cat > "$WORK_DIR/include/secrets.h" <<'SECRETS'
+          #pragma once
+          #define WIFI_SSID "CI_TEST_SSID"
+          #define WIFI_PASSWORD "CI_TEST_PASS"
+          #define GEMINI_KEY "AIzaSyCIPlaceholderKey00000000000000"
+          SECRETS
+          cat > "$WORK_DIR/platformio.ini" <<'INI'
+          [env:m5stack-cores3]
+          platform = espressif32@6.9.0
+          board = m5stack-cores3
+          framework = arduino
+          lib_ldf_mode = deep
+          board_build.partitions = no_ota.csv
+          build_unflags = -std=gnu++11
+          build_flags =
+              -std=gnu++17
+              -DCORE_DEBUG_LEVEL=1
+              -DARDUINO_RUNNING_CORE=1
+              -DARDUINO_EVENT_RUNNING_CORE=1
+              -DBOARD_M5STACK_CORES3=1
+              -DVOXCORE_AUDIO_MODE=2
+          lib_deps =
+              m5stack/M5CoreS3@1.0.0
+              m5stack/M5Unified@0.2.23
+          INI
+          cat > "$WORK_DIR/src/main.cpp" <<'CPP'
+          #include <Arduino.h>
+          #include <M5Unified.h>
+          #include <VoiceKit.h>
+          #include "secrets.h"
+
+          static VoiceKit voice;
+          static bool spoken = false;
+
+          void setup() {
+              auto cfg = M5.config();
+              M5.begin(cfg);
+              Serial.begin(115200);
+              VoiceKitConfig vcfg;
+              vcfg.provider = VoiceProviderType::GEMINI;
+              vcfg.apiKey = GEMINI_KEY;
+              vcfg.wifiMode = WiFiMode::MANAGED_WIFI;
+              vcfg.wifiSSID = WIFI_SSID;
+              vcfg.wifiPassword = WIFI_PASSWORD;
+              vcfg.volume = 75;
+              voice.onReady([]() {
+                  if (!spoken) {
+                      spoken = true;
+                      voice.say("Bonjour VoiceKit CI.");
+                  }
+              });
+              voice.onError([](const String& err) {
+                  Serial.printf("[VoiceKit] %s\n", err.c_str());
+              });
+              voice.begin(vcfg);
+          }
+
+          void loop() {
+              M5.update();
+              voice.update();
+              delay(10);
+          }
+          CPP
+          pio run -d "$WORK_DIR"

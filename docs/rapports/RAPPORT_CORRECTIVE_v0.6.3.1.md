@@ -39,7 +39,7 @@ La présente version corrective v0.6.3.1 stabilise et fiabilise l'exemple `examp
 
 ### 3.1 Anomalie Critique Détectée
 Le commit `6a0a32c` avait introduit dans `examples/OpenAIConversation/include/secrets.example.h` :
-- Une véritable clé API secrète OpenAI : `sk-proj-[REDACTED_LEGACY_OPENAI_KEY]vcLB6Ch1ZBpJSWOLheWgrUctT3BlbkFJNyAwFjXSxjuGkn72du4pRfVHRK8Aiqt7au0-i33RonRYbUJiUQRllNOinsLHe9c9QliJFWcpYA`
+- Une véritable clé API secrète OpenAI : `sk-proj-[REDACTED_LEGACY_KEY]`
 - Un SSID Wi-Fi réel : `"[REDACTED_LEGACY_WIFI_SSID]"`
 - Une clé WPA réelle : `"[REDACTED_LEGACY_WIFI_PASS]"`
 
@@ -86,7 +86,7 @@ python -m pip install git-filter-repo
 
 # 3. Purger les secrets de l'historique dans VoiceKit
 cd VoiceKit
-git filter-repo --replace-text <(echo 'sk-proj-[REDACTED_LEGACY_OPENAI_KEY]vcLB6Ch1ZBpJSWOLheWgrUctT3BlbkFJNyAwFjXSxjuGkn72du4pRfVHRK8Aiqt7au0-i33RonRYbUJiUQRllNOinsLHe9c9QliJFWcpYA==>sk-proj-REDACTED_API_KEY')
+git filter-repo --replace-text <(echo 'sk-proj-[REDACTED_LEGACY_KEY]==>sk-proj-REDACTED_API_KEY')
 git filter-repo --replace-text <(echo '[REDACTED_LEGACY_WIFI_PASS]==>REDACTED_WIFI_PASSWORD')
 git filter-repo --replace-text <(echo '[REDACTED_LEGACY_WIFI_SSID]==>REDACTED_WIFI_SSID')
 

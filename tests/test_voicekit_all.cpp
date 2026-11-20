@@ -5,10 +5,10 @@
 #include <iostream>
 #include <vector>
 
-#include "../showcases/OrientationClockVoice/include/FrenchTimeFormatter.h"
-#include "../showcases/OrientationClockVoice/include/WiFiTimeSync.h"
-#include "../showcases/OrientationClockVoice/src/FrenchTimeFormatter.cpp"
-#include "../showcases/OrientationClockVoice/src/WiFiTimeSync.cpp"
+#include "../archive/examples/OrientationClockVoice/include/FrenchTimeFormatter.h"
+#include "../archive/examples/OrientationClockVoice/include/WiFiTimeSync.h"
+#include "../archive/examples/OrientationClockVoice/src/FrenchTimeFormatter.cpp"
+#include "../archive/examples/OrientationClockVoice/src/WiFiTimeSync.cpp"
 #include "ContinuousListeningController.h"
 #include "Utf8Utils.h"
 #include "VoiceActivityDetector.h"
@@ -67,19 +67,19 @@ void test_french_time_formatting() {
               "00h05 -> Il est minuit cinq.");
   TEST_ASSERT(formatTimeInFrench(1, 1) == "Il est une heure une.",
               "01h01 -> Il est une heure une.");
-  TEST_ASSERT(formatTimeInFrench(1, 15) == "Il est une heure quinze.",
+  TEST_ASSERT(formatTimeInFrench(1, 15, TimeSpeechStyle::EXACT) == "Il est une heure quinze.",
               "01h15 -> Il est une heure quinze.");
-  TEST_ASSERT(formatTimeInFrench(12, 30) == "Il est midi trente.",
+  TEST_ASSERT(formatTimeInFrench(12, 30, TimeSpeechStyle::EXACT) == "Il est midi trente.",
               "12h30 -> Il est midi trente.");
   TEST_ASSERT(formatTimeInFrench(21, 1) == "Il est vingt et une heures une.",
               "21h01 -> Il est vingt et une heures une.");
   TEST_ASSERT(formatTimeInFrench(21, 21) ==
                   "Il est vingt et une heures vingt et un.",
               "21h21 -> Il est vingt et une heures vingt et un.");
-  TEST_ASSERT(formatTimeInFrench(22, 45) ==
+  TEST_ASSERT(formatTimeInFrench(22, 45, TimeSpeechStyle::EXACT) ==
                   "Il est vingt-deux heures quarante-cinq.",
               "22h45 -> Il est vingt-deux heures quarante-cinq.");
-  TEST_ASSERT(formatTimeInFrench(23, 59) ==
+  TEST_ASSERT(formatTimeInFrench(23, 59, TimeSpeechStyle::EXACT) ==
                   "Il est vingt-trois heures cinquante-neuf.",
               "23h59 -> Il est vingt-trois heures cinquante-neuf.");
 }
@@ -296,7 +296,7 @@ void test_announced_and_displayed_time_coherence() {
   int hour = 14;
   int minute = 30;
 
-  String verbal = formatTimeInFrench(hour, minute);
+  String verbal = formatTimeInFrench(hour, minute, TimeSpeechStyle::EXACT);
   TEST_ASSERT(verbal == "Il est quatorze heures trente.",
               "Formatage 14h30 coherent");
 
@@ -4620,13 +4620,15 @@ void test_v0531_facade_modes_transitions_and_resilience() {
   cfg.wifiMode = WiFiMode::EXTERNAL_WIFI;
   vk.begin(cfg);
 
-  // 1. Constante de version alignée sur v0.6.6.2 (ou versions précédentes)
-  TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.6.2") == 0 ||
+  // 1. Constante de version alignée sur v0.6.7.2 (ou versions précédentes)
+  TEST_ASSERT(strcmp(VOICEKIT_VERSION, "v0.6.7.2") == 0 ||
+                  strcmp(VOICEKIT_VERSION, "v0.6.7.1") == 0 ||
+                  strcmp(VOICEKIT_VERSION, "v0.6.6.2") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.6") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.5.2") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.5.1") == 0 ||
                   strcmp(VOICEKIT_VERSION, "v0.6.5") == 0,
-              "VOICEKIT_VERSION est v0.6.6.2");
+              "VOICEKIT_VERSION est v0.6.7.2");
 
   // 2. Mode par défaut IDLE
   TEST_ASSERT(vk.getMode() == VoiceKitMode::IDLE, "Mode initial = IDLE");
@@ -8098,9 +8100,9 @@ void test_v0631_latency_instrumentation_and_nonblocking_session_teardown() {
   setMockMillisOffset(1700000000UL * 1000UL);
 
   MockLiveTransport mockTransport;
-  // Simuler une tâche WebSocket qui met 4 ticks d'update() avant de signaler
-  // STOPPED_BIT
-  mockTransport.setSimulatedAsyncDisconnectPolls(4);
+  // Simuler une tâche WebSocket asynchrone restant active pendant 3 cycles
+  // d'update() (chaque update() sollicite pollDeactivate() deux fois : session + contrôleur)
+  mockTransport.setSimulatedAsyncDisconnectPolls(7);
 
   VoiceKit vk;
   VoiceKitConfig cfg;

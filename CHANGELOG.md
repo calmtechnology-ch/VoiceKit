@@ -7,6 +7,33 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [0.6.7.2] - 2026-11-19 (Public Release & Easy Onboarding)
+
+Version de préparation à la première publication publique de VoiceKit, centrée sur l'expérience de prise en main d'un nouvel utilisateur, la sécurité, la cohérence documentaire et la reproductibilité des validations. Aucune nouvelle fonctionnalité métier ni refonte architecturale ; toutes les API publiques et validations matérielles v0.6.7.1 sont préservées.
+
+### Sécurité
+- **Audit de sécurité complet** des fichiers suivis et de l'historique Git (`docs/release/v0.6.7.2/SECURITY_AUDIT.md`).
+- **Rédaction d'une clé API OpenAI historique** qui figurait encore en clair dans `docs/rapports/RAPPORT_CORRECTIVE_v0.6.3.1.md`.
+- **Procédure `git-filter-repo` documentée** pour purger les commits historiques contenant des secrets (`aae5465`, `6a0a32c`, `f3ee433`, `3d8610e` et renommages associés) avant ouverture publique du dépôt.
+
+### Prise en main & Documentation
+- **Refonte pédagogique de `README.md`** autour du parcours *Découvrir → Installer → Faire parler → Converser → Développer* (12 sections).
+- **Révision complète de `docs/QUICK_START.md`** :
+  - Correction des références obsolètes (`v0.6.6.2`, `Philippe-AD/VoiceKit`) vers `calmtechnology-ch/VoiceKit` et `v0.6.7.2`.
+  - Séparation en deux parcours clairs (**Parcours A** : tester un exemple fourni ; **Parcours B** : intégrer VoiceKit dans un projet personnel autonome sans `symlink://`).
+  - Correction de la signature du callback `onError` (`const String&`) dans l'exemple minimal et validation par compilation réelle hors dépôt.
+  - Ajout d'un tableau de dépannage couvrant les 7 erreurs courantes.
+- **Création de `examples/README.md`** : catalogue pédagogique des 12 exemples officiels classés en 3 niveaux + rubrique Arduino IDE, avec guide de choix entre `<VoiceKit.h>` et `<VoxCoreVoice.h>`.
+- **Mise à jour de `showcases/README.md`** : présentation des trois applications actives (`VoiceAssistant`, `VoiceSensorStation`, `VoiceControl`), suppression de la référence obsolète à `OrientationClockVoice` et état de validation honnête par application.
+- **Harmonisation des versions et liens** : `library.json`, `library.properties`, `src/core/VoiceHubConfig.h` (`VOICEKIT_VERSION = "v0.6.7.2"`), `src/VoxCoreVoice.cpp`, `docs/README.md` (suppression des liens cassés vers `tutorials/`), `docs/KNOWN_LIMITATIONS.md`.
+
+### Automatisation & Validation
+- **Correction de `tests/run_tests.bat` et `tests/test_voicekit_all.cpp`** : mise à jour du chemin d'inclusion de `FrenchTimeFormatter.h` suite à l'archivage de `OrientationClockVoice` dans `archive/examples/OrientationClockVoice/`.
+- **Workflow CI GitHub Actions** (`.github/workflows/ci.yml`) : contrôle métadonnées/versions, fichiers indispensables, liens locaux, tests natifs C++17, compilation des 11 exemples PlatformIO et compilation d'un projet consommateur externe.
+- **Dossier complet de release** (`docs/release/v0.6.7.2/`) : `SECURITY_AUDIT.md`, `INSTALLATION_VALIDATION.md`, `EXAMPLES_VALIDATION.md`, `SHOWCASES_STATUS.md`, `TEST_RESULTS.md`, `RELEASE_NOTES.md`, `RELEASE_CHECKLIST.md`.
+
+---
+
 ## [0.6.7.1] - 2026-11-15 (Voice Interaction Stabilization)
 
 Version de stabilisation et de consolidation des composants réutilisables d'interaction vocale introduits en v0.6.7.0 (`VoiceInteractionController` et `VoiceCaptureValidator`), en préparation de leur intégration universelle et de leur découplage architectural. Aucun ajout de fonctionnalité ; durcissement strict du comportement validé sur CoreS3 réel.

@@ -184,7 +184,7 @@ bool VoxCoreVoice::begin(const VoiceKitConfig& config) {
 #endif
 
     Serial.println("\n========================================================");
-    Serial.println("  VoxCore VoiceKit v0.6.6.2 — Public Release Readiness  ");
+    Serial.println("  VoxCore VoiceKit v0.6.7.2 — Public Release & Easy Onboarding  ");
     Serial.printf("  Fournisseur : %s | Mode Audio : %s | FastConnect : %s\n",
                   (_config.provider == VoiceProviderType::OPENAI) ? "OPENAI REALTIME" : "GEMINI LIVE",
                   (LiveAudioPlayer::getCompiledAudioMode() == 1) ? "MODE 1 (REACTIVE_CALLBACK)" : "MODE 2 (DEDICATED_AUDIO_TASK)",
