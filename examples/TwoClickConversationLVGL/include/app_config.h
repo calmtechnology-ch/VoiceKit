@@ -9,8 +9,8 @@
  */
 
 // Sélection du fournisseur IA (OpenAI Realtime par défaut, basculable vers Gemini Live)
-#define USE_OPENAI 1
-#define USE_GEMINI 0
+#define USE_OPENAI 0
+#define USE_GEMINI 1
 
 namespace AppConfig {
     // Écran CoreS3 (320x240)
@@ -24,7 +24,7 @@ namespace AppConfig {
     constexpr const char* OPENAI_LANGUAGE = "fr-FR";
 
     // Configuration Gemini Live (si USE_GEMINI activé)
-    constexpr const char* GEMINI_MODEL    = "models/gemini-2.0-flash-exp";
+    constexpr const char* GEMINI_MODEL    = "models/gemini-3.8-live";
     constexpr const char* GEMINI_VOICE    = "Aoede";
     constexpr const char* GEMINI_LANGUAGE = "fr-FR";
 
